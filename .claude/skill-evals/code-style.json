@@ -1,0 +1,82 @@
+[
+  {
+    "query": "i just wrote a 90 line function in task_run_monitor.rs with five levels of nesting. clean it up so it reads like the rest of the file",
+    "should_trigger": true
+  },
+  {
+    "query": "review my new src/crud/task_output.rs before i commit \u2014 not looking for bugs, i just want it to look like the other crud files",
+    "should_trigger": true
+  },
+  {
+    "query": "should i extract a shared helper for these three nearly identical query builder loops, or is duplicating them fine here",
+    "should_trigger": true
+  },
+  {
+    "query": "i added a // comment above basically every line in the dispatcher explaining what it does. is that the convention here or way too much",
+    "should_trigger": true
+  },
+  {
+    "query": "this chain is like 200 chars wide: crud.select_task_runs(...).await?.iter().filter(...).collect(). how do you want long chains formatted in this repo",
+    "should_trigger": true
+  },
+  {
+    "query": "im thinking of adding a trait so JobRunDispatcher and TaskRunDispatcher can share their poll loop. does that fit how this codebase is written or is it over abstracting",
+    "should_trigger": true
+  },
+  {
+    "query": "writing a new module and i cant tell whether to use anyhow::bail! or define a proper error enum. what does this repo actually do",
+    "should_trigger": true
+  },
+  {
+    "query": "can you go over the diff on my branch for readability before i open the PR",
+    "should_trigger": true
+  },
+  {
+    "query": "is it ok that validate_job_tasks loops over the task list twice instead of doing one pass, or should i combine them",
+    "should_trigger": true
+  },
+  {
+    "query": "naming check \u2014 i called it find_task_dependency_cycle, a colleague wants detect_cycle. which fits the conventions here",
+    "should_trigger": true
+  },
+  {
+    "query": "find the bug that makes job runs hang in Running forever when a task run errors",
+    "should_trigger": false
+  },
+  {
+    "query": "add a description column to mem.schedule and update the migration",
+    "should_trigger": false
+  },
+  {
+    "query": "what does Skipped mean on a task run attempt as opposed to on the task run itself",
+    "should_trigger": false
+  },
+  {
+    "query": "write me a select_task_run_attempts function with a status filter and limit/offset",
+    "should_trigger": false
+  },
+  {
+    "query": "my new jobs yml file isnt being picked up at startup at all, nothing in the logs",
+    "should_trigger": false
+  },
+  {
+    "query": "add a --verbose flag to serve that logs every dispatch decision",
+    "should_trigger": false
+  },
+  {
+    "query": "does the scheduler catch up on runs it missed while the process was down?",
+    "should_trigger": false
+  },
+  {
+    "query": "explain how depends_on ends up in the task_dependent table and who reads it",
+    "should_trigger": false
+  },
+  {
+    "query": "cargo build takes 90 seconds on a clean checkout, what can we do about compile times",
+    "should_trigger": false
+  },
+  {
+    "query": "sqlx throws UNIQUE constraint failed: job.job_id when two of my config files use the same id",
+    "should_trigger": false
+  }
+]

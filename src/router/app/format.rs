@@ -1,0 +1,44 @@
+use chrono::{DateTime, Local, Utc};
+
+use crate::crud::job_run::JobRunStatus;
+
+pub fn timestamp(at: DateTime<Utc>) -> String {
+    at.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// Narrow form for the run list, where the column is only wide enough for day and time.
+pub fn short_timestamp(at: DateTime<Utc>) -> String {
+    at.with_timezone(&Local).format("%m-%d %H:%M").to_string()
+}
+
+pub fn duration(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+
+    if seconds < 60 {
+        return format!("{}s", seconds);
+    }
+
+    let minutes = seconds / 60;
+    let remaining_seconds = seconds % 60;
+
+    if minutes < 60 {
+        return format!("{}m {:02}s", minutes, remaining_seconds);
+    }
+
+    let hours = minutes / 60;
+    let remaining_minutes = minutes % 60;
+
+    format!("{}h {:02}m", hours, remaining_minutes)
+}
+
+pub fn job_run_word(status: JobRunStatus) -> &'static str {
+    match status {
+        JobRunStatus::Pending => "queued",
+        JobRunStatus::Running => "running",
+        JobRunStatus::Succeeded => "succeeded",
+        JobRunStatus::Failed => "failed",
+        JobRunStatus::Skipped => "skipped",
+        JobRunStatus::Aborted => "aborted",
+        JobRunStatus::TimedOut => "timed out",
+    }
+}

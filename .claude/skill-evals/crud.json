@@ -1,0 +1,82 @@
+[
+  {
+    "query": "need a filter on select_job_runs for created_at between two timestamps so the ui can do date ranges",
+    "should_trigger": true
+  },
+  {
+    "query": "im adding a task_run_output table \u2014 write the insert and select module for it under src/crud/",
+    "should_trigger": true
+  },
+  {
+    "query": "how do i bind a Vec<String> column? im copying what task.depends_on does with sqlx Json but the select side panics on decode",
+    "should_trigger": true
+  },
+  {
+    "query": "calling update_task_runs with only finished_at set generates an empty SET clause and sqlite errors. whats the pattern for that here",
+    "should_trigger": true
+  },
+  {
+    "query": "i want select_schedules sorted by next_run instead of row_id. where does the sort enum live and what do i add",
+    "should_trigger": true
+  },
+  {
+    "query": "write the data access module for a new job_run_note table following whatever the other entities do",
+    "should_trigger": true
+  },
+  {
+    "query": "add a name_like filter to select_jobs so the search box in the ui works",
+    "should_trigger": true
+  },
+  {
+    "query": "should insert_task_run return the new id or unit? the existing inserts are inconsistent and i need the id back",
+    "should_trigger": true
+  },
+  {
+    "query": "my new select returns duplicate rows after i joined mem.task. how do the existing selects handle that join",
+    "should_trigger": true
+  },
+  {
+    "query": "wire my new widget entity into CRUD::init so it gets seeded on startup like the others",
+    "should_trigger": true
+  },
+  {
+    "query": "which service moves a task run from Running to Failed, and when does it decide retries are exhausted",
+    "should_trigger": false
+  },
+  {
+    "query": "should this new table go in the in memory schema or the persisted one?",
+    "should_trigger": false
+  },
+  {
+    "query": "add a cli subcommand that lists all schedules with their next run time",
+    "should_trigger": false
+  },
+  {
+    "query": "the timeout field defaults to 3600 when i dont set it \u2014 where is that default actually defined",
+    "should_trigger": false
+  },
+  {
+    "query": "job run has been pending for an hour and theres nothing in the logs, what should i look at",
+    "should_trigger": false
+  },
+  {
+    "query": "reformat this function, its way too dense and the argument list runs off the screen",
+    "should_trigger": false
+  },
+  {
+    "query": "my cron expression fires every 15 seconds instead of every 15 minutes",
+    "should_trigger": false
+  },
+  {
+    "query": "how do retries work for a task that keeps failing \u2014 does it go back to Pending each time?",
+    "should_trigger": false
+  },
+  {
+    "query": "the migration for job_run_stop has a foreign key to job_run. do i need one on task_run_attempt too?",
+    "should_trigger": false
+  },
+  {
+    "query": "explain the difference between a Job and a JobRun, im getting them mixed up reading the code",
+    "should_trigger": false
+  }
+]

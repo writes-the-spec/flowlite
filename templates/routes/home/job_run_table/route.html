@@ -1,0 +1,92 @@
+<div class="scroller">
+<table class="runs">
+    <thead>
+        <tr>
+            <th class="runs__mark"></th>
+            <th class="runs__state">state</th>
+            <th class="runs__id">run</th>
+            <th>job</th>
+            <th class="runs__when">created</th>
+            <th class="runs__bar">duration</th>
+            <th class="runs__dur"></th>
+        </tr>
+    </thead>
+
+    <tbody>
+        {% for run in job_runs %}
+        <tr>
+            <td class="runs__mark"><span class="mark mark--{{ run.status }}"></span></td>
+
+            <td class="runs__state">
+                {% if !run.status_word.is_empty() %}
+                <span class="state state--{{ run.status }}">{{ run.status_word }}</span>
+                {% endif %}
+            </td>
+
+            <td class="runs__id"><a href="/job-runs/{{ run.id }}">{{ run.id }}</a></td>
+
+            <td class="runs__job"><a href="/jobs/{{ run.job_id }}">{{ run.job_name }}</a></td>
+
+            <td class="runs__when">{{ run.created_at }}</td>
+
+            <td class="runs__bar">
+                <div class="bar bar--{{ run.status }}" style="--span: {{ run.span_pct }}%"></div>
+            </td>
+
+            <td class="runs__dur">{{ run.duration }}</td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="7">
+                <div class="empty">
+                    {% if pagination.filter_job_id.is_some() || pagination.filter_status.is_some() %}
+                    <p>No runs match this filter.</p>
+                    <p class="empty__do">Pick another job or status above.</p>
+                    {% else %}
+                    <p>No runs yet.</p>
+                    <p class="empty__do">Start one with <span class="empty__cmd">flowlite job submit &lt;job-id&gt;</span></p>
+                    {% endif %}
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<div class="table-foot">
+    <form method="GET" action="/" class="rows-per-page">
+        {% if let Some(job_id) = pagination.filter_job_id %}
+        <input type="hidden" name="filter_job_id" value="{{ job_id }}">
+        {% endif %}
+        {% if let Some(status) = pagination.filter_status %}
+        <input type="hidden" name="filter_status" value="{{ status }}">
+        {% endif %}
+
+        <label for="page_size">Rows</label>
+        <select id="page_size" name="page_size" class="field" onchange="this.form.submit()">
+            <option value="10" {% if pagination.page_size == 10 %}selected{% endif %}>10</option>
+            <option value="25" {% if pagination.page_size == 25 %}selected{% endif %}>25</option>
+            <option value="50" {% if pagination.page_size == 50 %}selected{% endif %}>50</option>
+            <option value="100" {% if pagination.page_size == 100 %}selected{% endif %}>100</option>
+        </select>
+    </form>
+
+    {% if prev_href.is_some() || next_href.is_some() %}
+    <div class="pager">
+        {% if let Some(href) = prev_href %}
+        <a href="{{ href }}" class="btn" rel="prev" aria-label="Previous page">←</a>
+        {% else %}
+        <button class="btn" disabled aria-label="Previous page">←</button>
+        {% endif %}
+
+        <span class="pager__at">Page {{ pagination.current_page }}</span>
+
+        {% if let Some(href) = next_href %}
+        <a href="{{ href }}" class="btn" rel="next" aria-label="Next page">→</a>
+        {% else %}
+        <button class="btn" disabled aria-label="Next page">→</button>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>

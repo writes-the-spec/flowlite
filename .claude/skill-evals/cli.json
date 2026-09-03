@@ -1,0 +1,82 @@
+[
+  {
+    "query": "i want a `flowlite schedule list` command that prints schedule id, cron and next_run in the same table style as job list. where do i wire the subcommand up?",
+    "should_trigger": true
+  },
+  {
+    "query": "add a `job runs <job_id>` subcommand showing the last 20 job runs with status. not sure if it goes under JobCmd or becomes a new top level command",
+    "should_trigger": true
+  },
+  {
+    "query": "the `job submit` arg is called job_name but it actually filters on job_id which confuses everyone on the team. want to rename the arg without breaking -C/-D",
+    "should_trigger": true
+  },
+  {
+    "query": "need a `stop <job_run_id>` command that inserts the job_run_stop row. what does the command need from Toolkit to get a connection?",
+    "should_trigger": true
+  },
+  {
+    "query": "how do i add a --json flag to job list so it prints json instead of the ascii table? should that be a global arg or per subcommand",
+    "should_trigger": true
+  },
+  {
+    "query": "adding a `task list --job-id x` subcommand \u2014 do i need to call crud.init first like JobListCmd does, or is that only for commands that read config",
+    "should_trigger": true
+  },
+  {
+    "query": "ops wants `flowlite validate` that just parses the config dir and exits nonzero if anything is broken. where does a command like that go",
+    "should_trigger": true
+  },
+  {
+    "query": "clap is panicking about duplicate subcommand names after i added schedule.rs under src/cli/commands. what wiring did i miss",
+    "should_trigger": true
+  },
+  {
+    "query": "can you add a `serve --workers N` option and thread it down to the orchestrator? not clear how ServeCmd passes things through",
+    "should_trigger": true
+  },
+  {
+    "query": "id like -C and -D to be settable as env vars too so our systemd unit doesnt need flags. is that already there or do i add env = ...",
+    "should_trigger": true
+  },
+  {
+    "query": "why does my task run stay pending forever even though the task it depends on succeeded 10 minutes ago",
+    "should_trigger": false
+  },
+  {
+    "query": "add a next_run_lt filter to select_schedules so i can query the due ones",
+    "should_trigger": false
+  },
+  {
+    "query": "should the new task_run_output table live in the mem schema or on disk?",
+    "should_trigger": false
+  },
+  {
+    "query": "depends_on in my job yml points at a task defined in a different job file and startup blows up. is cross job dependency supported",
+    "should_trigger": false
+  },
+  {
+    "query": "rewrite this match arm please, its got a nested if-let chain four levels deep and i cant read it anymore",
+    "should_trigger": false
+  },
+  {
+    "query": "how many times does a failed task actually get retried \u2014 is max_retries the total or the extra attempts?",
+    "should_trigger": false
+  },
+  {
+    "query": "job run 40 finished as Skipped but two of its tasks clearly succeeded. is that a bug or intended",
+    "should_trigger": false
+  },
+  {
+    "query": "my cron is \"*/15 * * * *\" and its running every 15 minutes when i wanted 15 seconds",
+    "should_trigger": false
+  },
+  {
+    "query": "add an index on task_run.job_run_id, the dispatcher query is doing a full scan on 200k rows",
+    "should_trigger": false
+  },
+  {
+    "query": "the axum route for /job_runs/:id renders the wrong badge colour for TimedOut, its showing grey not red",
+    "should_trigger": false
+  }
+]

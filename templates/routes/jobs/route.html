@@ -1,0 +1,74 @@
+{% extends "routes/root.html" %}
+
+{% block title %}Jobs · flowlite{% endblock %}
+
+{% block content %}
+
+<div class="view-head">
+    <div>
+        <h1 class="view-title">Jobs</h1>
+        <p class="view-sub">Everything defined in the config directory. Each job is a YAML file you can diff, review and roll back with the rest of your code.</p>
+    </div>
+
+    <form method="GET" action="/jobs" class="controls">
+        <input
+            type="text"
+            name="job_name_like"
+            class="field"
+            placeholder="Search by name"
+            aria-label="Search jobs by name"
+            value="{% if let Some(name) = current_name %}{{ name }}{% endif %}"
+        >
+        <button type="submit" class="btn btn--primary">Search</button>
+        {% if current_name.is_some() %}
+        <a href="/jobs" class="btn btn--quiet">Clear</a>
+        {% endif %}
+    </form>
+</div>
+
+{% if jobs.is_empty() %}
+<div class="empty">
+    {% if let Some(name) = current_name %}
+    <p>No job name contains “{{ name }}”.</p>
+    <p class="empty__do">Clear the search to see every job.</p>
+    {% else %}
+    <p>No jobs defined yet.</p>
+    <p class="empty__do">Drop a YAML file into <span class="empty__cmd">.config/jobs</span> and restart the server.</p>
+    {% endif %}
+</div>
+{% else %}
+<div class="index">
+    {% for job in jobs %}
+    <a href="/jobs/{{ job.job_id }}" class="entry">
+        <div>
+            <div class="entry__name">{{ job.name }}</div>
+            <div class="entry__id">{{ job.job_id }}</div>
+        </div>
+
+        <div class="entry__desc">{{ job.description }}</div>
+
+        <div class="entry__aside">{{ job.task_count }}</div>
+    </a>
+    {% endfor %}
+</div>
+
+{% if prev_href.is_some() || next_href.is_some() %}
+<div class="table-foot table-foot--end">
+    <div class="pager">
+        {% if let Some(href) = prev_href %}
+        <a href="{{ href }}" class="btn" rel="prev" aria-label="Previous page">←</a>
+        {% else %}
+        <button class="btn" disabled aria-label="Previous page">←</button>
+        {% endif %}
+
+        {% if let Some(href) = next_href %}
+        <a href="{{ href }}" class="btn" rel="next" aria-label="Next page">→</a>
+        {% else %}
+        <button class="btn" disabled aria-label="Next page">→</button>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endif %}
+
+{% endblock %}

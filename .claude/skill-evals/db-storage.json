@@ -1,0 +1,82 @@
+[
+  {
+    "query": "adding a task_run_log table for structured logs. does that belong in the mem schema or on disk?",
+    "should_trigger": true
+  },
+  {
+    "query": "write the migration for a job_run_note table. what columns, and do i give created_at a DEFAULT?",
+    "should_trigger": true
+  },
+  {
+    "query": "i need a new `priority` column on schedule. which migrations dir does it go in and should it be NOT NULL",
+    "should_trigger": true
+  },
+  {
+    "query": "why is mem.job empty when i query it from a second connection in my new background task?",
+    "should_trigger": true
+  },
+  {
+    "query": "should schedule_job.parameters be nullable or NOT NULL with a default of '{}'?",
+    "should_trigger": true
+  },
+  {
+    "query": "i want an index for the pending task run query the dispatcher runs every second. where do index statements go",
+    "should_trigger": true
+  },
+  {
+    "query": "does the mem schema survive a restart? im storing next_run there and it keeps resetting to the next occurrence",
+    "should_trigger": true
+  },
+  {
+    "query": "we want to persist the resolved dag so we dont recompute it every startup. disk or memory?",
+    "should_trigger": true
+  },
+  {
+    "query": "new table for api tokens, these definitely have to survive restarts. walk me through adding it properly",
+    "should_trigger": true
+  },
+  {
+    "query": "that ATTACH DATABASE line \u2014 do i need to run it on my new connection or does Toolkit already handle it",
+    "should_trigger": true
+  },
+  {
+    "query": "write the select function for that table with a status filter and sort options",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i add a new subcommand under the job command?",
+    "should_trigger": false
+  },
+  {
+    "query": "explain the four run status transitions and which service owns each one",
+    "should_trigger": false
+  },
+  {
+    "query": "my schedule yml has a key thats being ignored silently and i cant work out why",
+    "should_trigger": false
+  },
+  {
+    "query": "after a restart the retry loop re-executed a command that had already run. is that expected?",
+    "should_trigger": false
+  },
+  {
+    "query": "clean up this nested match statement, its unreadable",
+    "should_trigger": false
+  },
+  {
+    "query": "whats the conceptual difference between a Job and a JobRun in this system",
+    "should_trigger": false
+  },
+  {
+    "query": "is the cron dialect here six fields with seconds first, or normal five field crontab?",
+    "should_trigger": false
+  },
+  {
+    "query": "add a --dry-run flag to job submit so it prints what it would insert",
+    "should_trigger": false
+  },
+  {
+    "query": "job run finished as Aborted but nobody stopped it, where does Aborted come from",
+    "should_trigger": false
+  }
+]

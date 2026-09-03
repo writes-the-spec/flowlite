@@ -1,0 +1,85 @@
+{% extends "routes/root.html" %}
+
+{% block title %}Schedules · flowlite{% endblock %}
+
+{% block content %}
+
+<div class="view-head">
+    <div>
+        <h1 class="view-title">Schedules</h1>
+        <p class="view-sub">Cron expressions that submit jobs on your behalf. Times are shown in this machine's timezone.</p>
+    </div>
+
+    <form method="GET" action="/schedules" class="controls">
+        <input
+            type="text"
+            name="schedule_name_like"
+            class="field"
+            placeholder="Search by name"
+            aria-label="Search schedules by name"
+            value="{% if let Some(name) = current_name %}{{ name }}{% endif %}"
+        >
+        <button type="submit" class="btn btn--primary">Search</button>
+        {% if current_name.is_some() %}
+        <a href="/schedules" class="btn btn--quiet">Clear</a>
+        {% endif %}
+    </form>
+</div>
+
+{% if schedules.is_empty() %}
+<div class="empty">
+    {% if let Some(name) = current_name %}
+    <p>No schedule name contains “{{ name }}”.</p>
+    <p class="empty__do">Clear the search to see every schedule.</p>
+    {% else %}
+    <p>No schedules defined yet.</p>
+    <p class="empty__do">Drop a YAML file into <span class="empty__cmd">.config/schedules</span> and restart the server.</p>
+    {% endif %}
+</div>
+{% else %}
+<div class="index">
+    {% for schedule in schedules %}
+    <a href="/schedules/{{ schedule.schedule_id }}" class="entry">
+        <div>
+            <div class="entry__name">{{ schedule.name }}</div>
+            <div class="entry__id">{{ schedule.schedule_id }}</div>
+        </div>
+
+        <div class="entry__desc">{{ schedule.description }}</div>
+
+        <div class="entry__aside">
+            <div class="entry__cron">{{ schedule.cron }}</div>
+            {% if schedule.disabled %}
+            <span class="entry__off">paused</span>
+            {% else %}
+                {% if let Some(next_run) = schedule.next_run %}
+                <div>next {{ next_run }}</div>
+                {% else %}
+                <div>nothing scheduled</div>
+                {% endif %}
+            {% endif %}
+        </div>
+    </a>
+    {% endfor %}
+</div>
+
+{% if prev_href.is_some() || next_href.is_some() %}
+<div class="table-foot table-foot--end">
+    <div class="pager">
+        {% if let Some(href) = prev_href %}
+        <a href="{{ href }}" class="btn" rel="prev" aria-label="Previous page">←</a>
+        {% else %}
+        <button class="btn" disabled aria-label="Previous page">←</button>
+        {% endif %}
+
+        {% if let Some(href) = next_href %}
+        <a href="{{ href }}" class="btn" rel="next" aria-label="Next page">→</a>
+        {% else %}
+        <button class="btn" disabled aria-label="Next page">→</button>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endif %}
+
+{% endblock %}

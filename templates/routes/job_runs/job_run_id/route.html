@@ -1,0 +1,141 @@
+{% extends "routes/root.html" %}
+
+{% block title %}Run {{ job_run.id }} · flowlite{% endblock %}
+
+{% block content %}
+
+<a href="/" class="back">← Runs</a>
+
+<div
+    id="run"
+    {% if polling %}
+    hx-get="/job-runs/{{ job_run.id }}"
+    hx-trigger="every 3s"
+    hx-select="#run"
+    hx-target="#run"
+    hx-swap="outerHTML"
+    {% endif %}
+>
+
+    <div class="view-head">
+        <div>
+            <span class="eyebrow">run {{ job_run.id }}</span>
+            <h1 class="view-title">{{ job_run.job_name }}</h1>
+            {% if let Some(definition) = job %}
+            <p class="view-sub">{{ definition.description }}</p>
+            {% endif %}
+        </div>
+
+        <div class="controls">
+            <span class="mark mark--{{ job_run.status }}"></span>
+            <span class="state state--{{ job_run.status }}">{{ job_run.status_word }}</span>
+
+            {% if stoppable %}
+            <button class="btn btn--danger" onclick="document.getElementById('stop_run').showModal()">Stop run</button>
+            {% endif %}
+        </div>
+    </div>
+
+    <hr class="rule">
+
+    <div class="meta">
+        <div class="meta__item">
+            <div class="meta__label">Job</div>
+            <div class="meta__value meta__value--mono"><a href="/jobs/{{ job_run.job_id }}">{{ job_run.job_id }}</a></div>
+        </div>
+
+        <div class="meta__item">
+            <div class="meta__label">Created</div>
+            <div class="meta__value">{{ job_run.created_at }}</div>
+        </div>
+
+        <div class="meta__item">
+            <div class="meta__label">Started</div>
+            <div class="meta__value">
+                {% if let Some(started_at) = job_run.started_at %}{{ started_at }}{% else %}<span class="none">not yet</span>{% endif %}
+            </div>
+        </div>
+
+        <div class="meta__item">
+            <div class="meta__label">Finished</div>
+            <div class="meta__value">
+                {% if let Some(finished_at) = job_run.finished_at %}{{ finished_at }}{% else %}<span class="none">not yet</span>{% endif %}
+            </div>
+        </div>
+
+        <div class="meta__item">
+            <div class="meta__label">Duration</div>
+            <div class="meta__value">
+                {% if let Some(duration) = job_run.duration %}{{ duration }}{% else %}<span class="none">—</span>{% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section__head">
+            <h2 class="section__title">Timeline</h2>
+            <span class="section__note">{{ task_count }}, measured from the moment the run started</span>
+        </div>
+
+        {% if lanes.is_empty() %}
+        <div class="empty">
+            <p>No tasks have been recorded for this run yet.</p>
+            <p class="empty__do">They appear here as the orchestrator picks them up.</p>
+        </div>
+        {% else %}
+        <div class="timeline">
+            <div class="timeline__axis">
+                <div></div>
+                <div class="timeline__ticks">
+                    {% for tick in ticks %}
+                    <span class="timeline__tick" style="--at: {{ tick.at_pct }}%">{{ tick.label }}</span>
+                    {% endfor %}
+                </div>
+                <div></div>
+            </div>
+
+            {% for lane in lanes %}
+            <div class="lane">
+                <div class="lane__name" title="{{ lane.task_id }}">{{ lane.task_id }}</div>
+
+                <div class="lane__track">
+                    {% if lane.started %}
+                    <div
+                        class="lane__span lane__span--{{ lane.status }}"
+                        style="--start: {{ lane.start_pct }}%; --span: {{ lane.span_pct }}%"
+                    ></div>
+                    {% else %}
+                    <div class="lane__idle" style="--start: 0%">{{ lane.idle_label }}</div>
+                    {% endif %}
+                </div>
+
+                <div class="lane__dur">{{ lane.duration }}</div>
+
+                {% if let Some(depends_on) = lane.depends_on %}
+                <div class="lane__deps" title="{{ depends_on }}">after {{ depends_on }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+
+    {% if stoppable %}
+    <dialog id="stop_run">
+        <h2 class="dialog__title">Stop run {{ job_run.id }}?</h2>
+        <p class="dialog__body">Tasks that are still running are terminated. Tasks that already finished keep their results.</p>
+
+        <div class="dialog__actions">
+            <form method="dialog">
+                <button class="btn btn--quiet">Keep running</button>
+            </form>
+            <form action="/job-runs/{{ job_run.id }}/stop" method="POST">
+                <button type="submit" class="btn btn--danger">Stop run</button>
+            </form>
+        </div>
+    </dialog>
+    {% endif %}
+
+</div>
+
+{% endblock %}

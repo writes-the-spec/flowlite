@@ -1,0 +1,82 @@
+[
+  {
+    "query": "i added retries: 3 to a task in my job yml and its just ignored, no error at all. why?",
+    "should_trigger": true
+  },
+  {
+    "query": "my job file is called example.yaml and flowlite doesnt see it at all \u2014 the other ones load fine",
+    "should_trigger": true
+  },
+  {
+    "query": "where does timeout: 3600 come from when i dont set it, and how would i add another field with a default?",
+    "should_trigger": true
+  },
+  {
+    "query": "i want to add a labels map to the job yaml. what do i need to change end to end for it to show up in the db?",
+    "should_trigger": true
+  },
+  {
+    "query": "startup dies with \"Invalid tasks of job X\" \u2014 what exactly gets validated and where does that happen?",
+    "should_trigger": true
+  },
+  {
+    "query": "can i make an unrecognised key in a config file a hard error instead of being silently dropped?",
+    "should_trigger": true
+  },
+  {
+    "query": "the order of jobs in the ui changed after i renamed one of the files. is the ordering coming from the filename?",
+    "should_trigger": true
+  },
+  {
+    "query": "whats the point of the Validate derive if my #[validate] rule never seems to run?",
+    "should_trigger": true
+  },
+  {
+    "query": "i want to add a new kind of config file, alerts/*.yml, parsed at startup. walk me through the whole thing",
+    "should_trigger": true
+  },
+  {
+    "query": "start_date is optional in the schedule yaml but description isnt \u2014 how does serde decide which fields are required here?",
+    "should_trigger": true
+  },
+  {
+    "query": "which service moves a pending task run to running?",
+    "should_trigger": false
+  },
+  {
+    "query": "write the select module for a new table with filters and sorting",
+    "should_trigger": false
+  },
+  {
+    "query": "does this belong in the disk database or the in memory one?",
+    "should_trigger": false
+  },
+  {
+    "query": "add a --config-dir flag to the cli so we can point at a different directory",
+    "should_trigger": false
+  },
+  {
+    "query": "job run ended up Aborted and im trying to work out which code path did that",
+    "should_trigger": false
+  },
+  {
+    "query": "clean this function up, too many nested ifs",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i stop a job run thats currently executing?",
+    "should_trigger": false
+  },
+  {
+    "query": "does the scheduler backfill runs it missed while we were down?",
+    "should_trigger": false
+  },
+  {
+    "query": "the attempt monitor drains stdout every tick \u2014 can we stream that to the ui instead?",
+    "should_trigger": false
+  },
+  {
+    "query": "add an index to speed up the pending task run query",
+    "should_trigger": false
+  }
+]

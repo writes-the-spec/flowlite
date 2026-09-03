@@ -1,0 +1,101 @@
+{% extends "routes/root.html" %}
+
+{% block title %}{{ schedule.name }} · flowlite{% endblock %}
+
+{% block content %}
+
+<a href="/schedules" class="back">← Schedules</a>
+
+<div class="view-head">
+    <div>
+        <span class="eyebrow">{{ schedule.schedule_id }}</span>
+        <h1 class="view-title">{{ schedule.name }}</h1>
+        <p class="view-sub">{{ schedule.description }}</p>
+    </div>
+
+    {% if schedule.disabled %}
+    <span class="entry__off">paused</span>
+    {% endif %}
+</div>
+
+<hr class="rule">
+
+<div class="meta">
+    <div class="meta__item">
+        <div class="meta__label">Cron</div>
+        <div class="meta__value meta__value--mono">{{ schedule.cron }}</div>
+    </div>
+
+    <div class="meta__item">
+        <div class="meta__label">Timezone</div>
+        <div class="meta__value">{{ schedule.timezone }}</div>
+    </div>
+
+    <div class="meta__item">
+        <div class="meta__label">Next run</div>
+        <div class="meta__value">
+            {% if schedule.disabled %}
+            <span class="none">paused</span>
+            {% else %}
+                {% if let Some(next_run) = schedule.next_run %}{{ next_run }}{% else %}<span class="none">nothing scheduled</span>{% endif %}
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="meta__item">
+        <div class="meta__label">Starts</div>
+        <div class="meta__value">
+            {% if let Some(start_date) = schedule.start_date %}{{ start_date }}{% else %}<span class="none">immediately</span>{% endif %}
+        </div>
+    </div>
+
+    <div class="meta__item">
+        <div class="meta__label">Ends</div>
+        <div class="meta__value">
+            {% if let Some(end_date) = schedule.end_date %}{{ end_date }}{% else %}<span class="none">never</span>{% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="section">
+    <div class="section__head">
+        <h2 class="section__title">Jobs it submits</h2>
+        <span class="section__note">Each tick submits every job listed here</span>
+    </div>
+
+    {% if schedule_jobs.is_empty() %}
+    <div class="empty">
+        <p>This schedule submits nothing.</p>
+        <p class="empty__do">List job ids under <span class="empty__cmd">jobs:</span> in the schedule's YAML file.</p>
+    </div>
+    {% else %}
+    <div class="scroller">
+<table class="deftable">
+        <thead>
+            <tr>
+                <th>job</th>
+                <th>parameters</th>
+            </tr>
+        </thead>
+
+        <tbody>
+            {% for schedule_job in schedule_jobs %}
+            <tr>
+                <td class="deftable__id"><a href="/jobs/{{ schedule_job.job_id }}">{{ schedule_job.job_id }}</a></td>
+
+                <td>
+                    {% if let Some(parameters) = schedule_job.parameters %}
+                    <code class="cmd">{{ parameters }}</code>
+                    {% else %}
+                    <span class="none">none</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+    {% endif %}
+</div>
+
+{% endblock %}

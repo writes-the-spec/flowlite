@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}flowlite{% endblock %}</title>
+    <link rel="stylesheet" href="/assets/css/app.css">
+    <script src="/assets/vendors/htmx/htmx.min.js"></script>
+    <script defer src="/assets/vendors/alpine/alpine.min.js"></script>
+</head>
+<body>
+
+    <header class="masthead">
+        <div class="shell masthead__inner">
+            <a href="/" class="masthead__brand">flowlite</a>
+
+            <nav class="masthead__nav">
+                <a href="/" class="masthead__link" {% if current_route == "home" %}aria-current="page"{% endif %}>Runs</a>
+                <a href="/jobs" class="masthead__link" {% if current_route == "jobs" %}aria-current="page"{% endif %}>Jobs</a>
+                <a href="/schedules" class="masthead__link" {% if current_route == "schedules" %}aria-current="page"{% endif %}>Schedules</a>
+            </nav>
+
+            <div
+                class="masthead__live"
+                x-data="{ now: '' }"
+                x-init="now = new Date().toLocaleTimeString(); setInterval(() => now = new Date().toLocaleTimeString(), 1000)"
+                title="This machine's clock, for reading cron schedules against"
+            >
+                <span x-text="now" x-cloak></span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <div class="shell">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+
+</body>
+</html>

@@ -1,0 +1,82 @@
+[
+  {
+    "query": "my nightly schedule in .config/schedules/nightly.yml hasnt fired since we restarted the box on friday. cron is \"0 0 3 * * *\", timezone Europe/Vienna. does flowlite backfill the runs it missed or are they just gone?",
+    "should_trigger": true
+  },
+  {
+    "query": "the every2s schedule is submitting the ticker job four times in a row instead of once every two seconds, and next_run keeps jumping around. where does next_run actually get advanced?",
+    "should_trigger": true
+  },
+  {
+    "query": "we want a schedule that stops after a given date. does end_date do that, and what happens to next_run afterwards?",
+    "should_trigger": true
+  },
+  {
+    "query": "our schedule yml has variables: under each job entry but nothing ever reaches the job run. are those wired up?",
+    "should_trigger": true
+  },
+  {
+    "query": "how do i turn a schedule off temporarily without deleting the file?",
+    "should_trigger": true
+  },
+  {
+    "query": "the schedule fires at 3am UTC but we want 3am Vienna time. is timezone applied to the cron expression or just for display?",
+    "should_trigger": true
+  },
+  {
+    "query": "id like a catch_up: true option so runs missed during downtime get submitted when we come back. where would that go?",
+    "should_trigger": true
+  },
+  {
+    "query": "one of our schedules points at a job id that doesnt exist anymore and absolutely nothing happens \u2014 no error, no run",
+    "should_trigger": true
+  },
+  {
+    "query": "does it wait for the previous run of a job to finish before submitting the next one, or can they overlap?",
+    "should_trigger": true
+  },
+  {
+    "query": "my cron line is \"*/15 * * * * *\" \u2014 is that every 15 seconds or every 15 minutes in this thing?",
+    "should_trigger": true
+  },
+  {
+    "query": "job run stuck in Running with all its task runs already finished",
+    "should_trigger": false
+  },
+  {
+    "query": "add a name_like filter to select_schedules",
+    "should_trigger": false
+  },
+  {
+    "query": "should schedule_job live in the mem schema or on disk?",
+    "should_trigger": false
+  },
+  {
+    "query": "how many retries does a failing task get before it gives up?",
+    "should_trigger": false
+  },
+  {
+    "query": "add a `schedule list` subcommand to the cli",
+    "should_trigger": false
+  },
+  {
+    "query": "reformat this function, its unreadable",
+    "should_trigger": false
+  },
+  {
+    "query": "explain the difference between a job and a job run",
+    "should_trigger": false
+  },
+  {
+    "query": "startup fails complaining about a dependency cycle between my tasks",
+    "should_trigger": false
+  },
+  {
+    "query": "which service kills the process when a task exceeds its timeout?",
+    "should_trigger": false
+  },
+  {
+    "query": "unknown keys in my yml files get dropped silently, id rather it errored",
+    "should_trigger": false
+  }
+]

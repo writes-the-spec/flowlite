@@ -1,0 +1,17 @@
+CREATE TABLE task_run (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_run_id INTEGER NOT NULL,
+    job_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    created_at DATETIME NOT NULL,
+    started_at DATETIME,
+    finished_at DATETIME,
+    status TEXT NOT NULL,
+    FOREIGN KEY (job_run_id) REFERENCES job_run (id)
+);
+
+CREATE UNIQUE INDEX idx_job_run_id_task_id_job_id ON task_run (job_run_id, task_id, job_id);
+CREATE INDEX idx_task_run_job_run_id ON task_run (job_run_id);
+CREATE INDEX idx_task_run_job_id ON task_run (job_id);
+CREATE INDEX idx_task_run_task_id ON task_run (task_id);
+CREATE INDEX idx_task_run_status ON task_run (status);

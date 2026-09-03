@@ -1,0 +1,57 @@
+{% extends "routes/root.html" %}
+
+{% block title %}Runs · flowlite{% endblock %}
+
+{% block content %}
+
+<div class="view-head">
+    <div>
+        <h1 class="view-title">Runs</h1>
+        <p class="view-sub">Every job run this instance has recorded, newest first. Bars are drawn against the slowest run on the page.</p>
+    </div>
+
+    <form method="GET" action="/" class="controls">
+        <input type="hidden" name="page_size" value="{{ page_size }}">
+        {% if let Some(status) = selected_status %}
+        <input type="hidden" name="filter_status" value="{{ status }}">
+        {% endif %}
+
+        <select name="filter_job_id" class="field" aria-label="Filter runs by job" onchange="this.form.submit()">
+            <option value="">All jobs</option>
+            {% for job in jobs %}
+            <option value="{{ job.job_id }}" {% if let Some(selected) = selected_job_id %}{% if selected == job.job_id.as_str() %}selected{% endif %}{% endif %}>{{ job.name }}</option>
+            {% endfor %}
+        </select>
+
+        <noscript><button type="submit" class="btn">Filter</button></noscript>
+    </form>
+</div>
+
+<div class="section">
+    <div class="section__head">
+        <div class="chips">
+            {% for chip in status_chips %}
+            <a href="{{ chip.href }}" class="chip" {% if chip.selected %}aria-current="page"{% endif %}>
+                {% if let Some(status) = chip.status %}<span class="mark mark--{{ status }}"></span>{% endif %}
+                {{ chip.label }}
+            </a>
+            {% endfor %}
+        </div>
+
+        <span class="section__note">Updates every 3 seconds</span>
+    </div>
+
+    <div
+        id="runs"
+        hx-get="{{ table_href }}"
+        hx-trigger="load, every 3s"
+        hx-swap="innerHTML"
+    >
+        <div class="loading">
+            <span class="spinner"></span>
+            <span>Loading runs</span>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

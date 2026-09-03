@@ -1,0 +1,82 @@
+[
+  {
+    "query": "explain what happens when i run `job submit` \u2014 which rows get created and who picks them up from there",
+    "should_trigger": true
+  },
+  {
+    "query": "whats the difference between a Job and a JobRun here, and why does job list filter on job_id rather than name",
+    "should_trigger": true
+  },
+  {
+    "query": "i want to stop a running job run from the ui. is there a cancel status or how does stopping actually work",
+    "should_trigger": true
+  },
+  {
+    "query": "job run 55 came out Skipped but half of its tasks succeeded. what does Skipped mean at the job level",
+    "should_trigger": true
+  },
+  {
+    "query": "if a job has no tasks at all, what happens when someone submits it?",
+    "should_trigger": true
+  },
+  {
+    "query": "we want a 'rerun this job run' button. how should that work given how job runs get created today",
+    "should_trigger": true
+  },
+  {
+    "query": "who sets job_run.started_at, and does it get bumped when a task retries?",
+    "should_trigger": true
+  },
+  {
+    "query": "adding a priority concept so some job runs get dispatched before others \u2014 where does that fit in the job run lifecycle",
+    "should_trigger": true
+  },
+  {
+    "query": "job_run_stop is insert only. why isnt stopping just a status update on the job_run row?",
+    "should_trigger": true
+  },
+  {
+    "query": "our job yaml has both id and name and i cant tell which one the api should expose to users",
+    "should_trigger": true
+  },
+  {
+    "query": "which directory does a new migration file go in?",
+    "should_trigger": false
+  },
+  {
+    "query": "add a status filter to select_task_runs",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i declare that task-b should only run after task-a finishes?",
+    "should_trigger": false
+  },
+  {
+    "query": "the scheduler submitted three runs back to back right after a restart",
+    "should_trigger": false
+  },
+  {
+    "query": "restyle this function, the nesting is out of control",
+    "should_trigger": false
+  },
+  {
+    "query": "add a `job runs` subcommand to the cli",
+    "should_trigger": false
+  },
+  {
+    "query": "what does the attempt monitor do when the child process is missing from the map?",
+    "should_trigger": false
+  },
+  {
+    "query": "timeout defaults to an hour \u2014 where is that default defined?",
+    "should_trigger": false
+  },
+  {
+    "query": "does the cron field take six components or five?",
+    "should_trigger": false
+  },
+  {
+    "query": "should the new table be in the mem schema or on disk?",
+    "should_trigger": false
+  }
+]

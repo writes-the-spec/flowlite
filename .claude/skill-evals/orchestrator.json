@@ -1,0 +1,82 @@
+[
+  {
+    "query": "job run 812 has been Running for 40 minutes but every one of its task runs is finished. which service should have closed it out",
+    "should_trigger": true
+  },
+  {
+    "query": "i want to add a background service that prunes job runs older than 90 days. what shape should it have to fit the rest",
+    "should_trigger": true
+  },
+  {
+    "query": "walk me through the status transitions from a pending job run to a finished one \u2014 which service writes what, and when",
+    "should_trigger": true
+  },
+  {
+    "query": "one bad row used to take the whole dispatcher loop down with it. how are per row errors handled now?",
+    "should_trigger": true
+  },
+  {
+    "query": "im adding a terminal status called Cancelled. what do i have to touch so job runs dont silently report Succeeded?",
+    "should_trigger": true
+  },
+  {
+    "query": "the attempt monitor sometimes aborts an attempt immediately after it starts. is there a race with the dispatcher?",
+    "should_trigger": true
+  },
+  {
+    "query": "why is there no Cancelled status at all? we need to tell user-cancelled apart from failed",
+    "should_trigger": true
+  },
+  {
+    "query": "all six of these services poll once a second. could the dispatchers be event driven instead, and what would break",
+    "should_trigger": true
+  },
+  {
+    "query": "who owns the child process of a running attempt, and what happens to it if the process is restarted mid run",
+    "should_trigger": true
+  },
+  {
+    "query": "explain how stopping a job run actually reaches a task thats mid-execution and kills the process",
+    "should_trigger": true
+  },
+  {
+    "query": "add a schedule list command to the cli",
+    "should_trigger": false
+  },
+  {
+    "query": "should this table live in the mem schema?",
+    "should_trigger": false
+  },
+  {
+    "query": "write the insert module for a new entity under src/crud",
+    "should_trigger": false
+  },
+  {
+    "query": "my cron expression is firing way more often than i expected",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i set a per task timeout in the job yaml?",
+    "should_trigger": false
+  },
+  {
+    "query": "this function is nested four deep, can you flatten it",
+    "should_trigger": false
+  },
+  {
+    "query": "conceptually whats a Job versus a JobRun in this codebase",
+    "should_trigger": false
+  },
+  {
+    "query": "add a depends_on entry to my job file so the deploy step waits for the build",
+    "should_trigger": false
+  },
+  {
+    "query": "UNIQUE constraint failed: job.job_id at startup when two files share an id",
+    "should_trigger": false
+  },
+  {
+    "query": "cargo build warns about unused struct fields in the router templates, can we clean those up",
+    "should_trigger": false
+  }
+]

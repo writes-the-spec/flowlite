@@ -1,0 +1,116 @@
+{% extends "routes/root.html" %}
+
+{% block title %}{{ job.name }} · flowlite{% endblock %}
+
+{% block content %}
+
+<a href="/jobs" class="back">← Jobs</a>
+
+<div class="view-head">
+    <div>
+        <span class="eyebrow">{{ job.job_id }}</span>
+        <h1 class="view-title">{{ job.name }}</h1>
+        <p class="view-sub">{{ job.description }}</p>
+    </div>
+
+    <div>
+        <div class="meta__label">Run it</div>
+        <code class="cmd">flowlite job submit {{ job.job_id }}</code>
+    </div>
+</div>
+
+{% if has_dependencies %}
+<div class="section">
+    <div class="section__head">
+        <h2 class="section__title">Dependencies</h2>
+        <span class="section__note">Each task waits for everything pointing into it</span>
+    </div>
+
+    <div class="dag">
+        <svg
+            width="{{ dag.width }}"
+            height="{{ dag.height }}"
+            viewBox="-1 -1 {{ dag.width }} {{ dag.height }}"
+            role="img"
+            aria-label="Dependency graph for {{ job.name }}"
+        >
+            {% for edge in dag.edges %}
+            <path class="dag__edge" d="{{ edge.path }}"></path>
+            {% endfor %}
+
+            {% for node in dag.nodes %}
+            <rect
+                class="dag__node"
+                x="{{ node.x }}"
+                y="{{ node.y }}"
+                width="{{ dag.node_width }}"
+                height="{{ dag.node_height }}"
+                rx="3"
+            ></rect>
+            <text
+                class="dag__label"
+                x="{{ node.center_x }}"
+                y="{{ node.center_y }}"
+                text-anchor="middle"
+                dominant-baseline="central"
+            >{{ node.label }}</text>
+            {% endfor %}
+        </svg>
+    </div>
+</div>
+{% endif %}
+
+<div class="section">
+    <div class="section__head">
+        <h2 class="section__title">Tasks</h2>
+    </div>
+
+    {% if tasks.is_empty() %}
+    <div class="empty">
+        <p>This job has no tasks.</p>
+        <p class="empty__do">Add them under <span class="empty__cmd">tasks:</span> in the job's YAML file.</p>
+    </div>
+    {% else %}
+    <div class="scroller">
+<table class="deftable">
+        <thead>
+            <tr>
+                <th>task</th>
+                <th>command</th>
+                <th>depends on</th>
+                <th>timeout</th>
+                <th>retries</th>
+            </tr>
+        </thead>
+
+        <tbody>
+            {% for task in tasks %}
+            <tr>
+                <td class="deftable__id">{{ task.task_id }}</td>
+
+                <td><code class="cmd">{{ task.command }}</code></td>
+
+                <td>
+                    {% if task.depends_on.0.is_empty() %}
+                    <span class="none">nothing</span>
+                    {% else %}
+                    <div class="deps">
+                        {% for dependency in task.depends_on.0 %}
+                        <span class="dep">{{ dependency }}</span>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </td>
+
+                <td>{{ task.timeout }}s</td>
+
+                <td>{{ task.max_retries }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+    {% endif %}
+</div>
+
+{% endblock %}
