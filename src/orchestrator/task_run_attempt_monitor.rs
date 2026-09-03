@@ -321,6 +321,7 @@ impl TaskRunAttemptMonitor {
                 filter: SelectTaskRunAttemptsDataFilter {
                     task_run_id: None,
                     job_run_id: None,
+                    task_id: None,
                     status: Some(status),
                 },
                 sort: Some(SelectTaskRunAttemptsDataSort::Id),

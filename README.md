@@ -82,6 +82,21 @@ dags:
   - id: hello-world
 ```
 
+## Task output
+
+Every task's stdout and stderr are captured as it runs and kept per attempt, so a task
+that was retried keeps the output of each try.
+
+Read them from the command line:
+
+```bash
+flowlite job-run logs 42            # every task of run 42
+flowlite job-run logs 42 --task build   # just one task
+```
+
+Or from the dashboard: click a task on the run timeline to open its output page, which
+refreshes itself while the task is still running.
+
 ## UI
 
 A read-only, pure HTML dashboard is served directly from the binary:
@@ -90,7 +105,8 @@ A read-only, pure HTML dashboard is served directly from the binary:
 flowlite serve --config-dir .config
 ```
 
-Visit `http://localhost:8000` to see the job list, run history, and DAG status.
+Visit `http://localhost:8000` to see the job list, run history, DAG status, and the
+output of any task.
 
 ## Status
 

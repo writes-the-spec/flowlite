@@ -263,6 +263,7 @@ impl TaskRunMonitor {
             &*conn_pool,
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
+                    id: None,
                     job_run_id: None,
                     job_id: None,
                     task_id: None,
@@ -286,6 +287,7 @@ impl TaskRunMonitor {
                 filter: SelectTaskRunAttemptsDataFilter {
                     task_run_id: Some(task_run.id),
                     job_run_id: None,
+                    task_id: None,
                     status: None,
                 },
                 sort: Some(SelectTaskRunAttemptsDataSort::Id),

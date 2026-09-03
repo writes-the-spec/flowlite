@@ -235,6 +235,7 @@ impl TaskRunAttemptDispatcher {
                 filter: SelectTaskRunAttemptsDataFilter {
                     task_run_id: None,
                     job_run_id: None,
+                    task_id: None,
                     status: Some(TaskRunAttemptStatus::Pending),
                 },
                 sort: Some(SelectTaskRunAttemptsDataSort::Id),

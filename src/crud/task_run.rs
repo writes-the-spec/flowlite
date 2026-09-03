@@ -43,6 +43,7 @@ pub struct InsertTaskRunData {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SelectTaskRunsDataFilter {
+    pub id: Option<i64>,
     pub job_run_id: Option<i64>,
     pub job_id: Option<String>,
     pub task_id: Option<String>,
@@ -127,6 +128,11 @@ impl CRUD {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
             "SELECT id, job_run_id, job_id, task_id, created_at, started_at, finished_at, status FROM task_run WHERE 1=1"
         );
+
+        if let Some(id) = data.filter.id {
+            query_builder.push(" AND id = ");
+            query_builder.push_bind(id);
+        }
 
         if let Some(job_run_id) = data.filter.job_run_id {
             query_builder.push(" AND job_run_id = ");

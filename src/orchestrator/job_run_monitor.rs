@@ -86,6 +86,7 @@ impl JobRunMonitor {
             &*conn_pool,
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
+                    id: None,
                     job_run_id: Some(job_run.id),
                     task_id: None,
                     job_id: None,

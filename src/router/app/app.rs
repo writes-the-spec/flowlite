@@ -15,7 +15,8 @@ pub fn create_router(app_state: AppState) -> Router {
         .route("/schedules", get(app::routes::schedules::route::schedules_route))
         .route("/schedules/{schedule_id}", get(app::routes::schedules::schedule_id::route::schedule_id_route))
         .route("/job-runs/{job_run_id}", get(app::routes::job_runs::job_run_id::route::job_run_id_route))
-        .route("/job-runs/{job_run_id}/stop", post(app::routes::job_runs::job_run_id::route::stop_job_run_route));
+        .route("/job-runs/{job_run_id}/stop", post(app::routes::job_runs::job_run_id::route::stop_job_run_route))
+        .route("/task-runs/{task_run_id}", get(app::routes::task_runs::task_run_id::route::task_run_id_route));
 
     Router::new()
         .merge(main_routes)

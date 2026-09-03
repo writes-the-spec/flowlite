@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use crate::app_config::AppConfig;
 use crate::cli::commands::serve::ServeCmd;
 use crate::cli::commands::job::JobCmd;
+use crate::cli::commands::job_run::JobRunCmd;
 use crate::toolkit::Toolkit;
 
 
@@ -24,6 +25,7 @@ pub struct Cli {
 pub enum Command {
     Serve(ServeCmd),
     Job(JobCmd),
+    JobRun(JobRunCmd),
 }
 
 
@@ -37,6 +39,7 @@ impl Cli {
         match &self.command {
             Command::Serve(cmd) => cmd.run(toolkit).await?,
             Command::Job(cmd) => cmd.run(toolkit).await?,
+            Command::JobRun(cmd) => cmd.run(toolkit).await?,
         }
 
         Ok(())

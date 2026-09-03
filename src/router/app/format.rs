@@ -1,6 +1,8 @@
 use chrono::{DateTime, Local, Utc};
 
 use crate::crud::job_run::JobRunStatus;
+use crate::crud::task_run::TaskRunStatus;
+use crate::crud::task_run_attempt::TaskRunAttemptStatus;
 
 pub fn timestamp(at: DateTime<Utc>) -> String {
     at.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string()
@@ -40,5 +42,29 @@ pub fn job_run_word(status: JobRunStatus) -> &'static str {
         JobRunStatus::Skipped => "skipped",
         JobRunStatus::Aborted => "aborted",
         JobRunStatus::TimedOut => "timed out",
+    }
+}
+
+pub fn task_run_word(status: TaskRunStatus) -> &'static str {
+    match status {
+        TaskRunStatus::Pending => "queued",
+        TaskRunStatus::Running => "running",
+        TaskRunStatus::Succeeded => "succeeded",
+        TaskRunStatus::Failed => "failed",
+        TaskRunStatus::Skipped => "skipped",
+        TaskRunStatus::Aborted => "aborted",
+        TaskRunStatus::TimedOut => "timed out",
+    }
+}
+
+pub fn task_run_attempt_word(status: TaskRunAttemptStatus) -> &'static str {
+    match status {
+        TaskRunAttemptStatus::Pending => "queued",
+        TaskRunAttemptStatus::Running => "running",
+        TaskRunAttemptStatus::Succeeded => "succeeded",
+        TaskRunAttemptStatus::Failed => "failed",
+        TaskRunAttemptStatus::Skipped => "skipped",
+        TaskRunAttemptStatus::Aborted => "aborted",
+        TaskRunAttemptStatus::TimedOut => "timed out",
     }
 }

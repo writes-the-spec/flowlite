@@ -47,6 +47,7 @@ pub struct InsertTaskRunAttemptData {
 pub struct SelectTaskRunAttemptsDataFilter {
     pub task_run_id: Option<i64>,
     pub job_run_id: Option<i64>,
+    pub task_id: Option<String>,
     pub status: Option<TaskRunAttemptStatus>,
 }
 
@@ -135,6 +136,11 @@ impl CRUD {
         if let Some(job_run_id) = data.filter.job_run_id {
             query_builder.push(" AND job_run_id = ");
             query_builder.push_bind(job_run_id);
+        }
+
+        if let Some(task_id) = &data.filter.task_id {
+            query_builder.push(" AND task_id = ");
+            query_builder.push_bind(task_id);
         }
 
         if let Some(status) = &data.filter.status {

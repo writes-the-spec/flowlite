@@ -1,0 +1,118 @@
+{% extends "routes/root.html" %}
+
+{% block title %}{{ task_run.task_id }} · run {{ task_run.job_run_id }} · flowlite{% endblock %}
+
+{% block content %}
+
+<a href="/job-runs/{{ task_run.job_run_id }}" class="back">← Run {{ task_run.job_run_id }}</a>
+
+<div
+    id="task-run"
+    {% if polling %}
+    hx-get="/task-runs/{{ task_run.id }}"
+    hx-trigger="every 3s"
+    hx-select="#task-run"
+    hx-target="#task-run"
+    hx-swap="outerHTML"
+    {% endif %}
+>
+
+    <div class="view-head">
+        <div>
+            <span class="eyebrow">task run {{ task_run.id }}</span>
+            <h1 class="view-title">{{ task_run.task_id }}</h1>
+        </div>
+
+        <div class="controls">
+            <span class="mark mark--{{ task_run.status }}"></span>
+            <span class="state state--{{ task_run.status }}">{{ task_run.status_word }}</span>
+        </div>
+    </div>
+
+    <hr class="rule">
+
+    <div class="meta">
+        <div class="meta__item">
+            <div class="meta__label">Job</div>
+            <div class="meta__value meta__value--mono"><a href="/jobs/{{ task_run.job_id }}">{{ task_run.job_id }}</a></div>
+        </div>
+
+        <div class="meta__item">
+            <div class="meta__label">Run</div>
+            <div class="meta__value meta__value--mono"><a href="/job-runs/{{ task_run.job_run_id }}">{{ task_run.job_run_id }}</a></div>
+        </div>
+
+        <div class="meta__item">
+            <div class="meta__label">Started</div>
+            <div class="meta__value">
+                {% if let Some(started_at) = task_run.started_at %}{{ started_at }}{% else %}<span class="none">not yet</span>{% endif %}
+            </div>
+        </div>
+
+        <div class="meta__item">
+            <div class="meta__label">Finished</div>
+            <div class="meta__value">
+                {% if let Some(finished_at) = task_run.finished_at %}{{ finished_at }}{% else %}<span class="none">not yet</span>{% endif %}
+            </div>
+        </div>
+
+        <div class="meta__item">
+            <div class="meta__label">Duration</div>
+            <div class="meta__value">
+                {% if let Some(duration) = task_run.duration %}{{ duration }}{% else %}<span class="none">—</span>{% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section__head">
+            <h2 class="section__title">Output</h2>
+            <span class="section__note">{{ attempt_note }}</span>
+        </div>
+
+        {% if attempts.is_empty() %}
+        <div class="empty">
+            <p>This task has no recorded attempts, so there is no output to show.</p>
+        </div>
+        {% else %}
+        {% for attempt in attempts %}
+        <div class="attempt">
+            <div class="attempt__head">
+                <span class="attempt__name">Attempt {{ attempt.attempt }}</span>
+                <span class="mark mark--{{ attempt.status }}"></span>
+                <span class="state state--{{ attempt.status }}">{{ attempt.status_word }}</span>
+
+                {% if let Some(started_at) = attempt.started_at %}
+                <span class="attempt__at">{{ started_at }}</span>
+                {% endif %}
+
+                {% if let Some(duration) = attempt.duration %}
+                <span class="attempt__dur">{{ duration }}</span>
+                {% endif %}
+            </div>
+
+            <div class="stream">
+                <div class="stream__label">stdout</div>
+                {% if attempt.stdout.is_empty() %}
+                <p class="stream__none">nothing written</p>
+                {% else %}
+                <pre class="stream__body">{{ attempt.stdout }}</pre>
+                {% endif %}
+            </div>
+
+            <div class="stream">
+                <div class="stream__label">stderr</div>
+                {% if attempt.stderr.is_empty() %}
+                <p class="stream__none">nothing written</p>
+                {% else %}
+                <pre class="stream__body stream__body--err">{{ attempt.stderr }}</pre>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+        {% endif %}
+    </div>
+
+</div>
+
+{% endblock %}

@@ -29,6 +29,7 @@ pub struct JobRunDisplay {
 /// One task's bar on the run timeline, placed as a percentage of the run's own window so
 /// the whole run always fills the track exactly once.
 pub struct Lane {
+    pub task_run_id: i64,
     pub task_id: String,
     pub status: TaskRunStatus,
     pub depends_on: Option<String>,
@@ -86,6 +87,7 @@ fn build_lane(
 ) -> Lane {
     let Some(started_at) = task_run.started_at else {
         return Lane {
+            task_run_id: task_run.id,
             task_id: task_run.task_id,
             status: task_run.status,
             depends_on,
@@ -106,6 +108,7 @@ fn build_lane(
     let span_pct = (elapsed_ms * 100 / window_ms).clamp(0, 100 - start_pct);
 
     Lane {
+        task_run_id: task_run.id,
         task_id: task_run.task_id,
         status: task_run.status,
         depends_on,
@@ -162,6 +165,7 @@ pub async fn job_run_id_route(
 
     let mut task_runs = crud.select_task_runs(conn, &SelectTaskRunsData {
         filter: SelectTaskRunsDataFilter {
+            id: None,
             job_run_id: Some(job_run.id),
             job_id: None,
             task_id: None,

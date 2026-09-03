@@ -96,7 +96,7 @@
 
             {% for lane in lanes %}
             <div class="lane">
-                <div class="lane__name" title="{{ lane.task_id }}">{{ lane.task_id }}</div>
+                <div class="lane__name" title="{{ lane.task_id }}"><a href="/task-runs/{{ lane.task_run_id }}">{{ lane.task_id }}</a></div>
 
                 <div class="lane__track">
                     {% if lane.started %}

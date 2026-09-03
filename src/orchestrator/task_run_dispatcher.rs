@@ -183,6 +183,7 @@ impl TaskRunDispatcher {
             &*conn_pool,
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
+                    id: None,
                     job_run_id: None,
                     job_id: None,
                     task_id: None,
@@ -289,6 +290,7 @@ impl TaskRunDispatcher {
                 &*conn_pool,
                 &SelectTaskRunsData {
                     filter: SelectTaskRunsDataFilter {
+                        id: None,
                         job_run_id: Some(task_run.job_run_id),
                         job_id: Some(task_run.job_id.clone()),
                         task_id: Some(dependent_task_id.clone()),
