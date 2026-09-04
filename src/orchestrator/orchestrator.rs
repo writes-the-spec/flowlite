@@ -78,9 +78,14 @@ impl Orchestrator {
         let task_run_monitor = TaskRunMonitor::new(
             self.crud.clone(),
             self.conn_pool.clone(),
+            self.signals.clone(),
         );
 
-        task_run_monitor.start();
+        Poller::new(
+            Arc::new(task_run_monitor),
+            self.signals.register(),
+            Duration::from_secs(1),
+        ).start();
 
         // The two attempt services share the child processes: the dispatcher spawns
         // them, the monitor waits on them.

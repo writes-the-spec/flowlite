@@ -1,10 +1,10 @@
 use std::sync::Arc;
-use std::time::Duration;
 use crate::crud::CRUD;
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRun, TaskRunStatus, UpdateTaskRunsData, UpdateTaskRunsDataFilter, UpdateTaskRunsDataInput};
 use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
+use crate::poller::Service;
+use crate::signals::Signals;
 use chrono::{TimeDelta, Utc};
-use tokio::time::interval;
 
 
 /// Watches running task runs and drives them through their attempts: it starts the
@@ -15,6 +15,7 @@ use tokio::time::interval;
 pub struct TaskRunMonitor {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
+    pub signals: Arc<Signals>,
 }
 
 
@@ -23,111 +24,42 @@ impl TaskRunMonitor {
     pub fn new(
         crud: Arc<CRUD>,
         conn_pool: Arc<sqlx::SqlitePool>,
+        signals: Arc<Signals>,
     ) -> Self {
         Self {
             crud,
             conn_pool,
+            signals,
         }
-    }
-
-    /// Spawns the polling loop and returns immediately, restarting it on error.
-    pub fn start(self: &Self) {
-
-        let crud = self.crud.clone();
-        let conn_pool = self.conn_pool.clone();
-
-        tokio::spawn(async move {
-            loop {
-                if let Err(e) = Self::run(crud.clone(), conn_pool.clone()).await {
-                    eprintln!("Task Run Monitor error, restarting in 5s: {e:?}");
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                }
-            }
-        });
-
-    }
-
-    /// Handles every running task run, once per second, until selecting them fails.
-    async fn run(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-    ) -> anyhow::Result<()> {
-
-        let mut timer = interval(Duration::from_secs(1));
-
-        loop {
-
-            timer.tick().await;
-
-            let task_runs = Self::get_running_task_runs(crud.clone(), conn_pool.clone()).await?;
-
-            // A row the service can never handle is logged and left for the next tick:
-            // failing the whole loop over it would stop every other row from being
-            // handled, since the restarted loop would select the same row again.
-            for task_run in &task_runs {
-                if let Err(e) = Self::handle_running_task_run(
-                    crud.clone(),
-                    conn_pool.clone(),
-                    task_run,
-                ).await {
-                    eprintln!("Task Run Monitor error on task run {}: {e:?}", task_run.id);
-                }
-            }
-
-        }
-
     }
 
     /// Starts the first attempt of a task run that has none, and otherwise hands its
     /// last attempt to the handler for that attempt's status.
-    async fn handle_running_task_run(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<()> {
+    async fn handle_running_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
-        let task_run_attempts = Self::get_task_run_attempts(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run,
-        ).await?;
+        let task_run_attempts = self.get_task_run_attempts(task_run).await?;
 
         let Some(last_task_run_attempt) = task_run_attempts.last() else {
-            return Self::handle_start_task_run_attempt(
-                crud.clone(),
-                conn_pool.clone(),
-                task_run,
-                1,
-            ).await;
+            return self.handle_start_task_run_attempt(task_run, 1).await;
         };
 
         match last_task_run_attempt.status {
             TaskRunAttemptStatus::Pending => Self::handle_last_task_run_attempt_pending(),
             TaskRunAttemptStatus::Running => Self::handle_last_task_run_attempt_running(),
-            TaskRunAttemptStatus::Succeeded => Self::handle_last_task_run_attempt_succeeded(
-                crud.clone(),
-                conn_pool.clone(),
+            TaskRunAttemptStatus::Succeeded => self.handle_last_task_run_attempt_succeeded(
                 task_run,
             ).await,
-            TaskRunAttemptStatus::Failed => Self::handle_last_task_run_attempt_failed(
-                crud.clone(),
-                conn_pool.clone(),
+            TaskRunAttemptStatus::Failed => self.handle_last_task_run_attempt_failed(
                 task_run,
                 last_task_run_attempt,
             ).await,
-            TaskRunAttemptStatus::Skipped => Self::handle_last_task_run_attempt_skipped(
-                crud.clone(),
-                conn_pool.clone(),
+            TaskRunAttemptStatus::Skipped => self.handle_last_task_run_attempt_skipped(
                 task_run,
             ).await,
-            TaskRunAttemptStatus::Aborted => Self::handle_last_task_run_attempt_aborted(
-                crud.clone(),
-                conn_pool.clone(),
+            TaskRunAttemptStatus::Aborted => self.handle_last_task_run_attempt_aborted(
                 task_run,
             ).await,
-            TaskRunAttemptStatus::TimedOut => Self::handle_last_task_run_attempt_timed_out(
-                crud.clone(),
-                conn_pool.clone(),
+            TaskRunAttemptStatus::TimedOut => self.handle_last_task_run_attempt_timed_out(
                 task_run,
             ).await,
         }
@@ -143,26 +75,16 @@ impl TaskRunMonitor {
         Ok(())
     }
 
-    async fn handle_last_task_run_attempt_succeeded(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<()> {
+    async fn handle_last_task_run_attempt_succeeded(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
-        Self::update_task_run_status(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run,
-            TaskRunStatus::Succeeded,
-        ).await
+        self.update_task_run_status(task_run, TaskRunStatus::Succeeded).await
     }
 
     /// Starts the next attempt while the task has a retry left, and fails the task run
     /// once they are used up. Attempts count from 1, so the task run gets
     /// `max_retries + 1` of them.
     async fn handle_last_task_run_attempt_failed(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
+        &self,
         task_run: &TaskRun,
         last_task_run_attempt: &TaskRunAttempt,
     ) -> anyhow::Result<()> {
@@ -175,20 +97,13 @@ impl TaskRunMonitor {
                 return Ok(());
             }
 
-            return Self::handle_start_task_run_attempt(
-                crud.clone(),
-                conn_pool.clone(),
+            return self.handle_start_task_run_attempt(
                 task_run,
                 last_task_run_attempt.attempt + 1,
             ).await;
         }
 
-        Self::update_task_run_status(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run,
-            TaskRunStatus::Failed,
-        ).await
+        self.update_task_run_status(task_run, TaskRunStatus::Failed).await
     }
 
     /// Whether the retry_delay the run was submitted with has yet to pass since its last
@@ -203,58 +118,26 @@ impl TaskRunMonitor {
         Utc::now() < finished_at + TimeDelta::seconds(task_run.retry_delay as i64)
     }
 
-    async fn handle_last_task_run_attempt_skipped(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<()> {
+    async fn handle_last_task_run_attempt_skipped(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
-        Self::update_task_run_status(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run,
-            TaskRunStatus::Skipped,
-        ).await
+        self.update_task_run_status(task_run, TaskRunStatus::Skipped).await
     }
 
-    async fn handle_last_task_run_attempt_aborted(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<()> {
+    async fn handle_last_task_run_attempt_aborted(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
-        Self::update_task_run_status(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run,
-            TaskRunStatus::Aborted,
-        ).await
+        self.update_task_run_status(task_run, TaskRunStatus::Aborted).await
     }
 
-    async fn handle_last_task_run_attempt_timed_out(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<()> {
+    async fn handle_last_task_run_attempt_timed_out(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
-        Self::update_task_run_status(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run,
-            TaskRunStatus::TimedOut,
-        ).await
+        self.update_task_run_status(task_run, TaskRunStatus::TimedOut).await
     }
 
     /// Inserts the pending attempt TaskRunAttemptDispatcher clears to run.
-    async fn handle_start_task_run_attempt(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-        attempt: u32,
-    ) -> anyhow::Result<()> {
+    async fn handle_start_task_run_attempt(&self, task_run: &TaskRun, attempt: u32) -> anyhow::Result<()> {
 
-        crud.insert_task_run_attempt(
-            &*conn_pool,
+        self.crud.insert_task_run_attempt(
+            &*self.conn_pool,
             &InsertTaskRunAttemptData {
                 input: InsertTaskRunAttemptDataInput {
                     task_run_id: task_run.id,
@@ -267,16 +150,15 @@ impl TaskRunMonitor {
             },
         ).await?;
 
+        self.signals.publish();
+
         Ok(())
     }
 
-    async fn get_running_task_runs(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-    ) -> anyhow::Result<Vec<TaskRun>> {
+    async fn get_running_task_runs(&self) -> anyhow::Result<Vec<TaskRun>> {
 
-        crud.select_task_runs(
-            &*conn_pool,
+        self.crud.select_task_runs(
+            &*self.conn_pool,
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
                     id: None,
@@ -291,14 +173,10 @@ impl TaskRunMonitor {
 
     }
 
-    async fn get_task_run_attempts(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<Vec<TaskRunAttempt>> {
+    async fn get_task_run_attempts(&self, task_run: &TaskRun) -> anyhow::Result<Vec<TaskRunAttempt>> {
 
-        crud.select_task_run_attempts(
-            &*conn_pool,
+        self.crud.select_task_run_attempts(
+            &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
                     task_run_id: Some(task_run.id),
@@ -312,15 +190,10 @@ impl TaskRunMonitor {
 
     }
 
-    async fn update_task_run_status(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-        status: TaskRunStatus,
-    ) -> anyhow::Result<()> {
+    async fn update_task_run_status(&self, task_run: &TaskRun, status: TaskRunStatus) -> anyhow::Result<()> {
 
-        crud.update_task_runs(
-            &*conn_pool,
+        self.crud.update_task_runs(
+            &*self.conn_pool,
             &UpdateTaskRunsData {
                 filter: UpdateTaskRunsDataFilter {
                     id: Some(task_run.id),
@@ -335,7 +208,105 @@ impl TaskRunMonitor {
             }
         ).await?;
 
+        self.signals.publish();
+
         Ok(())
     }
 
+}
+
+
+impl Service for TaskRunMonitor {
+    type Row = TaskRun;
+
+    fn name(&self) -> &'static str {
+        "Task Run Monitor"
+    }
+
+    fn row_context(&self, task_run: &TaskRun) -> String {
+        format!("task run {}", task_run.id)
+    }
+
+    async fn select(&self) -> anyhow::Result<Vec<TaskRun>> {
+        self.get_running_task_runs().await
+    }
+
+    async fn handle(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+        self.handle_running_task_run(task_run).await
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crud::task_run::TaskRunStatus;
+    use crate::crud::task_run_attempt::TaskRunAttemptStatus;
+    use chrono::DateTime;
+
+    fn task_run(retry_delay: u32) -> TaskRun {
+        TaskRun {
+            id: 1,
+            job_run_id: 1,
+            job_id: "job".to_string(),
+            task_id: "task".to_string(),
+            command: "false".to_string(),
+            depends_on: sqlx::types::Json(Vec::new()),
+            timeout: 3600,
+            max_retries: 2,
+            retry_delay,
+            created_at: Utc::now(),
+            started_at: None,
+            finished_at: None,
+            status: TaskRunStatus::Running,
+        }
+    }
+
+    fn failed_attempt(finished_at: Option<DateTime<Utc>>) -> TaskRunAttempt {
+        TaskRunAttempt {
+            id: 1,
+            task_run_id: 1,
+            job_run_id: 1,
+            job_id: "job".to_string(),
+            task_id: "task".to_string(),
+            created_at: Utc::now(),
+            started_at: None,
+            finished_at,
+            attempt: 1,
+            status: TaskRunAttemptStatus::Failed,
+            stdout: String::new(),
+            stderr: String::new(),
+        }
+    }
+
+    #[test]
+    fn an_attempt_that_never_finished_is_not_made_to_wait() {
+        let waiting = TaskRunMonitor::is_waiting_to_retry(&task_run(60), &failed_attempt(None));
+
+        assert!(!waiting);
+    }
+
+    #[test]
+    fn the_retry_waits_while_the_delay_has_not_passed() {
+        let finished_at = Utc::now() - TimeDelta::seconds(10);
+
+        let waiting = TaskRunMonitor::is_waiting_to_retry(
+            &task_run(60),
+            &failed_attempt(Some(finished_at)),
+        );
+
+        assert!(waiting);
+    }
+
+    #[test]
+    fn the_retry_starts_once_the_delay_has_passed() {
+        let finished_at = Utc::now() - TimeDelta::seconds(61);
+
+        let waiting = TaskRunMonitor::is_waiting_to_retry(
+            &task_run(60),
+            &failed_attempt(Some(finished_at)),
+        );
+
+        assert!(!waiting);
+    }
 }
