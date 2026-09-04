@@ -19,7 +19,7 @@ cargo install flowlite
 
 ## Quick start
 
-Define a job in `.config/jobs/hello.yaml`:
+Define a job in `.config/jobs/hello.yaml` (`.yml` works too):
 
 ```yaml
 id: hello-world

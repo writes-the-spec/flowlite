@@ -46,7 +46,7 @@ impl CRUD {
         let jobs_dir = config_dir.join("jobs");
         if jobs_dir.exists() {
             for job_path in CRUD::read_dir_sorted(&jobs_dir)? {
-                if job_path.is_file() && job_path.extension().and_then(|s| s.to_str()) == Some("yml") {
+                if Self::is_yaml_file(&job_path) {
                     let job_yaml = JobYaml::from_yaml(&job_path)?;
 
                     Self::validate_job_tasks(&job_yaml)
@@ -123,7 +123,7 @@ impl CRUD {
         let schedules_dir = config_dir.join("schedules");
         if schedules_dir.exists() {
             for schedule_path in CRUD::read_dir_sorted(&schedules_dir)? {
-                if schedule_path.is_file() && schedule_path.extension().and_then(|s| s.to_str()) == Some("yml") {
+                if Self::is_yaml_file(&schedule_path) {
                     let schedule_yaml = ScheduleYaml::from_yaml(&schedule_path)?;
 
                     let cron_trigger = CronTrigger::new(
@@ -307,6 +307,18 @@ impl CRUD {
         acyclic_task_ids.insert(task_id);
 
         None
+    }
+
+    /// Both spellings of the extension are accepted: either is a reasonable thing to
+    /// call a YAML file, and a config silently ignored for being named the other way is
+    /// a bad way to find that out.
+    fn is_yaml_file(path: &std::path::Path) -> bool {
+
+        if !path.is_file() {
+            return false;
+        }
+
+        matches!(path.extension().and_then(|s| s.to_str()), Some("yml") | Some("yaml"))
     }
 
     fn read_dir_sorted(path: impl AsRef<std::path::Path>) -> anyhow::Result<Vec<PathBuf>> {
