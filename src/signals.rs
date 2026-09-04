@@ -40,6 +40,13 @@ impl Signals {
 }
 
 
+impl Default for Signals {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

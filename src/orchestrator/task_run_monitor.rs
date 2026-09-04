@@ -92,7 +92,7 @@ impl TaskRunMonitor {
         if last_task_run_attempt.attempt < task_run.max_retries + 1 {
 
             // Nothing is written while the delay runs down: the task run stays Running
-            // and the next tick asks the same question again, until the wait is over.
+            // and the next pass asks the same question again, until the wait is over.
             if Self::is_waiting_to_retry(task_run, last_task_run_attempt) {
                 return Ok(());
             }

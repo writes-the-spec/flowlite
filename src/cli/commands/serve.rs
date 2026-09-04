@@ -1,14 +1,13 @@
 use clap::Args;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::Mutex;
 use crate::router::app::app::create_router;
 use crate::router::app::app_state::AppState;
 use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
 use crate::orchestrator::Orchestrator;
-use crate::poller::Poller;
+use crate::poller::{Poller, POLL_INTERVAL};
 use crate::scheduler::Scheduler;
 use crate::signals::Signals;
 
@@ -52,7 +51,7 @@ impl ServeCmd {
         Poller::new(
             Arc::new(scheduler),
             Arc::new(tokio::sync::Notify::new()),
-            Duration::from_secs(1),
+            POLL_INTERVAL,
         ).start();
 
         let orchestrator = Orchestrator::new(

@@ -53,7 +53,10 @@ impl TaskRunAttemptDispatcher {
     /// Derives the status a pending attempt moves to: skipped if its job run was
     /// stopped before it could run, running otherwise. There is nothing else to wait
     /// for, the task run has already resolved its dependencies.
-    async fn derive_next_task_run_attempt_status(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<TaskRunAttemptStatus> {
+    async fn derive_next_task_run_attempt_status(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+    ) -> anyhow::Result<TaskRunAttemptStatus> {
 
         let job_run_stopped = self.is_job_run_stopped(task_run_attempt).await?;
 

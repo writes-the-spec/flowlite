@@ -32,6 +32,7 @@ impl Scheduler {
         }
     }
 
+    /// Selects the schedules whose next_run has passed and that are not disabled.
     async fn get_due_schedules(&self) -> anyhow::Result<Vec<Schedule>> {
 
         let current_ts = self.toolkit.get_current_ts();

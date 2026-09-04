@@ -21,6 +21,12 @@ pub trait Service: Send + Sync + 'static {
 }
 
 
+/// Every poller shares this. It is the safety net rather than the driver — signals do the
+/// waking — but it cannot be removed: `job submit` writes from another process and so
+/// cannot publish, and this interval is the only thing that notices.
+pub const POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+
 /// Drives one Service, waking on its signal or its interval, whichever comes first.
 pub struct Poller<S: Service> {
     service: Arc<S>,
@@ -60,10 +66,16 @@ impl<S: Service> Poller<S> {
     /// Handles every row the service selects, once per wake-up, until selecting fails.
     async fn run(&self) -> anyhow::Result<()> {
 
+        // Burst, tokio's default MissedTickBehavior, is left as-is: it is what the loops
+        // this replaced already did, so a handle pass longer than the interval is
+        // followed immediately by another rather than by a delay to catch up.
         let mut timer = tokio::time::interval(self.interval);
 
         loop {
 
+            // A Notified future dropped when the timer arm wins does not lose its permit
+            // to tokio's internal bookkeeping: the permit is only consumed on a completed
+            // await, so a signal published during the timer arm is still there next time.
             tokio::select! {
                 _ = timer.tick() => {}
                 _ = self.wakeup.notified() => {}
@@ -94,6 +106,7 @@ impl<S: Service> Poller<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::signals::Signals;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
     struct CountingService {
@@ -266,6 +279,33 @@ mod tests {
         release_handle.notify_one();
 
         let woke_from = tokio::time::Instant::now();
+        selects.recv().await.unwrap();
+
+        assert_eq!(woke_from.elapsed(), Duration::ZERO);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_publish_through_signals_wakes_a_registered_poller() {
+        let (selected, mut selects) = unbounded_channel();
+        let (handled, _handles) = unbounded_channel();
+
+        let service = Arc::new(CountingService {
+            rows: Vec::new(),
+            select_fails: false,
+            fail_row: None,
+            selected,
+            handled,
+        });
+
+        let signals = Signals::new();
+        let wakeup = signals.register();
+
+        Poller::new(service, wakeup, Duration::from_secs(60)).start();
+
+        selects.recv().await.unwrap();
+
+        let woke_from = tokio::time::Instant::now();
+        signals.publish();
         selects.recv().await.unwrap();
 
         assert_eq!(woke_from.elapsed(), Duration::ZERO);

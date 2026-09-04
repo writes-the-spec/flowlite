@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 use crate::crud::CRUD;
 use crate::orchestrator::job_run_dispatcher::JobRunDispatcher;
 use crate::orchestrator::job_run_monitor::JobRunMonitor;
@@ -8,7 +7,7 @@ use crate::orchestrator::task_run_attempt_dispatcher::TaskRunAttemptDispatcher;
 use crate::orchestrator::task_run_attempt_monitor::TaskRunAttemptMonitor;
 use crate::orchestrator::task_run_dispatcher::TaskRunDispatcher;
 use crate::orchestrator::task_run_monitor::TaskRunMonitor;
-use crate::poller::Poller;
+use crate::poller::{Poller, POLL_INTERVAL};
 use crate::signals::Signals;
 
 
@@ -37,7 +36,17 @@ impl Orchestrator {
     }
 
     /// Spawns every service and returns immediately.
+    ///
+    /// Every wake-up is registered before any Poller is spawned, so the first service's
+    /// own startup pass can never publish to a signal the others haven't registered yet.
     pub fn start(self: &Self) {
+
+        let job_run_dispatcher_wakeup = self.signals.register();
+        let job_run_monitor_wakeup = self.signals.register();
+        let task_run_dispatcher_wakeup = self.signals.register();
+        let task_run_monitor_wakeup = self.signals.register();
+        let task_run_attempt_dispatcher_wakeup = self.signals.register();
+        let task_run_attempt_monitor_wakeup = self.signals.register();
 
         let job_run_dispatcher = JobRunDispatcher::new(
             self.crud.clone(),
@@ -45,23 +54,11 @@ impl Orchestrator {
             self.signals.clone(),
         );
 
-        Poller::new(
-            Arc::new(job_run_dispatcher),
-            self.signals.register(),
-            Duration::from_secs(1),
-        ).start();
-
         let job_run_monitor = JobRunMonitor::new(
             self.crud.clone(),
             self.conn_pool.clone(),
             self.signals.clone(),
         );
-
-        Poller::new(
-            Arc::new(job_run_monitor),
-            self.signals.register(),
-            Duration::from_secs(1),
-        ).start();
 
         let task_run_dispatcher = TaskRunDispatcher::new(
             self.crud.clone(),
@@ -69,23 +66,11 @@ impl Orchestrator {
             self.signals.clone(),
         );
 
-        Poller::new(
-            Arc::new(task_run_dispatcher),
-            self.signals.register(),
-            Duration::from_secs(1),
-        ).start();
-
         let task_run_monitor = TaskRunMonitor::new(
             self.crud.clone(),
             self.conn_pool.clone(),
             self.signals.clone(),
         );
-
-        Poller::new(
-            Arc::new(task_run_monitor),
-            self.signals.register(),
-            Duration::from_secs(1),
-        ).start();
 
         // The two attempt services share the child processes: the dispatcher spawns
         // them, the monitor waits on them.
@@ -99,12 +84,6 @@ impl Orchestrator {
             self.signals.clone(),
         );
 
-        Poller::new(
-            Arc::new(task_run_attempt_dispatcher),
-            self.signals.register(),
-            Duration::from_secs(1),
-        ).start();
-
         let task_run_attempt_monitor = TaskRunAttemptMonitor::new(
             self.crud.clone(),
             self.conn_pool.clone(),
@@ -112,11 +91,12 @@ impl Orchestrator {
             self.signals.clone(),
         );
 
-        Poller::new(
-            Arc::new(task_run_attempt_monitor),
-            self.signals.register(),
-            Duration::from_secs(1),
-        ).start();
+        Poller::new(Arc::new(job_run_dispatcher), job_run_dispatcher_wakeup, POLL_INTERVAL).start();
+        Poller::new(Arc::new(job_run_monitor), job_run_monitor_wakeup, POLL_INTERVAL).start();
+        Poller::new(Arc::new(task_run_dispatcher), task_run_dispatcher_wakeup, POLL_INTERVAL).start();
+        Poller::new(Arc::new(task_run_monitor), task_run_monitor_wakeup, POLL_INTERVAL).start();
+        Poller::new(Arc::new(task_run_attempt_dispatcher), task_run_attempt_dispatcher_wakeup, POLL_INTERVAL).start();
+        Poller::new(Arc::new(task_run_attempt_monitor), task_run_attempt_monitor_wakeup, POLL_INTERVAL).start();
 
     }
 

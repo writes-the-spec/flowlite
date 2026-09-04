@@ -73,7 +73,7 @@ impl TaskRunAttemptMonitor {
     }
 
     /// Persists the output of an attempt whose process is still running and puts the
-    /// process back for the next tick.
+    /// process back for the next pass.
     async fn handle_unfinished_task_run_attempt(
         &self,
         task_run_attempt: &TaskRunAttempt,
@@ -277,6 +277,8 @@ impl TaskRunAttemptMonitor {
             },
         ).await?;
 
+        // No publish: this runs on every pass for every running attempt and changes no
+        // status, so waking all six pollers here would put the bus back into a loop.
         Ok(())
     }
 
