@@ -127,7 +127,7 @@ pub async fn job_run_id_route(
 ) -> impl IntoResponse {
     let conn = &*state.conn_pool;
 
-    let job_run = crud.select_job_runs(conn, &SelectJobRunsData {
+    let job_run = crud.select_job_run(conn, &SelectJobRunsData {
         filter: SelectJobRunsDataFilter {
             id: Some(job_run_id),
             job_id: None,
@@ -136,7 +136,7 @@ pub async fn job_run_id_route(
         sort: None,
         limit: Some(1),
         offset: None,
-    }).await.unwrap_or_default().into_iter().next();
+    }).await.unwrap_or(None);
 
     let job_run = match job_run {
         Some(job_run) => job_run,
@@ -231,6 +231,30 @@ pub async fn job_run_id_route(
             eprintln!("Template rendering error: {}", err);
             Html("Error rendering template".to_string()).into_response()
         },
+    }
+}
+
+pub async fn rerun_job_run_route(
+    State(state): State<AppState>,
+    Extension(crud): Extension<CRUD>,
+    Path(job_run_id): Path<i64>,
+) -> impl IntoResponse {
+    let mut conn = match state.conn_pool.acquire().await {
+        Ok(conn) => conn,
+        Err(err) => {
+            eprintln!("Error rerunning job run: {}", err);
+            return Html("Error rerunning job run").into_response();
+        }
+    };
+
+    let result = crud.rerun_job(&mut conn, job_run_id).await;
+
+    match result {
+        Ok(new_job_run_id) => Redirect::to(&format!("/job-runs/{}", new_job_run_id)).into_response(),
+        Err(err) => {
+            eprintln!("Error rerunning job run: {}", err);
+            Html("Error rerunning job run").into_response()
+        }
     }
 }
 

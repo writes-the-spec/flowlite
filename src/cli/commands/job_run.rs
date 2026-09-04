@@ -14,6 +14,7 @@ pub struct JobRunCmd {
 #[derive(Subcommand)]
 pub enum JobRunSubcommand {
     Logs(JobRunLogsCmd),
+    Rerun(JobRunRerunCmd),
 }
 
 #[derive(Args)]
@@ -24,6 +25,11 @@ pub struct JobRunLogsCmd {
     pub task: Option<String>,
 }
 
+#[derive(Args)]
+pub struct JobRunRerunCmd {
+    pub job_run_id: i64,
+}
+
 impl JobRunCmd {
     pub async fn run(&self, toolkit: Toolkit) -> anyhow::Result<()> {
 
@@ -31,6 +37,7 @@ impl JobRunCmd {
 
         match &self.command {
             JobRunSubcommand::Logs(cmd) => cmd.run(toolkit).await,
+            JobRunSubcommand::Rerun(cmd) => cmd.run(toolkit).await,
         }
     }
 }
@@ -44,7 +51,7 @@ impl JobRunLogsCmd {
 
         crud.init(&mut conn).await?;
 
-        let job_run = crud.select_job_runs(&mut conn, &SelectJobRunsData {
+        let job_run = crud.select_job_run(&mut conn, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
                 id: Some(self.job_run_id),
                 job_id: None,
@@ -53,7 +60,7 @@ impl JobRunLogsCmd {
             sort: None,
             limit: Some(1),
             offset: None,
-        }).await?.into_iter().next();
+        }).await?;
 
         if job_run.is_none() {
             anyhow::bail!("Job run {} not found", self.job_run_id);
@@ -80,6 +87,23 @@ impl JobRunLogsCmd {
         for task_run_attempt in task_run_attempts {
             print_task_run_attempt(&task_run_attempt);
         }
+
+        Ok(())
+    }
+}
+
+impl JobRunRerunCmd {
+    pub async fn run(&self, toolkit: Toolkit) -> anyhow::Result<()> {
+
+        let mut conn = toolkit.get_conn().await?;
+
+        let crud = CRUD::new(std::sync::Arc::new(toolkit));
+
+        crud.init(&mut conn).await?;
+
+        let job_run_id = crud.rerun_job(&mut conn, self.job_run_id).await?;
+
+        println!("Job run {} rerun successfully. Job Run ID: {}", self.job_run_id, job_run_id);
 
         Ok(())
     }

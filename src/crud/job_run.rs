@@ -109,6 +109,14 @@ impl CRUD {
         Ok(res.last_insert_rowid())
     }
 
+    pub async fn select_job_run<'e, E>(&self, executor: E, data: &SelectJobRunsData) -> anyhow::Result<Option<JobRun>>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    {
+        let runs = self.select_job_runs(executor, data).await?;
+        Ok(runs.into_iter().next())
+    }
+
     pub async fn select_job_runs<'e, E>(&self, executor: E, data: &SelectJobRunsData) -> anyhow::Result<Vec<JobRun>>
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,

@@ -10,15 +10,11 @@ use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, TaskRunSt
 /// Operations that span more than one entity, and so belong to no single entity file.
 impl CRUD {
 
-    pub async fn submit_job<'e, 'c, E>(
+    pub async fn submit_job(
         &self,
-        executor: E,
+        conn: &mut SqliteConnection,
         job_id: &str,
-    ) -> anyhow::Result<i64>
-    where
-        E: sqlx::Executor<'e, Database = sqlx::Sqlite> + sqlx::Acquire<'c, Database = sqlx::Sqlite>,
-    {
-        let mut conn = executor.acquire().await?;
+    ) -> anyhow::Result<i64> {
 
         let job_run_id = self.insert_job_run(
             &mut *conn,
@@ -58,6 +54,36 @@ impl CRUD {
         }
 
         Ok(job_run_id)
+    }
+
+    /// Submits a fresh run of the job the given run belongs to, whatever state that run
+    /// is in. What gets run is the job's current definition, not the tasks the original
+    /// run happened to have, so a rerun picks up any change to the job's YAML since.
+    pub async fn rerun_job(
+        &self,
+        conn: &mut SqliteConnection,
+        job_run_id: i64,
+    ) -> anyhow::Result<i64> {
+
+        let job_run = self.select_job_run(
+            &mut *conn,
+            &SelectJobRunsData {
+                filter: SelectJobRunsDataFilter {
+                    id: Some(job_run_id),
+                    job_id: None,
+                    status: None,
+                },
+                sort: None,
+                limit: Some(1),
+                offset: None,
+            }
+        ).await?;
+
+        let Some(job_run) = job_run else {
+            anyhow::bail!("Job run {} not found", job_run_id);
+        };
+
+        self.submit_job(conn, &job_run.job_id).await
     }
 
     /// Whether the job already has as many active runs as it allows, which is the

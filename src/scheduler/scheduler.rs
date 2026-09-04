@@ -136,7 +136,9 @@ impl Scheduler {
                 continue;
             }
 
-            crud.submit_job(&*conn_pool, &schedule_job.job_id).await?;
+            let mut conn = conn_pool.acquire().await?;
+
+            crud.submit_job(&mut conn, &schedule_job.job_id).await?;
         }
 
         let cron_trigger = CronTrigger::from_schedule(schedule);
