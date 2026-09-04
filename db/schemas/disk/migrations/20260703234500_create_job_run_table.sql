@@ -1,6 +1,8 @@
 CREATE TABLE job_run (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id TEXT NOT NULL,
+    job_name TEXT NOT NULL,
+    job_description TEXT NOT NULL,
     created_at DATETIME NOT NULL,
     started_at DATETIME,
     finished_at DATETIME,

@@ -7,46 +7,125 @@ use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataS
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, TaskRunStatus};
 
 
+/// A job's definition, as one job run will execute it. It is built either from the
+/// config the YAML declares now or from an earlier run's snapshot, and the insert
+/// treats both alike: where a definition came from is its builder's business.
+struct JobRunDefinition {
+    job_id: String,
+    job_name: String,
+    job_description: String,
+    tasks: Vec<JobRunTaskDefinition>,
+}
+
+struct JobRunTaskDefinition {
+    task_id: String,
+    command: String,
+    depends_on: Vec<String>,
+    timeout: u32,
+    max_retries: u32,
+    retry_delay: u32,
+}
+
 /// Operations that span more than one entity, and so belong to no single entity file.
 impl CRUD {
 
+    /// Submits a run of the job's current definition. The definition is snapshotted onto
+    /// the run's own rows, so what the run executes can no longer change under it -
+    /// not when the YAML is edited, and not when the process restarts mid-run.
     pub async fn submit_job(
         &self,
         conn: &mut SqliteConnection,
         job_id: &str,
     ) -> anyhow::Result<i64> {
 
+        let definition = self.build_job_run_definition_from_config(&mut *conn, job_id).await?;
+
+        self.insert_job_run_definition(&mut *conn, &definition).await
+    }
+
+    /// Reads a job's definition as the YAML currently declares it. A job with no config
+    /// is an error rather than an empty run: the caller asked for a job that isn't there.
+    async fn build_job_run_definition_from_config(
+        &self,
+        conn: &mut SqliteConnection,
+        job_id: &str,
+    ) -> anyhow::Result<JobRunDefinition> {
+
+        let job = self.select_job(&mut *conn, &SelectJobsData {
+            filter: SelectJobsDataFilter {
+                job_id: Some(job_id.to_string()),
+                name_like: None,
+            },
+            sort: None,
+            limit: Some(1),
+            offset: None,
+        }).await?;
+
+        let Some(job) = job else {
+            anyhow::bail!("Job '{}' not found", job_id);
+        };
+
+        let tasks = self.select_tasks(&mut *conn, &SelectTasksData {
+            filter: SelectTasksDataFilter {
+                task_id: None,
+                job_id: Some(job_id.to_string()),
+            },
+            sort: Some(SelectTasksDataSort::RowId),
+            limit: None,
+            offset: None,
+        }).await?;
+
+        Ok(JobRunDefinition {
+            job_id: job.job_id,
+            job_name: job.name,
+            job_description: job.description,
+            tasks: tasks
+                .into_iter()
+                .map(|task| JobRunTaskDefinition {
+                    task_id: task.task_id,
+                    command: task.command,
+                    depends_on: task.depends_on.0,
+                    timeout: task.timeout,
+                    max_retries: task.max_retries,
+                    retry_delay: task.retry_delay,
+                })
+                .collect(),
+        })
+    }
+
+    /// Inserts a pending job run and one pending task run per task. This is the only
+    /// place a run's config is written.
+    async fn insert_job_run_definition(
+        &self,
+        conn: &mut SqliteConnection,
+        definition: &JobRunDefinition,
+    ) -> anyhow::Result<i64> {
+
         let job_run_id = self.insert_job_run(
             &mut *conn,
             &InsertJobRunData {
                 input: InsertJobRunDataInput {
-                    job_id: job_id.to_string(),
+                    job_id: definition.job_id.clone(),
+                    job_name: definition.job_name.clone(),
+                    job_description: definition.job_description.clone(),
                     status: JobRunStatus::Pending,
                 }
             }
         ).await?;
 
-        let tasks = self.select_tasks(
-            &mut *conn,
-            &SelectTasksData {
-                filter: SelectTasksDataFilter {
-                    task_id: None,
-                    job_id: Some(job_id.to_string()),
-                },
-                sort: Some(SelectTasksDataSort::RowId),
-                limit: None,
-                offset: None,
-            }
-        ).await?;
-
-        for task in tasks {
+        for task in definition.tasks.iter() {
             self.insert_task_run(
                 &mut *conn,
                 &InsertTaskRunData {
                     input: InsertTaskRunDataInput {
                         job_run_id,
-                        job_id: task.job_id.clone(),
+                        job_id: definition.job_id.clone(),
                         task_id: task.task_id.clone(),
+                        command: task.command.clone(),
+                        depends_on: task.depends_on.clone(),
+                        timeout: task.timeout,
+                        max_retries: task.max_retries,
+                        retry_delay: task.retry_delay,
                         status: TaskRunStatus::Pending,
                     }
                 }

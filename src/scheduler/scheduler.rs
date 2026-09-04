@@ -138,7 +138,16 @@ impl Scheduler {
 
             let mut conn = conn_pool.acquire().await?;
 
-            crud.submit_job(&mut conn, &schedule_job.job_id).await?;
+            // One unsubmittable job must not stop the schedule: bailing here would leave
+            // next_run unadvanced, and the schedule would try again on every tick.
+            if let Err(e) = crud.submit_job(&mut conn, &schedule_job.job_id).await {
+                eprintln!(
+                    "Scheduler could not submit job {} of schedule {}: {e:?}",
+                    schedule_job.job_id,
+                    schedule.schedule_id,
+                );
+                continue;
+            }
         }
 
         let cron_trigger = CronTrigger::from_schedule(schedule);

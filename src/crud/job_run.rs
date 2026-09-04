@@ -32,6 +32,8 @@ impl std::fmt::Display for JobRunStatus {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InsertJobRunDataInput {
     pub job_id: String,
+    pub job_name: String,
+    pub job_description: String,
     pub status: JobRunStatus,
 }
 
@@ -98,9 +100,11 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO job_run (job_id, created_at, status) VALUES (?, ?, ?)"
+            "INSERT INTO job_run (job_id, job_name, job_description, created_at, status) VALUES (?, ?, ?, ?, ?)"
         )
             .bind(&data.input.job_id)
+            .bind(&data.input.job_name)
+            .bind(&data.input.job_description)
             .bind(self.toolkit.get_current_ts())
             .bind(&data.input.status)
             .execute(executor)

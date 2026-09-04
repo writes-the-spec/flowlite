@@ -33,6 +33,11 @@ pub struct InsertTaskRunDataInput {
     pub job_run_id: i64,
     pub job_id: String,
     pub task_id: String,
+    pub command: String,
+    pub depends_on: Vec<String>,
+    pub timeout: u32,
+    pub max_retries: u32,
+    pub retry_delay: u32,
     pub status: TaskRunStatus,
 }
 
@@ -100,11 +105,16 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO task_run (job_run_id, job_id, task_id, created_at, status) VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO task_run (job_run_id, job_id, task_id, command, depends_on, timeout, max_retries, retry_delay, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(data.input.job_run_id)
             .bind(&data.input.job_id)
             .bind(&data.input.task_id)
+            .bind(&data.input.command)
+            .bind(sqlx::types::Json(&data.input.depends_on))
+            .bind(data.input.timeout)
+            .bind(data.input.max_retries)
+            .bind(data.input.retry_delay)
             .bind(self.toolkit.get_current_ts())
             .bind(&data.input.status)
             .execute(executor)
