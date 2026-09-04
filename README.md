@@ -96,8 +96,10 @@ tasks:
     retry_delay: 30
 ```
 
-Both default to 0, so a task retries immediately, or not at all. Each attempt keeps its
-own output — see [Task output](#task-output).
+`max_retries` defaults to 0, so a task is not retried unless you ask for it.
+`retry_delay` defaults to 60 seconds, on the grounds that whatever a retry is waiting
+on rarely fixes itself within one second; set it to 0 to retry as soon as possible.
+Each attempt keeps its own output — see [Task output](#task-output).
 
 ## Overlapping runs
 

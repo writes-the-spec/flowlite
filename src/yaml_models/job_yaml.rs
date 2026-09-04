@@ -15,7 +15,7 @@ pub struct JobYamlTask {
     #[serde(default)]
     pub max_retries: u32,
     /// Seconds to wait after a failed attempt before the next one starts.
-    #[serde(default)]
+    #[serde(default = "default_u32::<60>")]
     pub retry_delay: u32,
 }
 
