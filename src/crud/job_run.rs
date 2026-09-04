@@ -88,6 +88,7 @@ pub struct JobRun {
     pub id: i64,
     pub job_id: String,
     pub job_name: String,
+    pub job_description: String,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
@@ -126,31 +127,31 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT jr.id, jr.job_id, j.name AS job_name, jr.created_at, jr.started_at, jr.finished_at, jr.status FROM job_run jr JOIN mem.job j ON j.job_id = jr.job_id WHERE 1=1"
+            "SELECT id, job_id, job_name, job_description, created_at, started_at, finished_at, status FROM job_run WHERE 1=1"
         );
 
         if let Some(job_id) = &data.filter.job_id {
-            query_builder.push(" AND jr.job_id = ");
+            query_builder.push(" AND job_id = ");
             query_builder.push_bind(job_id);
         }
 
         if let Some(status) = &data.filter.status {
-            query_builder.push(" AND jr.status = ");
+            query_builder.push(" AND status = ");
             query_builder.push_bind(status);
         }
 
         if let Some(id) = &data.filter.id {
-            query_builder.push(" AND jr.id = ");
+            query_builder.push(" AND id = ");
             query_builder.push_bind(id);
         }
 
         if let Some(sort) = &data.sort {
             match sort {
                 SelectJobRunsDataSort::Id => {
-                    query_builder.push(" ORDER BY jr.id ASC");
+                    query_builder.push(" ORDER BY id ASC");
                 }
                 SelectJobRunsDataSort::IdDesc => {
-                    query_builder.push(" ORDER BY jr.id DESC");
+                    query_builder.push(" ORDER BY id DESC");
                 }
             }
         }
