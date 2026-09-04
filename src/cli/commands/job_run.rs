@@ -33,8 +33,6 @@ pub struct JobRunRerunCmd {
 impl JobRunCmd {
     pub async fn run(&self, toolkit: Toolkit) -> anyhow::Result<()> {
 
-        let _memory_conn = toolkit.get_memory_conn().await?;
-
         match &self.command {
             JobRunSubcommand::Logs(cmd) => cmd.run(toolkit).await,
             JobRunSubcommand::Rerun(cmd) => cmd.run(toolkit).await,
@@ -91,6 +89,9 @@ impl JobRunLogsCmd {
 }
 
 impl JobRunRerunCmd {
+    /// Reads no config on purpose - a rerun replays the original run's own snapshot, so
+    /// this process never seeds mem. Anything added here that reads a config table would
+    /// see it empty, not merely stale.
     pub async fn run(&self, toolkit: Toolkit) -> anyhow::Result<()> {
 
         let mut conn = toolkit.get_conn().await?;

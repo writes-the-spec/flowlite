@@ -8,7 +8,7 @@
 | `Running` | Started, and owned by `TaskRunMonitor`, which decides which attempt runs next. Covers the gaps between attempts, not just the time a process is alive. |
 | `Succeeded` | Its command exited 0. |
 | `Failed` | Its command exited non-zero and no retries were left. |
-| `TimedOut` | It ran past `task.timeout` and no retries were left. |
+| `TimedOut` | It ran past `task_run.timeout` and no retries were left. |
 | `Aborted` | Its process was killed mid-flight because the job run was stopped. |
 | `Skipped` | It never ran: a dependency didn't succeed, or the job run was stopped before it started. |
 
@@ -23,7 +23,7 @@
 3. **All dependencies `Succeeded`** → `Running`, via `handle_start_task_run`, which sets `started_at = now`
 4. Otherwise → `None`, left `Pending` for the next tick
 
-Dependencies come from `task.depends_on`, resolved to the task runs of the same job run by `get_dependent_task_runs`. A task with no dependencies falls straight through to step 3, since `all()` over an empty list is true.
+Dependencies come from `task_run.depends_on` — the list copied off `task.depends_on` when the run was submitted — resolved to the task runs of the same job run by `get_dependent_task_runs`. A task with no dependencies falls straight through to step 3, since `all()` over an empty list is true.
 
 This transition runs **at most once per task run**: a retry keeps the row `Running`, so the dependency check happens once and `started_at` means "when the task run started", covering every attempt.
 
@@ -38,12 +38,12 @@ This transition runs **at most once per task run**: a retry keeps the row `Runni
 | `Pending` | `_pending` | left `Running` — the attempt dispatcher owns it |
 | `Running` | `_running` | left `Running` — the attempt monitor owns it |
 | `Succeeded` | `_succeeded` | `Succeeded` |
-| `Failed` | `_failed` | next attempt while `attempt < max_retries + 1`, otherwise `Failed` |
+| `Failed` | `_failed` | next attempt while `attempt < task_run.max_retries + 1` and `task_run.retry_delay` has elapsed, otherwise `Failed` |
 | `Skipped` | `_skipped` | `Skipped` |
 | `Aborted` | `_aborted` | `Aborted` — terminal, never retried, so a stop can't be undone by a retry |
 | `TimedOut` | `_timed_out` | `TimedOut` — terminal, not retried |
 
-`Failed` is the only retried status. A retry inserts attempt `last.attempt + 1` and leaves the task run `Running`. Attempts count from 1, so total executions are `1 + max_retries` and `max_retries: 0` means one attempt.
+`Failed` is the only retried status. A retry inserts attempt `last.attempt + 1` and leaves the task run `Running`. Attempts count from 1, so total executions are `1 + max_retries` and `max_retries: 0` means one attempt. Both the count and the delay are read off the `task_run` row, so a run retries on the policy it was submitted with rather than on whatever the YAML says now.
 
 Because the decision comes from the attempt rows alone, a stop landing *between* attempts isn't seen here: the monitor starts the next attempt, the attempt dispatcher skips or aborts it within a tick, and the task run finishes from that.
 

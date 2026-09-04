@@ -138,8 +138,9 @@ impl Scheduler {
 
             let mut conn = conn_pool.acquire().await?;
 
-            // One unsubmittable job must not stop the schedule: bailing here would leave
-            // next_run unadvanced, and the schedule would try again on every tick.
+            // next_run is advanced only after this loop, so bailing here would re-submit
+            // the siblings already committed above on the next tick, and hot-loop the
+            // schedule at 1 Hz for as long as this one job stays unsubmittable.
             if let Err(e) = crud.submit_job(&mut conn, &schedule_job.job_id).await {
                 eprintln!(
                     "Scheduler could not submit job {} of schedule {}: {e:?}",

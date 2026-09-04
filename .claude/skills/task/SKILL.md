@@ -26,7 +26,7 @@ Declared inline under a job's `tasks:` list ([src/yaml_models/job_yaml.rs](../..
 
 `CRUD::validate_job_tasks` ([src/crud/crud.rs](../../../src/crud/crud.rs)) rejects the job at startup if a task id is declared twice, if a `depends_on` id is not a task of the same job, or if the dependencies form a cycle — `TaskRunDispatcher` waits for every dependency to succeed, so any of those would leave the task runs pending and their job run running forever.
 
-These are genuinely redundant (same source data, same list, written together) rather than two different concepts. **`task.depends_on` is the one the runtime reads** — both dependency checks go through `TaskRunDispatcher::get_dependent_task_runs`, which resolves it. `task_dependent` is written by `CRUD::init` and currently read by nothing at runtime; it's the normalized form, useful for reverse-edge queries ("who depends on me"). Keep them in sync if you change how dependencies are declared.
+These are genuinely redundant (same source data, same list, written together) rather than two different concepts. **`task.depends_on` is the list a run's dependency graph is built *from*, not the one the runtime resolves** — `CRUD::submit_job` copies it onto each `task_run` row at submit time, and both dependency checks go through `TaskRunDispatcher::get_dependent_task_runs`, which resolves that copy (`task_run.depends_on`). Outside the snapshot, `task.depends_on` is read only by the job page's task table and its DAG ([src/router/app/routes/jobs/job_id/dag.rs](../../../src/router/app/routes/jobs/job_id/dag.rs)), which describe the job as it is defined now rather than any run of it. `task_dependent` is written by `CRUD::init` and read by nothing at all; it's the normalized form, useful for reverse-edge queries ("who depends on me"). Keep them in sync if you change how dependencies are declared — and note that `task.depends_on` is now copied into every run submitted after an edit, so a wrong list is frozen onto those runs rather than fixable by editing the YAML.
 
 ## TaskRun lifecycle: two dispatcher/monitor pairs
 
@@ -48,18 +48,20 @@ The statuses themselves, and what each transition is allowed to write, are in th
 
 The two attempt services share one `TaskRunAttemptChildren` ([src/orchestrator/task_run_attempt_children.rs](../../../src/orchestrator/task_run_attempt_children.rs)): a `Mutex<HashMap<task_run_attempt_id, RunningTaskRunAttempt>>` that keeps the child processes alive between polls. The dispatcher puts a child in, the monitor takes it out.
 
-`TaskRunAttemptDispatcher` spawns the command when it starts a `Pending` attempt: it loads the task by the attempt's `job_id`/`task_id`, spawns `sh -c <command>` with piped stdout/stderr, inserts the child, and only then writes `Running` and the attempt's `started_at` — in the other order the monitor could see a `Running` attempt whose child is not in the map yet.
+`TaskRunAttemptDispatcher` spawns the command when it starts a `Pending` attempt: it loads the attempt's `task_run` row by `task_run_id`, for the `command` and `timeout` the run was submitted with, spawns `sh -c <command>` with piped stdout/stderr, inserts the child, and only then writes `Running` and the attempt's `started_at` — in the other order the monitor could see a `Running` attempt whose child is not in the map yet.
 
 `TaskRunAttemptMonitor` then handles each `Running` attempt row per tick:
 
 - **Not in the map** → attempt `Aborted`. The map only holds processes this program spawned, so the row is left over from an earlier run of it. This is the restart path.
-- **In the map** → drain its output, then check in order: job run stopped → kill it, attempt `Aborted`; past `task.timeout` (measured from the in-memory spawn time) → kill it, attempt `TimedOut`; process exited → attempt `Succeeded`/`Failed` from the exit status; still running → persist the output so far and put the child back.
+- **In the map** → drain its output, then check in order: job run stopped → kill it, attempt `Aborted`; past `task_run.timeout` (measured from the in-memory spawn time) → kill it, attempt `TimedOut`; process exited → attempt `Succeeded`/`Failed` from the exit status; still running → persist the output so far and put the child back.
 
 `TaskRunAttemptStatus` has the same seven variants as `TaskRunStatus`, since both levels have the same dispatcher/monitor shape. `Skipped` at this level means the job run was stopped in the tick between the row's insert and its dispatch, so there was never a process to kill.
 
 ## How the monitor retries a task run
 
-`TaskRunMonitor` looks at the **last** attempt row of each `Running` task run: none yet → insert a `Pending` attempt; otherwise the attempt's status picks one `handle_last_task_run_attempt_*` function. `Pending` and `Running` wait, a `Failed` attempt is retried while `attempt < max_retries + 1` by inserting the next attempt row, and every other status is copied onto the task run — so `Succeeded` succeeds it, and `Skipped`, `Aborted` and `TimedOut` finish it without a retry (a stop is never undone by a retry). Attempts count from 1, so total executions are `1 + max_retries`.
+`TaskRunMonitor` looks at the **last** attempt row of each `Running` task run: none yet → insert a `Pending` attempt; otherwise the attempt's status picks one `handle_last_task_run_attempt_*` function. `Pending` and `Running` wait, a `Failed` attempt is retried while `attempt < task_run.max_retries + 1` — once `task_run.retry_delay` seconds have passed since it finished — by inserting the next attempt row, and every other status is copied onto the task run — so `Succeeded` succeeds it, and `Skipped`, `Aborted` and `TimedOut` finish it without a retry (a stop is never undone by a retry). Attempts count from 1, so total executions are `1 + max_retries`.
+
+Both numbers come off the `task_run` row, not `mem.task`: a run retries on the policy it was submitted with, however the YAML has moved since.
 
 The task run stays `Running` across the whole retry sequence — it does *not* go back to `Pending`, so the dispatcher's dependency check runs once per task run and `task_run.started_at` means "when the task run started", not "when the current attempt started".
 

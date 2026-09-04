@@ -35,14 +35,14 @@ jobs:
 
 | Field | Required | Default | Notes |
 |---|---|---|---|
-| `id` | yes | — | A job id. **Nothing checks it exists** — see below. |
+| `id` | yes | — | A job id. A foreign key on `mem.schedule_job` checks it exists — see below. |
 | `parameters` | no | `None` | Arbitrary JSON, stored as text in `mem.schedule_job` and **never read**. |
 
 ## Gotchas
 
 - **`cron` takes six fields, seconds first** (`sec min hour dom month dow`), the `cron` crate's dialect. A five-field crontab expression means something else here — `"*/15 * * * * *"` is every 15 *seconds*.
 - **`parameters` is inert.** `CRUD::submit_job` takes only a job id, so nothing declared per job on a schedule reaches the job run. `.config/schedules/example_schedule.yml` uses a `variables:` key that isn't even a field — unknown keys are dropped silently.
-- **An unknown job id is accepted.** `submit_job` inserts a `job_run` for it, but `select_job_runs` inner-joins `mem.job`, so that job run is invisible to `JobRunDispatcher` and to the UI and stays `Pending` — and is re-submitted on every occurrence.
+- **An unknown job id stops the server from starting.** `mem.schedule_job.job_id` is a foreign key to `mem.job` and `PRAGMA foreign_keys` is on (sqlx enables it by default), so `CRUD::init` — which inserts every job before any `schedule_job` — aborts the config transaction with `(code: 787) FOREIGN KEY constraint failed` and the process exits. There is no half-loaded config and no stuck job run: a typo in one schedule file stops `serve`, `job list` and `job submit` until it is fixed.
 
 ## What the scheduler does with it
 

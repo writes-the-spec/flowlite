@@ -8,7 +8,7 @@
 | `Running` | Started. Its task runs are being dispatched, executed and retried. |
 | `Succeeded` | Every task run succeeded — also the status of a job with no tasks. |
 | `Failed` | A task run failed with retries exhausted. |
-| `TimedOut` | A task run exceeded `task.timeout` with retries exhausted. |
+| `TimedOut` | A task run exceeded `task_run.timeout` with retries exhausted. |
 | `Aborted` | A task run was killed mid-flight because the run was stopped. |
 | `Skipped` | Stopped without anything being interrupted — before starting, or between tasks. |
 

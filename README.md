@@ -139,6 +139,26 @@ flowlite job-run logs 42 --task build   # just one task
 Or from the dashboard: click a task on the run timeline to open its output page, which
 refreshes itself while the task is still running.
 
+## Reruns
+
+A run can be run again, with the **Rerun** button on its page in the dashboard or from
+the command line:
+
+```bash
+flowlite job-run rerun 42
+```
+
+A rerun replays **the definition the original run executed, not the current YAML.** Every
+run carries its own snapshot of the job and its tasks — the commands, the `depends_on`
+edges, the timeouts and the retry settings — taken when the run was submitted. So
+rerunning an old run reruns its old config, and a run whose job YAML has since been
+edited or deleted is still rerunnable. To run the job as it is defined now, submit it
+instead:
+
+```bash
+flowlite job submit hello-world
+```
+
 ## UI
 
 A read-only, pure HTML dashboard is served directly from the binary:
@@ -149,6 +169,28 @@ flowlite serve --config-dir .config
 
 Visit `http://localhost:8000` to see the job list, run history, DAG status, and the
 output of any task.
+
+## Upgrading
+
+While flowlite is pre-release, a column is added to an existing table by editing the
+migration that created it rather than by adding a new one. `sqlx` checksums the
+migrations it has already applied, so an existing database refuses to start after such a
+change, with no hint at the remedy:
+
+```
+migration 20260703234500 was previously applied but has been modified
+```
+
+The remedy is to delete the run history and let it be recreated on the next start:
+
+```bash
+rm <data_dir>/flowlite.db
+```
+
+`<data_dir>` is whatever you pass to `--data-dir`, and otherwise your OS data directory
+plus `flowlite` (`~/Library/Application Support/flowlite` on macOS,
+`~/.local/share/flowlite` on Linux). Only run history is lost — jobs and schedules are
+read from the YAML on every start.
 
 ## Status
 

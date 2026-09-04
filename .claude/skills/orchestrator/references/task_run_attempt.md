@@ -8,7 +8,7 @@
 | `Running` | Its command was spawned; the monitor owns the process. |
 | `Succeeded` | The process exited 0. |
 | `Failed` | The process exited non-zero. |
-| `TimedOut` | The process ran past `task.timeout` and was killed. |
+| `TimedOut` | The process ran past `task_run.timeout` and was killed. |
 | `Aborted` | The process was killed because the job run was stopped — or there was no process left to wait for. |
 | `Skipped` | The job run was stopped between the insert and the dispatch, so the command never started. |
 
@@ -19,7 +19,7 @@ Same seven variants as `TaskRunStatus`, because both levels have the same dispat
 `TaskRunAttemptDispatcher` ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../../src/orchestrator/task_run_attempt_dispatcher.rs)) polls **all** `Pending` attempts. `derive_next_task_run_attempt_status` has only two outcomes — the task run above it already resolved the dependencies:
 
 1. **Job run stopped?** → `Skipped`, `finished_at` set, `started_at` left NULL: the command never ran.
-2. **Otherwise** → load the task by the attempt's `job_id`/`task_id`, spawn `sh -c <command>` with piped stdout/stderr, insert the child into `TaskRunAttemptChildren`, then write `Running` and `started_at = now`.
+2. **Otherwise** → load the attempt's `task_run` row by `task_run_id`, for the `command` and `timeout` the run was submitted with, spawn `sh -c <command>` with piped stdout/stderr, insert the child into `TaskRunAttemptChildren`, then write `Running` and `started_at = now`.
 
 **The child goes into the map before the status is written.** In the other order the monitor can see a `Running` attempt whose process isn't in the map yet and abort it.
 
@@ -30,7 +30,7 @@ Same seven variants as `TaskRunStatus`, because both levels have the same dispat
 - **No child** → `handle_missing_task_run_attempt_child`: `Aborted`, output left as last persisted. The map holds only processes *this* program spawned, so a `Running` row without one belongs to an earlier run of it. This is the restart path.
 - **Child present** → drain its output, then, in order:
   1. **Job run stopped?** → kill it, `Aborted`.
-  2. **Past `task.timeout`?** → kill it, `TimedOut`. Measured from the in-memory spawn time (`times_out_at`), so neither the wait for dispatch nor the spawn counts against it.
+  2. **Past `task_run.timeout`?** → kill it, `TimedOut`. Measured from the in-memory spawn time (`times_out_at`), so neither the wait for dispatch nor the spawn counts against it.
   3. **Exited?** → `Succeeded`/`Failed` from the exit status, after a final drain.
   4. **Otherwise** → persist the output so far and put the child back for the next tick.
 

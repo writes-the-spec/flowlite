@@ -78,9 +78,12 @@ Column list is explicit (`SELECT a, b, c FROM ...`), never `SELECT *` — the co
 
 ### Joins
 
-If a select needs a column from another table (e.g. `job_run` needs the job's human-readable `name`), join it directly in the base query string rather than doing a second round-trip:
+**No `select_*` in this codebase joins today.** `select_job_runs` used to join `mem.job` for the job's name, and that name is now written onto the `job_run` row at submit time instead, by `CRUD::submit_job`. Before adding a join, ask whether the column belongs on the row: joining a disk table to a `mem` one ties durable rows to config that is re-seeded from the YAML on every start, which is exactly why that one was removed.
+
+If a select does need a column from another table, join it directly in the base query string rather than doing a second round-trip. The query that was there is still the shape to copy:
 
 ```rust
+// Illustrative — this query no longer exists.
 sqlx::QueryBuilder::new(
     "SELECT jr.id, jr.job_id, j.name AS job_name, jr.created_at, jr.started_at, jr.finished_at, jr.status \
      FROM job_run jr JOIN mem.job j ON j.job_id = jr.job_id WHERE 1=1"
