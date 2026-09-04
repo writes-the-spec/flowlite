@@ -6,10 +6,8 @@ use chrono::{DateTime, Utc};
 use std::cmp::Ordering;
 
 use crate::crud::CRUD;
-use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
 use crate::crud::job_run::{JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
-use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort};
 use crate::crud::task_run::{TaskRun, SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRunStatus};
 use crate::router::app::app_state::AppState;
 use crate::router::app::format;
@@ -18,6 +16,7 @@ pub struct JobRunDisplay {
     pub id: i64,
     pub job_id: String,
     pub job_name: String,
+    pub job_description: String,
     pub status: JobRunStatus,
     pub status_word: &'static str,
     pub created_at: String,
@@ -50,7 +49,6 @@ pub struct Tick {
 struct JobRunIdRouteTemplate {
     current_route: &'static str,
     job_run: JobRunDisplay,
-    job: Option<Job>,
     lanes: Vec<Lane>,
     ticks: Vec<Tick>,
     task_count: String,
@@ -143,26 +141,6 @@ pub async fn job_run_id_route(
         None => return Html("Job Run not found".to_string()).into_response(),
     };
 
-    let job = crud.select_job(conn, &SelectJobsData {
-        filter: SelectJobsDataFilter {
-            job_id: Some(job_run.job_id.clone()),
-            name_like: None,
-        },
-        sort: Some(SelectJobsDataSort::Alphabetical),
-        limit: None,
-        offset: None,
-    }).await.unwrap_or(None);
-
-    let tasks = crud.select_tasks(conn, &SelectTasksData {
-        filter: SelectTasksDataFilter {
-            task_id: None,
-            job_id: Some(job_run.job_id.clone()),
-        },
-        sort: Some(SelectTasksDataSort::TaskId),
-        limit: None,
-        offset: None,
-    }).await.unwrap_or_default();
-
     let mut task_runs = crud.select_task_runs(conn, &SelectTaskRunsData {
         filter: SelectTaskRunsDataFilter {
             id: None,
@@ -189,9 +167,7 @@ pub async fn job_run_id_route(
     let window_seconds = window_ms / 1000;
 
     let lanes = task_runs.into_iter().map(|task_run| {
-        let depends_on = tasks.iter()
-            .find(|task| task.task_id == task_run.task_id)
-            .map(|task| task.depends_on.0.join(", "))
+        let depends_on = Some(task_run.depends_on.0.join(", "))
             .filter(|depends_on| !depends_on.is_empty());
 
         build_lane(task_run, depends_on, window_start, window_end, window_ms)
@@ -210,6 +186,7 @@ pub async fn job_run_id_route(
             id: job_run.id,
             job_id: job_run.job_id,
             job_name: job_run.job_name,
+            job_description: job_run.job_description,
             status: job_run.status,
             status_word: format::job_run_word(job_run.status),
             created_at: format::timestamp(job_run.created_at),
@@ -217,7 +194,6 @@ pub async fn job_run_id_route(
             finished_at: job_run.finished_at.map(format::timestamp),
             duration,
         },
-        job,
         lanes,
         ticks: build_ticks(window_seconds),
         task_count: format!("{} task{}", lane_count, if lane_count == 1 { "" } else { "s" }),

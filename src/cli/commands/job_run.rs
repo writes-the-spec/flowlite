@@ -49,8 +49,6 @@ impl JobRunLogsCmd {
 
         let crud = CRUD::new(std::sync::Arc::new(toolkit));
 
-        crud.init(&mut conn).await?;
-
         let job_run = crud.select_job_run(&mut conn, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
                 id: Some(self.job_run_id),
@@ -98,8 +96,6 @@ impl JobRunRerunCmd {
         let mut conn = toolkit.get_conn().await?;
 
         let crud = CRUD::new(std::sync::Arc::new(toolkit));
-
-        crud.init(&mut conn).await?;
 
         let job_run_id = crud.rerun_job(&mut conn, self.job_run_id).await?;
 

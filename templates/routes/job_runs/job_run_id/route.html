@@ -21,8 +21,8 @@
         <div>
             <span class="eyebrow">run {{ job_run.id }}</span>
             <h1 class="view-title">{{ job_run.job_name }}</h1>
-            {% if let Some(definition) = job %}
-            <p class="view-sub">{{ definition.description }}</p>
+            {% if !job_run.job_description.is_empty() %}
+            <p class="view-sub">{{ job_run.job_description }}</p>
             {% endif %}
         </div>
 
