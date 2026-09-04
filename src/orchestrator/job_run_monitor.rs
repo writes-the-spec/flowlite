@@ -222,4 +222,30 @@ mod tests {
             Some(JobRunStatus::Skipped),
         );
     }
+
+    #[test]
+    fn a_timed_out_task_run_outranks_a_failed_one() {
+        let task_runs = vec![
+            task_run(TaskRunStatus::Failed),
+            task_run(TaskRunStatus::TimedOut),
+        ];
+
+        assert_eq!(
+            JobRunMonitor::derive_next_job_run_status(&task_runs),
+            Some(JobRunStatus::TimedOut),
+        );
+    }
+
+    #[test]
+    fn an_aborted_task_run_outranks_a_timed_out_one() {
+        let task_runs = vec![
+            task_run(TaskRunStatus::TimedOut),
+            task_run(TaskRunStatus::Aborted),
+        ];
+
+        assert_eq!(
+            JobRunMonitor::derive_next_job_run_status(&task_runs),
+            Some(JobRunStatus::Aborted),
+        );
+    }
 }
