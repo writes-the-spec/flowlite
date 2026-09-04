@@ -32,15 +32,15 @@ These are genuinely redundant (same source data, same list, written together) ra
 
 Four **independent** background services, mirroring the job side (see the [job skill](../job/SKILL.md)) and coordinating only through row status — a dispatcher and a monitor for each level of the `task_run` → `task_run_attempt` hierarchy:
 
-- **`TaskRunDispatcher`** ([src/orchestrator/task_run_dispatcher.rs](../../../src/orchestrator/task_run_dispatcher.rs)) — polls all `Pending` task runs and decides, in order:
+- **`TaskRunDispatcher`** ([src/orchestrator/task_run_dispatcher.rs](../../../src/orchestrator/task_run_dispatcher.rs)) — polls all `Pending` task runs, once a second or as soon as a wake-up arrives, and decides, in order:
   1. Job run stopped? → `Skipped`
   2. Any dependency task run finished but didn't succeed (`Failed`/`Skipped`/`Aborted`/`TimedOut`)? → `Skipped`
-  3. All dependency task runs `Succeeded`? → `Running` (`handle_start_task_run`), otherwise leave it `Pending` for the next tick
-- **`TaskRunMonitor`** ([src/orchestrator/task_run_monitor.rs](../../../src/orchestrator/task_run_monitor.rs)) — polls `Running` task runs and drives them through their attempts: it inserts the attempt rows, decides retries, and moves the task run to a finished status. It reads attempt rows and writes task run rows; it never touches a process.
+  3. All dependency task runs `Succeeded`? → `Running` (`handle_start_task_run`), otherwise leave it `Pending` for the next pass
+- **`TaskRunMonitor`** ([src/orchestrator/task_run_monitor.rs](../../../src/orchestrator/task_run_monitor.rs)) — polls `Running` task runs on the same schedule and drives them through their attempts: it inserts the attempt rows, decides retries, and moves the task run to a finished status. It reads attempt rows and writes task run rows; it never touches a process.
 - **`TaskRunAttemptDispatcher`** ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../src/orchestrator/task_run_attempt_dispatcher.rs)) — polls `Pending` attempt rows and either `Skipped`s them (the job run was stopped before the command started) or spawns their command and sets them `Running`. Two outcomes only: the dependencies were already settled one level up.
 - **`TaskRunAttemptMonitor`** ([src/orchestrator/task_run_attempt_monitor.rs](../../../src/orchestrator/task_run_attempt_monitor.rs)) — polls `Running` attempt rows, waits on the processes the dispatcher spawned and finishes them. It reads and writes attempt rows only; it knows nothing about task runs, retries or dependencies.
 
-All four live in [src/orchestrator/](../../../src/orchestrator/) and are spawned by `Orchestrator::start` ([src/orchestrator/orchestrator.rs](../../../src/orchestrator/orchestrator.rs)), which also creates the `TaskRunAttemptChildren` the two attempt services share.
+All four live in [src/orchestrator/](../../../src/orchestrator/), are each an `impl Service` ([src/poller.rs](../../../src/poller.rs)) driven by its own `Poller`, and are spawned by `Orchestrator::start` ([src/orchestrator/orchestrator.rs](../../../src/orchestrator/orchestrator.rs)), which also creates the `TaskRunAttemptChildren` the two attempt services share. A `Poller` wakes on a `Signals` ([src/signals.rs](../../../src/signals.rs)) wake-up or its one-second interval, whichever comes first — the interval alone is what keeps things moving when nothing publishes.
 
 The statuses themselves, and what each transition is allowed to write, are in the [orchestrator skill](../orchestrator/references/task_run.md).
 
@@ -50,12 +50,12 @@ The two attempt services share one `TaskRunAttemptChildren` ([src/orchestrator/t
 
 `TaskRunAttemptDispatcher` spawns the command when it starts a `Pending` attempt: it loads the attempt's `task_run` row by `task_run_id`, for the `command` and `timeout` the run was submitted with, spawns `sh -c <command>` with piped stdout/stderr, inserts the child, and only then writes `Running` and the attempt's `started_at` — in the other order the monitor could see a `Running` attempt whose child is not in the map yet.
 
-`TaskRunAttemptMonitor` then handles each `Running` attempt row per tick:
+`TaskRunAttemptMonitor` then handles each `Running` attempt row per pass:
 
 - **Not in the map** → attempt `Aborted`. The map only holds processes this program spawned, so the row is left over from an earlier run of it. This is the restart path.
 - **In the map** → drain its output, then check in order: job run stopped → kill it, attempt `Aborted`; past `task_run.timeout` (measured from the in-memory spawn time) → kill it, attempt `TimedOut`; process exited → attempt `Succeeded`/`Failed` from the exit status; still running → persist the output so far and put the child back.
 
-`TaskRunAttemptStatus` has the same seven variants as `TaskRunStatus`, since both levels have the same dispatcher/monitor shape. `Skipped` at this level means the job run was stopped in the tick between the row's insert and its dispatch, so there was never a process to kill.
+`TaskRunAttemptStatus` has the same seven variants as `TaskRunStatus`, since both levels have the same dispatcher/monitor shape. `Skipped` at this level means the job run was stopped in the pass between the row's insert and its dispatch, so there was never a process to kill.
 
 ## How the monitor retries a task run
 
@@ -69,4 +69,4 @@ The task run stays `Running` across the whole retry sequence — it does *not* g
 
 ## Stdout/stderr
 
-`read_output` (in `TaskRunAttemptMonitor`) drains both pipes with a 10ms timeout so a chatty process can't block the loop. The accumulated bytes are written to `task_run_attempt.stdout`/`stderr` on every tick that the process is still alive (so logs are visible while it runs) and once more when the attempt ends, including a final drain after exit so the last output isn't lost.
+`read_output` (in `TaskRunAttemptMonitor`) drains both pipes with a 10ms timeout so a chatty process can't block the loop. The accumulated bytes are written to `task_run_attempt.stdout`/`stderr` on every poll pass that the process is still alive (so logs are visible while it runs) and once more when the attempt ends, including a final drain after exit so the last output isn't lost. This write never publishes — see the [orchestrator skill](../orchestrator/SKILL.md) for why.

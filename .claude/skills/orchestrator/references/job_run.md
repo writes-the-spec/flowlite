@@ -16,7 +16,7 @@
 
 ## Dispatcher: Pending → Running / Skipped
 
-`JobRunDispatcher` ([src/orchestrator/job_run_dispatcher.rs](../../../../src/orchestrator/job_run_dispatcher.rs)) polls `Pending` job runs and, per row:
+`JobRunDispatcher` ([src/orchestrator/job_run_dispatcher.rs](../../../../src/orchestrator/job_run_dispatcher.rs)) polls `Pending` job runs — on a signal wake-up or its one-second interval, whichever comes first — and, per row:
 
 1. **Stopped?** (a `job_run_stop` row exists) → `handle_stopped_job_run`: the job run goes `Skipped`, and so do all of its task runs in one update. It never runs.
 2. **Otherwise** → `handle_start_job_run`: `status = Running`, `started_at = now`.
@@ -27,7 +27,7 @@ Starting is otherwise unconditional — no queue, no concurrency limit, no readi
 
 ## Monitor: Running → finished
 
-`JobRunMonitor` ([src/orchestrator/job_run_monitor.rs](../../../../src/orchestrator/job_run_monitor.rs)) polls `Running` job runs, loads all task runs of each, and hands them to the pure `derive_next_job_run_status(&[TaskRun]) -> Option<JobRunStatus>`, first match winning:
+`JobRunMonitor` ([src/orchestrator/job_run_monitor.rs](../../../../src/orchestrator/job_run_monitor.rs)) polls `Running` job runs on the same wake-up-or-interval schedule, loads all task runs of each, and hands them to the pure `derive_next_job_run_status(&[TaskRun]) -> Option<JobRunStatus>`, first match winning:
 
 0. Any task run `Pending` or `Running` → `None`, the job run stays `Running`
 1. Any `Aborted` → `Aborted`

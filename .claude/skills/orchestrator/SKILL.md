@@ -29,19 +29,23 @@ Together they give every row the same shape: `Pending → Running → <finished>
 
 ## How they coordinate
 
-All six services are independent: each spawns its own once-a-second `tokio` loop, polls its own table, and **never calls another service**. The only channel between them is the status column of the rows they read and write — a monitor sees the row a dispatcher started because its status is now `Running`, and nothing more.
+All six services are independent: none calls another. Each is a `Service` ([src/poller.rs](../../../src/poller.rs)) driven by its own `Poller`, which owns the loop — spawning it, restarting it after 5s on a select error, and running the per-row logic against whatever the service selects. A service holds nothing but its own logic: `name`, `row_context`, `select`, `handle`. The shape to copy for a new service is `impl Service for NewService { ... }` plus one `Poller::new(Arc::new(new_service), signals.register(), Duration::from_secs(1)).start()` line in `Orchestrator::start`.
 
-Two consequences:
+A `Poller` wakes on whichever comes first: its `Signals` ([src/signals.rs](../../../src/signals.rs)) wake-up, or its one-second interval. The interval is the safety net — it is what notices a `job_run` written by a different process (`flowlite job submit`, which can't publish) and it is what keeps everything moving if a wake-up is ever missed, since a `Signals` publish is advisory and carries no data. The only channel of actual information between services is still the status column of the rows they read and write — a monitor sees the row a dispatcher started because its status is now `Running`, and nothing more; a publish just says "look again," it doesn't say at what.
+
+Three consequences:
 
 - **No service filters on the status of the row above it.** `TaskRunDispatcher` polls every `Pending` task run whatever its job run's status, so a status can only gate the row it is written on. Anything that should stop a task run must be written onto the task run itself.
 - **New lifecycle stages belong in a new status-driven poller**, not in a call from an existing service into another.
-- **One row's error must not end the loop.** Every service handles its rows in a `for` loop that logs a failing row (with its id) and moves on; only a failure to *select* the rows propagates, restarting the loop after 5s. A row the service can never handle would otherwise be re-selected by the restarted loop every 5s, so nothing else would ever be handled. Keep new per-row work inside the `handle_*` function the loop calls, not in the loop body.
+- **One row's error must not end the loop.** This is `Poller::run`'s job, not any individual service's: it handles every selected row in a `for` loop that logs a failing row (with its id) and moves on; only a failure to *select* the rows propagates out of the loop, restarting it after 5s. A row the service can never handle would otherwise be re-selected by the restarted loop every 5s, so nothing else would ever be handled. New per-row work still belongs in `Service::handle`, never in the loop itself.
+
+**The publish rule:** a service calls `self.signals.publish()` after writing a status another service selects on, or after inserting a row another service selects on — never after a data-only write. `TaskRunAttemptMonitor::update_task_run_attempt_output`, which rewrites an attempt's accumulated stdout/stderr on every poll pass it is still running, is the example worth remembering: it deliberately does not publish, because publishing there would wake all six pollers at least once a second, per running attempt, and turn the wake-up bus back into the polling loop it replaced.
 
 The one shared piece of memory is `TaskRunAttemptChildren` ([src/orchestrator/task_run_attempt_children.rs](../../../src/orchestrator/task_run_attempt_children.rs)), which the two attempt services use to hand child processes over — see [task_run_attempt.md](references/task_run_attempt.md).
 
 ## Stopping a run
 
-A stop is an insert-only `job_run_stop` row, never a status update. `JobRunDispatcher`, `TaskRunDispatcher`, `TaskRunAttemptDispatcher` and `TaskRunAttemptMonitor` each check for it on every tick and finish only what they own: rows that never started go `Skipped`, an in-flight process is killed and its attempt goes `Aborted`. A stopped job run's status is therefore derived like any other — from its task runs, once they have all settled.
+A stop is an insert-only `job_run_stop` row, never a status update. `JobRunDispatcher`, `TaskRunDispatcher`, `TaskRunAttemptDispatcher` and `TaskRunAttemptMonitor` each check for it on every pass — a signal wake-up or the one-second interval, whichever came first — and finish only what they own: rows that never started go `Skipped`, an in-flight process is killed and its attempt goes `Aborted`. A stopped job run's status is therefore derived like any other — from its task runs, once they have all settled.
 
 ## The three levels
 

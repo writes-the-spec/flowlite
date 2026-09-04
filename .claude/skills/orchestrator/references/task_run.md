@@ -16,7 +16,7 @@
 
 ## Dispatcher: Pending → Running / Skipped
 
-`TaskRunDispatcher` ([src/orchestrator/task_run_dispatcher.rs](../../../../src/orchestrator/task_run_dispatcher.rs)) polls **all** `Pending` task runs, whatever their job run's status. `derive_next_task_run_status`, first match winning:
+`TaskRunDispatcher` ([src/orchestrator/task_run_dispatcher.rs](../../../../src/orchestrator/task_run_dispatcher.rs)) polls **all** `Pending` task runs, whatever their job run's status, on a signal wake-up or its one-second interval, whichever comes first. `derive_next_task_run_status`, first match winning:
 
 1. **Job run stopped?** → `Skipped`
 2. **Any dependency finished but didn't succeed** (`Failed`, `Skipped`, `Aborted`, `TimedOut`) → `Skipped`
@@ -27,11 +27,11 @@ Dependencies come from `task_run.depends_on` — the list copied off `task.depen
 
 This transition runs **at most once per task run**: a retry keeps the row `Running`, so the dependency check happens once and `started_at` means "when the task run started", covering every attempt.
 
-`JobRunDispatcher::handle_stopped_job_run` short-circuits step 1 for a job run stopped while still `Pending`, skipping all of its task runs in one update instead of one per tick.
+`JobRunDispatcher::handle_stopped_job_run` short-circuits step 1 for a job run stopped while still `Pending`, skipping all of its task runs in one update instead of one per pass.
 
 ## Monitor: Running → finished
 
-`TaskRunMonitor` ([src/orchestrator/task_run_monitor.rs](../../../../src/orchestrator/task_run_monitor.rs)) polls `Running` task runs and looks only at their `task_run_attempt` rows — it never touches a process. No attempt yet → insert attempt 1 (`Pending`). Otherwise the **last** attempt (highest id) picks the handler:
+`TaskRunMonitor` ([src/orchestrator/task_run_monitor.rs](../../../../src/orchestrator/task_run_monitor.rs)) polls `Running` task runs on the same wake-up-or-interval schedule and looks only at their `task_run_attempt` rows — it never touches a process. No attempt yet → insert attempt 1 (`Pending`). Otherwise the **last** attempt (highest id) picks the handler:
 
 | Last attempt | `handle_last_task_run_attempt_*` | Task run |
 |---|---|---|
@@ -45,7 +45,7 @@ This transition runs **at most once per task run**: a retry keeps the row `Runni
 
 `Failed` is the only retried status. A retry inserts attempt `last.attempt + 1` and leaves the task run `Running`. Attempts count from 1, so total executions are `1 + max_retries` and `max_retries: 0` means one attempt. Both the count and the delay are read off the `task_run` row, so a run retries on the policy it was submitted with rather than on whatever the YAML says now.
 
-Because the decision comes from the attempt rows alone, a stop landing *between* attempts isn't seen here: the monitor starts the next attempt, the attempt dispatcher skips or aborts it within a tick, and the task run finishes from that.
+Because the decision comes from the attempt rows alone, a stop landing *between* attempts isn't seen here: the monitor starts the next attempt (publishing a wake-up as it inserts the row), the attempt dispatcher skips or aborts it on the next pass, and the task run finishes from that.
 
 ## Invariants
 

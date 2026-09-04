@@ -16,7 +16,7 @@ Same seven variants as `TaskRunStatus`, because both levels have the same dispat
 
 ## Dispatcher: Pending → Running / Skipped
 
-`TaskRunAttemptDispatcher` ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../../src/orchestrator/task_run_attempt_dispatcher.rs)) polls **all** `Pending` attempts. `derive_next_task_run_attempt_status` has only two outcomes — the task run above it already resolved the dependencies:
+`TaskRunAttemptDispatcher` ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../../src/orchestrator/task_run_attempt_dispatcher.rs)) polls **all** `Pending` attempts, on a signal wake-up or its one-second interval, whichever comes first. `derive_next_task_run_attempt_status` has only two outcomes — the task run above it already resolved the dependencies:
 
 1. **Job run stopped?** → `Skipped`, `finished_at` set, `started_at` left NULL: the command never ran.
 2. **Otherwise** → load the attempt's `task_run` row by `task_run_id`, for the `command` and `timeout` the run was submitted with, spawn `sh -c <command>` with piped stdout/stderr, insert the child into `TaskRunAttemptChildren`, then write `Running` and `started_at = now`.
@@ -25,7 +25,7 @@ Same seven variants as `TaskRunStatus`, because both levels have the same dispat
 
 ## Monitor: Running → finished
 
-`TaskRunAttemptMonitor` ([src/orchestrator/task_run_attempt_monitor.rs](../../../../src/orchestrator/task_run_attempt_monitor.rs)) polls `Running` attempts and takes their child out of `TaskRunAttemptChildren`:
+`TaskRunAttemptMonitor` ([src/orchestrator/task_run_attempt_monitor.rs](../../../../src/orchestrator/task_run_attempt_monitor.rs)) polls `Running` attempts on the same wake-up-or-interval schedule and takes their child out of `TaskRunAttemptChildren`:
 
 - **No child** → `handle_missing_task_run_attempt_child`: `Aborted`, output left as last persisted. The map holds only processes *this* program spawned, so a `Running` row without one belongs to an earlier run of it. This is the restart path.
 - **Child present** → drain its output, then, in order:
@@ -42,7 +42,7 @@ It never reads or writes a task run row: retries and the task run status are `Ta
 
 ## Stdout/stderr
 
-`read_output` drains both pipes with a 10ms timeout so a chatty process can't block the loop. The accumulated bytes are written to `task_run_attempt.stdout`/`stderr` on every tick the process is still alive (so logs are visible while it runs) and once more when the attempt ends, after a final drain.
+`read_output` drains both pipes with a 10ms timeout so a chatty process can't block the loop. The accumulated bytes are written to `task_run_attempt.stdout`/`stderr` on every poll pass the process is still alive (so logs are visible while it runs) and once more when the attempt ends, after a final drain. This is a data-only write, so it deliberately never publishes — see the [orchestrator skill](../SKILL.md#how-they-coordinate).
 
 ## Invariants
 

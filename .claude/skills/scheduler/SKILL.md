@@ -7,7 +7,9 @@ description: The Scheduler service (src/scheduler/scheduler.rs) - how a schedule
 
 The **Scheduler** ([src/scheduler/scheduler.rs](../../../src/scheduler/scheduler.rs)) is the one service that creates job runs nobody asked for by hand. It polls the due schedules once a second and submits their jobs.
 
-It is **not part of the [orchestrator](../orchestrator/SKILL.md)**. `ServeCmd::run` ([src/cli/commands/serve.rs](../../../src/cli/commands/serve.rs)) starts the two side by side, and they share no state: the scheduler's entire output is a `CRUD::submit_job` call, and everything after that — dispatching, executing, retrying, finishing — is the orchestrator's business. Keep it that way: the scheduler must never read a job run's status or touch a task run.
+It is **not part of the [orchestrator](../orchestrator/SKILL.md)**, but it is driven by the same machinery: `Scheduler` is an `impl Service` ([src/poller.rs](../../../src/poller.rs)), started by a `Poller::new(...).start()` line in `ServeCmd::run` ([src/cli/commands/serve.rs](../../../src/cli/commands/serve.rs)) just like an orchestrator service. Its relationship to `Signals` ([src/signals.rs](../../../src/signals.rs)) is one-directional: it *publishes*, since submitting a job inserts a `job_run` row `JobRunDispatcher` selects on, but it does not *subscribe* — its `Poller` is given a standalone `Arc<Notify>` that nothing ever publishes to, rather than one registered on the shared bus, so it only ever wakes from its own one-second interval. That is deliberate, not an oversight: a schedule becomes due by the clock, never by a status write, so registering it on the bus would wake it on every unrelated status change in the system for nothing.
+
+`ServeCmd::run` starts the scheduler and the orchestrator side by side, and they share no state: the scheduler's entire output is a `CRUD::submit_job` call, and everything after that — dispatching, executing, retrying, finishing — is the orchestrator's business. Keep it that way: the scheduler must never read a job run's status or touch a task run.
 
 ## Definition (YAML → in-memory `mem.schedule` + `mem.schedule_job`)
 
@@ -29,15 +31,15 @@ jobs:
 
 ## The loop
 
-`Scheduler::run` selects, once a second, every schedule with `next_run < now` and `disabled = false`, ordered by `row_id`, and hands each to `handle_due_schedule`, which:
+`Scheduler::select` (called by its `Poller` once a second) fetches every schedule with `next_run < now` and `disabled = false`, ordered by `row_id`; `Scheduler::handle` hands each to `handle_due_schedule`, which:
 
 1. selects the schedule's `schedule_job` rows,
-2. calls `CRUD::submit_job` for each — one `job_run` and its `Pending` task runs, exactly as `job submit` does,
+2. calls `CRUD::submit_job` for each — one `job_run` and its `Pending` task runs, exactly as `job submit` does — and publishes, since that insert is what `JobRunDispatcher` is waiting to see,
 3. advances the schedule: `CronTrigger::from_schedule(schedule).get_next_run(schedule.next_run)`.
 
 Step 3 measures from the schedule's **own** `next_run`, not from now, so a tick that arrives late still advances by one cron step rather than skipping ahead.
 
-A schedule that fails to be handled is logged and left for the next tick; only a failure to select the schedules restarts the loop after 5s. Same rule as the orchestrator services — see [orchestrator](../orchestrator/SKILL.md).
+A schedule that fails to be handled is logged and left for the next tick; only a failure to select the schedules restarts the loop after 5s. Same rule as the orchestrator services, and for the same reason — it now lives in `Poller::run` ([src/poller.rs](../../../src/poller.rs)) rather than in `Scheduler` itself. See [orchestrator](../orchestrator/SKILL.md).
 
 ## `next_run` and the end date
 
