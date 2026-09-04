@@ -1,12 +1,14 @@
 use clap::Args;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use crate::router::app::app::create_router;
 use crate::router::app::app_state::AppState;
 use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
 use crate::orchestrator::Orchestrator;
+use crate::poller::Poller;
 use crate::scheduler::Scheduler;
 use crate::signals::Signals;
 
@@ -42,9 +44,16 @@ impl ServeCmd {
             toolkit.clone(),
             crud.clone(),
             conn_pool.clone(),
+            signals.clone(),
         );
 
-        scheduler.start();
+        // Nothing publishes to this wake-up: the scheduler's work is time-driven, and
+        // registering it would wake it on every unrelated status change for nothing.
+        Poller::new(
+            Arc::new(scheduler),
+            Arc::new(tokio::sync::Notify::new()),
+            Duration::from_secs(1),
+        ).start();
 
         let orchestrator = Orchestrator::new(
             crud.clone(),
