@@ -16,11 +16,11 @@ Everything flowlite knows before it runs comes from YAML files under the **confi
 
 ## Where they are read
 
-`CRUD::init` ([src/crud/crud.rs](../../../src/crud/crud.rs)) is the **only** caller, and it runs on every startup — from `serve` and from CLI commands alike. It walks each directory, parses each file into its model, and inserts the rows into the in-memory `mem` schema, all inside one transaction. Nothing reads a YAML file again afterwards: at runtime the config *is* the `mem` tables (see the [db-storage skill](../db-storage/SKILL.md)).
+`CRUD::init` ([src/crud/crud.rs](../../../src/crud/crud.rs)) is the **only** caller, and it runs at the start of every process that needs the config — `serve`, `job list` and `job submit`. Not every CLI command does: `job-run logs` and `job-run rerun` read run history from disk alone, so they skip it deliberately and keep working against a config dir that no longer parses. It walks each directory, parses each file into its model, and inserts the rows into the in-memory `mem` schema, all inside one transaction. Nothing reads a YAML file again afterwards: at runtime the config *is* the `mem` tables (see the [db-storage skill](../db-storage/SKILL.md)).
 
 Three discovery rules worth knowing:
 
-- **Only `.yml`.** `CRUD::init` filters on that exact extension, so a `.yaml` file is silently ignored.
+- **`.yml` or `.yaml`.** `CRUD::init` accepts either extension (`is_yaml_file`) and ignores every other file in the directory.
 - **A missing directory is not an error.** No `jobs/` dir simply means no jobs.
 - **File order is the display order.** `read_dir_sorted` sorts the paths, and `row_id` is handed out in that order, which is what `SelectTasksDataSort::RowId` and the UI sort by. Renaming a file reorders the list.
 

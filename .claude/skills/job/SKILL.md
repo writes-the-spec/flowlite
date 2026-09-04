@@ -24,7 +24,7 @@ On every startup, `CRUD::init` ([src/crud/crud.rs](../../../src/crud/crud.rs)) r
 
 ## Execution (`CRUD::submit_job` → `job_run` + `task_run`)
 
-Submitting a job (`CRUD::submit_job` in [src/crud/crud.rs](../../../src/crud/crud.rs)) does two things inside one call:
+Submitting a job (`CRUD::submit_job` in [src/crud/multistatements/misc.rs](../../../src/crud/multistatements/misc.rs)) does two things inside one call:
 
 1. Inserts a `job_run` row (disk-persisted, autoincrement `id`) with `status = Pending`.
 2. Inserts a `task_run` row (also disk-persisted, see [task skill](../task/SKILL.md)) with `status = Pending` for **every** task belonging to the job — not just the ones with no dependencies. Dependency ordering is enforced later, at task-run time, not at submission time.
