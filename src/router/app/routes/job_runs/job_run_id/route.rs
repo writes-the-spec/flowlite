@@ -226,7 +226,10 @@ pub async fn rerun_job_run_route(
     let result = crud.rerun_job(&mut conn, job_run_id).await;
 
     match result {
-        Ok(new_job_run_id) => Redirect::to(&format!("/job-runs/{}", new_job_run_id)).into_response(),
+        Ok(new_job_run_id) => {
+            state.signals.publish();
+            Redirect::to(&format!("/job-runs/{}", new_job_run_id)).into_response()
+        }
         Err(err) => {
             eprintln!("Error rerunning job run: {}", err);
             Html("Error rerunning job run").into_response()
@@ -246,7 +249,10 @@ pub async fn stop_job_run_route(
     }).await;
 
     match result {
-        Ok(_) => Redirect::to(&format!("/job-runs/{}", job_run_id)).into_response(),
+        Ok(_) => {
+            state.signals.publish();
+            Redirect::to(&format!("/job-runs/{}", job_run_id)).into_response()
+        }
         Err(err) => {
             eprintln!("Error stopping job run: {}", err);
             Html("Error stopping job run").into_response()

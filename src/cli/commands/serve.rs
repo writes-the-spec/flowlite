@@ -63,7 +63,12 @@ impl ServeCmd {
 
         orchestrator.start();
 
-        let app_state = AppState::new(toolkit.clone(), conn_pool.clone(), memory_conn.clone());
+        let app_state = AppState::new(
+            toolkit.clone(),
+            conn_pool.clone(),
+            memory_conn.clone(),
+            signals.clone(),
+        );
 
         let router = create_router(app_state);
 
