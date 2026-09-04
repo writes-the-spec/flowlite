@@ -96,9 +96,14 @@ impl Orchestrator {
             self.crud.clone(),
             self.conn_pool.clone(),
             task_run_attempt_children.clone(),
+            self.signals.clone(),
         );
 
-        task_run_attempt_dispatcher.start();
+        Poller::new(
+            Arc::new(task_run_attempt_dispatcher),
+            self.signals.register(),
+            Duration::from_secs(1),
+        ).start();
 
         let task_run_attempt_monitor = TaskRunAttemptMonitor::new(
             self.crud.clone(),
