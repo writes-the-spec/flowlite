@@ -93,6 +93,11 @@ pub struct TaskRun {
     pub job_run_id: i64,
     pub job_id: String,
     pub task_id: String,
+    pub command: String,
+    pub depends_on: sqlx::types::Json<Vec<String>>,
+    pub timeout: u32,
+    pub max_retries: u32,
+    pub retry_delay: u32,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
@@ -136,7 +141,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, job_run_id, job_id, task_id, created_at, started_at, finished_at, status FROM task_run WHERE 1=1"
+            "SELECT id, job_run_id, job_id, task_id, command, depends_on, timeout, max_retries, retry_delay, created_at, started_at, finished_at, status FROM task_run WHERE 1=1"
         );
 
         if let Some(id) = data.filter.id {

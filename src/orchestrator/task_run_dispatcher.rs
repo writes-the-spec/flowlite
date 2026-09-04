@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use crate::crud::CRUD;
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
-use crate::crud::task::{SelectTasksData, SelectTasksDataFilter};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRun, TaskRunStatus, UpdateTaskRunsData, UpdateTaskRunsDataFilter, UpdateTaskRunsDataInput};
 use chrono::Utc;
 use tokio::time::interval;
@@ -267,24 +266,9 @@ impl TaskRunDispatcher {
         task_run: &TaskRun,
     ) -> anyhow::Result<Vec<TaskRun>> {
 
-        let task = crud.select_task(
-            &*conn_pool,
-            &SelectTasksData {
-                filter: SelectTasksDataFilter {
-                    job_id: Some(task_run.job_id.clone()),
-                    task_id: Some(task_run.task_id.clone()),
-                },
-                sort: None,
-                limit: Some(1),
-                offset: None,
-            }
-        )
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Task not found: {}", task_run.task_id))?;
-
         let mut dependent_task_runs = Vec::new();
 
-        for dependent_task_id in task.depends_on.iter() {
+        for dependent_task_id in task_run.depends_on.0.iter() {
 
             let dependent_task_run = crud.select_task_run(
                 &*conn_pool,

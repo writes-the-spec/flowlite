@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use crate::crud::CRUD;
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
-use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, Task};
+use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRun};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus, UpdateTaskRunAttemptsData, UpdateTaskRunAttemptsDataFilter, UpdateTaskRunAttemptsDataInput};
 use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
 use chrono::{TimeDelta, Utc};
@@ -149,11 +149,11 @@ impl TaskRunAttemptDispatcher {
         task_run_attempt: &TaskRunAttempt,
     ) -> anyhow::Result<()> {
 
-        let task = Self::get_task(crud.clone(), conn_pool.clone(), task_run_attempt).await?;
+        let task_run = Self::get_task_run(crud.clone(), conn_pool.clone(), task_run_attempt).await?;
 
         let mut child = tokio::process::Command::new("sh")
             .arg("-c")
-            .arg(&task.command)
+            .arg(&task_run.command)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
@@ -164,7 +164,7 @@ impl TaskRunAttemptDispatcher {
             .ok_or_else(|| anyhow::anyhow!("Failed to get stderr of task: {}", task_run_attempt.task_id))?;
 
         let started_at = Utc::now();
-        let times_out_at = started_at + TimeDelta::seconds(task.timeout as i64);
+        let times_out_at = started_at + TimeDelta::seconds(task_run.timeout as i64);
 
         let running_task_run_attempt = TaskRunAttemptChild {
             child,
@@ -244,26 +244,30 @@ impl TaskRunAttemptDispatcher {
 
     }
 
-    async fn get_task(
+    /// Loads the task run the attempt belongs to, for the command and timeout it was
+    /// submitted with. The config is read off the run rather than out of mem.task, so an
+    /// attempt spawns what its run was submitted with however the YAML has moved since.
+    async fn get_task_run(
         crud: Arc<CRUD>,
         conn_pool: Arc<sqlx::SqlitePool>,
         task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<Task> {
+    ) -> anyhow::Result<TaskRun> {
 
-        crud.select_task(
+        crud.select_task_run(
             &*conn_pool,
-            &SelectTasksData {
-                filter: SelectTasksDataFilter {
-                    job_id: Some(task_run_attempt.job_id.clone()),
-                    task_id: Some(task_run_attempt.task_id.clone()),
+            &SelectTaskRunsData {
+                filter: SelectTaskRunsDataFilter {
+                    id: Some(task_run_attempt.task_run_id),
+                    job_run_id: None,
+                    job_id: None,
+                    task_id: None,
+                    status: None,
                 },
                 sort: None,
-                limit: Some(1),
-                offset: None,
             }
         )
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Task not found: {}", task_run_attempt.task_id))
+            .ok_or_else(|| anyhow::anyhow!("Task run not found: {}", task_run_attempt.task_run_id))
     }
 
     async fn is_job_run_stopped(

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 use crate::crud::CRUD;
-use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, Task};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRun, TaskRunStatus, UpdateTaskRunsData, UpdateTaskRunsDataFilter, UpdateTaskRunsDataInput};
 use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
 use chrono::{TimeDelta, Utc};
@@ -168,13 +167,11 @@ impl TaskRunMonitor {
         last_task_run_attempt: &TaskRunAttempt,
     ) -> anyhow::Result<()> {
 
-        let task = Self::get_task(crud.clone(), conn_pool.clone(), task_run).await?;
-
-        if last_task_run_attempt.attempt < task.max_retries + 1 {
+        if last_task_run_attempt.attempt < task_run.max_retries + 1 {
 
             // Nothing is written while the delay runs down: the task run stays Running
             // and the next tick asks the same question again, until the wait is over.
-            if Self::is_waiting_to_retry(&task, last_task_run_attempt) {
+            if Self::is_waiting_to_retry(task_run, last_task_run_attempt) {
                 return Ok(());
             }
 
@@ -194,16 +191,16 @@ impl TaskRunMonitor {
         ).await
     }
 
-    /// Whether the retry_delay of the task has yet to pass since its last attempt
-    /// finished. An attempt with no finish time is not made to wait, since there is no
-    /// moment to count the delay from.
-    fn is_waiting_to_retry(task: &Task, last_task_run_attempt: &TaskRunAttempt) -> bool {
+    /// Whether the retry_delay the run was submitted with has yet to pass since its last
+    /// attempt finished. An attempt with no finish time is not made to wait, since there
+    /// is no moment to count the delay from.
+    fn is_waiting_to_retry(task_run: &TaskRun, last_task_run_attempt: &TaskRunAttempt) -> bool {
 
         let Some(finished_at) = last_task_run_attempt.finished_at else {
             return false;
         };
 
-        Utc::now() < finished_at + TimeDelta::seconds(task.retry_delay as i64)
+        Utc::now() < finished_at + TimeDelta::seconds(task_run.retry_delay as i64)
     }
 
     async fn handle_last_task_run_attempt_skipped(
@@ -313,28 +310,6 @@ impl TaskRunMonitor {
             }
         ).await
 
-    }
-
-    async fn get_task(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<Task> {
-
-        crud.select_task(
-            &*conn_pool,
-            &SelectTasksData {
-                filter: SelectTasksDataFilter {
-                    job_id: Some(task_run.job_id.clone()),
-                    task_id: Some(task_run.task_id.clone()),
-                },
-                sort: None,
-                limit: Some(1),
-                offset: None,
-            }
-        )
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Task not found: {}", task_run.task_id))
     }
 
     async fn update_task_run_status(
