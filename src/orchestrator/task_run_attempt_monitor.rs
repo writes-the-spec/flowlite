@@ -5,9 +5,10 @@ use crate::crud::CRUD;
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus, UpdateTaskRunAttemptsData, UpdateTaskRunAttemptsDataFilter, UpdateTaskRunAttemptsDataInput};
 use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
+use crate::poller::Service;
+use crate::signals::Signals;
 use chrono::Utc;
 use tokio::io::AsyncReadExt;
-use tokio::time::interval;
 
 
 /// Waits on the child process TaskRunAttemptDispatcher spawned for every running task
@@ -22,6 +23,7 @@ pub struct TaskRunAttemptMonitor {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
     pub children: Arc<TaskRunAttemptChildren>,
+    pub signals: Arc<Signals>,
 }
 
 
@@ -31,157 +33,58 @@ impl TaskRunAttemptMonitor {
         crud: Arc<CRUD>,
         conn_pool: Arc<sqlx::SqlitePool>,
         children: Arc<TaskRunAttemptChildren>,
+        signals: Arc<Signals>,
     ) -> Self {
         Self {
             crud,
             conn_pool,
             children,
+            signals,
         }
-    }
-
-    /// Spawns the polling loop and returns immediately, restarting it on error.
-    pub fn start(self: &Self) {
-
-        let crud = self.crud.clone();
-        let conn_pool = self.conn_pool.clone();
-        let children = self.children.clone();
-
-        tokio::spawn(async move {
-            loop {
-                if let Err(e) = Self::run(crud.clone(), conn_pool.clone(), children.clone()).await {
-                    eprintln!("Task Run Attempt Monitor error, restarting in 5s: {e:?}");
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                }
-            }
-        });
-
-    }
-
-    /// Handles every running task run attempt, once per second, until selecting them fails.
-    async fn run(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        children: Arc<TaskRunAttemptChildren>,
-    ) -> anyhow::Result<()> {
-
-        let mut timer = interval(Duration::from_secs(1));
-
-        loop {
-
-            timer.tick().await;
-
-            let running_task_run_attempts = Self::get_task_run_attempts(
-                crud.clone(),
-                conn_pool.clone(),
-                TaskRunAttemptStatus::Running,
-            ).await?;
-
-            // A row the service can never handle is logged and left for the next tick:
-            // failing the whole loop over it would stop every other row from being
-            // handled, since the restarted loop would select the same row again.
-            for task_run_attempt in &running_task_run_attempts {
-                if let Err(e) = Self::handle_running_task_run_attempt(
-                    crud.clone(),
-                    conn_pool.clone(),
-                    children.clone(),
-                    task_run_attempt,
-                ).await {
-                    eprintln!(
-                        "Task Run Attempt Monitor error on task run attempt {} of task run {}: {e:?}",
-                        task_run_attempt.id,
-                        task_run_attempt.task_run_id,
-                    );
-                }
-            }
-
-        }
-
     }
 
     /// Aborts, times out or finishes the attempt, keeps its process otherwise, and
     /// aborts the attempt that has no process at all.
-    async fn handle_running_task_run_attempt(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        children: Arc<TaskRunAttemptChildren>,
-        task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<()> {
+    async fn handle_running_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
-        let task_run_attempt_child = children.remove(task_run_attempt.id).await;
+        let task_run_attempt_child = self.children.remove(task_run_attempt.id).await;
 
         let Some(mut task_run_attempt_child) = task_run_attempt_child else {
-            return Self::handle_missing_task_run_attempt_child(
-                crud.clone(),
-                conn_pool.clone(),
-                task_run_attempt,
-            ).await;
+            return self.handle_missing_task_run_attempt_child(task_run_attempt).await;
         };
 
-        let job_run_stopped = Self::is_job_run_stopped(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run_attempt,
-        ).await?;
+        let job_run_stopped = self.is_job_run_stopped(task_run_attempt).await?;
 
         if job_run_stopped {
-            return Self::handle_job_run_stopped(
-                crud.clone(),
-                conn_pool.clone(),
-                task_run_attempt,
-                task_run_attempt_child,
-            ).await;
+            return self.handle_job_run_stopped(task_run_attempt, task_run_attempt_child).await;
         }
 
         let task_run_attempt_timed_out = Self::is_task_run_attempt_timed_out(&task_run_attempt_child);
 
         if task_run_attempt_timed_out {
-            return Self::handle_timed_out_task_run_attempt(
-                crud.clone(),
-                conn_pool.clone(),
-                task_run_attempt,
-                task_run_attempt_child,
-            ).await;
+            return self.handle_timed_out_task_run_attempt(task_run_attempt, task_run_attempt_child).await;
         }
 
         if let Some(exit_status) = task_run_attempt_child.child.try_wait()? {
-            return Self::handle_exited_task_run_attempt(
-                crud.clone(),
-                conn_pool.clone(),
-                task_run_attempt,
-                task_run_attempt_child,
-                exit_status,
-            ).await;
+            return self.handle_exited_task_run_attempt(task_run_attempt, task_run_attempt_child, exit_status).await;
         }
 
-        Self::handle_unfinished_task_run_attempt(
-            crud.clone(),
-            conn_pool.clone(),
-            children.clone(),
-            task_run_attempt,
-            task_run_attempt_child,
-        ).await
+        self.handle_unfinished_task_run_attempt(task_run_attempt, task_run_attempt_child).await
     }
 
     /// Persists the output of an attempt whose process is still running and puts the
     /// process back for the next tick.
     async fn handle_unfinished_task_run_attempt(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        children: Arc<TaskRunAttemptChildren>,
+        &self,
         task_run_attempt: &TaskRunAttempt,
         mut task_run_attempt_child: TaskRunAttemptChild,
     ) -> anyhow::Result<()> {
 
         Self::read_output(&mut task_run_attempt_child).await;
 
-        Self::update_task_run_attempt_output(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run_attempt,
-            &task_run_attempt_child,
-        ).await?;
+        self.update_task_run_attempt_output(task_run_attempt, &task_run_attempt_child).await?;
 
-        children.insert(task_run_attempt.id, task_run_attempt_child).await;
+        self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
 
         Ok(())
     }
@@ -189,14 +92,10 @@ impl TaskRunAttemptMonitor {
     /// Aborts an attempt whose process is not in TaskRunAttemptChildren: it was spawned
     /// by an earlier run of this program, so there is nothing left to wait for and its
     /// output is whatever was persisted before.
-    async fn handle_missing_task_run_attempt_child(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<()> {
+    async fn handle_missing_task_run_attempt_child(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
-        crud.update_task_run_attempts(
-            &*conn_pool,
+        self.crud.update_task_run_attempts(
+            &*self.conn_pool,
             &UpdateTaskRunAttemptsData {
                 filter: UpdateTaskRunAttemptsDataFilter {
                     id: Some(task_run_attempt.id),
@@ -212,13 +111,14 @@ impl TaskRunAttemptMonitor {
             },
         ).await?;
 
+        self.signals.publish();
+
         Ok(())
     }
 
     /// Kills the process of a stopped job run and aborts the attempt.
     async fn handle_job_run_stopped(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
+        &self,
         task_run_attempt: &TaskRunAttempt,
         mut running_task_run_attempt: TaskRunAttemptChild,
     ) -> anyhow::Result<()> {
@@ -227,19 +127,12 @@ impl TaskRunAttemptMonitor {
 
         let _ = running_task_run_attempt.child.kill().await;
 
-        Self::finish_task_run_attempt(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run_attempt,
-            &running_task_run_attempt,
-            TaskRunAttemptStatus::Aborted,
-        ).await
+        self.finish_task_run_attempt(task_run_attempt, &running_task_run_attempt, TaskRunAttemptStatus::Aborted).await
     }
 
     /// Kills the process that ran past its timeout and times the attempt out.
     async fn handle_timed_out_task_run_attempt(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
+        &self,
         task_run_attempt: &TaskRunAttempt,
         mut running_task_run_attempt: TaskRunAttemptChild,
     ) -> anyhow::Result<()> {
@@ -248,19 +141,12 @@ impl TaskRunAttemptMonitor {
 
         let _ = running_task_run_attempt.child.kill().await;
 
-        Self::finish_task_run_attempt(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run_attempt,
-            &running_task_run_attempt,
-            TaskRunAttemptStatus::TimedOut,
-        ).await
+        self.finish_task_run_attempt(task_run_attempt, &running_task_run_attempt, TaskRunAttemptStatus::TimedOut).await
     }
 
     /// Finishes the attempt with the status its process exited with.
     async fn handle_exited_task_run_attempt(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
+        &self,
         task_run_attempt: &TaskRunAttempt,
         mut running_task_run_attempt: TaskRunAttemptChild,
         exit_status: ExitStatus,
@@ -273,13 +159,7 @@ impl TaskRunAttemptMonitor {
             false => TaskRunAttemptStatus::Failed,
         };
 
-        Self::finish_task_run_attempt(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run_attempt,
-            &running_task_run_attempt,
-            status,
-        ).await
+        self.finish_task_run_attempt(task_run_attempt, &running_task_run_attempt, status).await
     }
 
     fn is_task_run_attempt_timed_out(task_run_attempt_child: &TaskRunAttemptChild) -> bool {
@@ -309,14 +189,10 @@ impl TaskRunAttemptMonitor {
 
     }
 
-    async fn get_task_run_attempts(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        status: TaskRunAttemptStatus,
-    ) -> anyhow::Result<Vec<TaskRunAttempt>> {
+    async fn get_task_run_attempts(&self, status: TaskRunAttemptStatus) -> anyhow::Result<Vec<TaskRunAttempt>> {
 
-        crud.select_task_run_attempts(
-            &*conn_pool,
+        self.crud.select_task_run_attempts(
+            &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
                     task_run_id: None,
@@ -330,14 +206,10 @@ impl TaskRunAttemptMonitor {
 
     }
 
-    async fn is_job_run_stopped(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<bool> {
+    async fn is_job_run_stopped(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
 
-        let job_run_stop = crud.select_job_run_stop(
-            &*conn_pool,
+        let job_run_stop = self.crud.select_job_run_stop(
+            &*self.conn_pool,
             &SelectJobRunStopsData {
                 filter: SelectJobRunStopsDataFilter {
                     id: None,
@@ -354,15 +226,14 @@ impl TaskRunAttemptMonitor {
     }
 
     async fn finish_task_run_attempt(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
+        &self,
         task_run_attempt: &TaskRunAttempt,
         running_task_run_attempt: &TaskRunAttemptChild,
         status: TaskRunAttemptStatus,
     ) -> anyhow::Result<()> {
 
-        crud.update_task_run_attempts(
-            &*conn_pool,
+        self.crud.update_task_run_attempts(
+            &*self.conn_pool,
             &UpdateTaskRunAttemptsData {
                 filter: UpdateTaskRunAttemptsDataFilter {
                     id: Some(task_run_attempt.id),
@@ -378,18 +249,19 @@ impl TaskRunAttemptMonitor {
             },
         ).await?;
 
+        self.signals.publish();
+
         Ok(())
     }
 
     async fn update_task_run_attempt_output(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
+        &self,
         task_run_attempt: &TaskRunAttempt,
         running_task_run_attempt: &TaskRunAttemptChild,
     ) -> anyhow::Result<()> {
 
-        crud.update_task_run_attempts(
-            &*conn_pool,
+        self.crud.update_task_run_attempts(
+            &*self.conn_pool,
             &UpdateTaskRunAttemptsData {
                 filter: UpdateTaskRunAttemptsDataFilter {
                     id: Some(task_run_attempt.id),
@@ -408,4 +280,29 @@ impl TaskRunAttemptMonitor {
         Ok(())
     }
 
+}
+
+
+impl Service for TaskRunAttemptMonitor {
+    type Row = TaskRunAttempt;
+
+    fn name(&self) -> &'static str {
+        "Task Run Attempt Monitor"
+    }
+
+    fn row_context(&self, task_run_attempt: &TaskRunAttempt) -> String {
+        format!(
+            "task run attempt {} of task run {}",
+            task_run_attempt.id,
+            task_run_attempt.task_run_id,
+        )
+    }
+
+    async fn select(&self) -> anyhow::Result<Vec<TaskRunAttempt>> {
+        self.get_task_run_attempts(TaskRunAttemptStatus::Running).await
+    }
+
+    async fn handle(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
+        self.handle_running_task_run_attempt(task_run_attempt).await
+    }
 }
