@@ -4,7 +4,7 @@ use crate::crud::CRUD;
 use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, Task};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRun, TaskRunStatus, UpdateTaskRunsData, UpdateTaskRunsDataFilter, UpdateTaskRunsDataInput};
 use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
-use chrono::Utc;
+use chrono::{TimeDelta, Utc};
 use tokio::time::interval;
 
 
@@ -171,6 +171,13 @@ impl TaskRunMonitor {
         let task = Self::get_task(crud.clone(), conn_pool.clone(), task_run).await?;
 
         if last_task_run_attempt.attempt < task.max_retries + 1 {
+
+            // Nothing is written while the delay runs down: the task run stays Running
+            // and the next tick asks the same question again, until the wait is over.
+            if Self::is_waiting_to_retry(&task, last_task_run_attempt) {
+                return Ok(());
+            }
+
             return Self::handle_start_task_run_attempt(
                 crud.clone(),
                 conn_pool.clone(),
@@ -185,6 +192,18 @@ impl TaskRunMonitor {
             task_run,
             TaskRunStatus::Failed,
         ).await
+    }
+
+    /// Whether the retry_delay of the task has yet to pass since its last attempt
+    /// finished. An attempt with no finish time is not made to wait, since there is no
+    /// moment to count the delay from.
+    fn is_waiting_to_retry(task: &Task, last_task_run_attempt: &TaskRunAttempt) -> bool {
+
+        let Some(finished_at) = last_task_run_attempt.finished_at else {
+            return false;
+        };
+
+        Utc::now() < finished_at + TimeDelta::seconds(task.retry_delay as i64)
     }
 
     async fn handle_last_task_run_attempt_skipped(

@@ -82,6 +82,23 @@ dags:
   - id: hello-world
 ```
 
+## Retries
+
+A task that exits non-zero can be retried. `max_retries` is how many times it is tried
+*again*, so a task with `max_retries: 2` gets three attempts in all, and `retry_delay`
+is the number of seconds to wait after a failure before the next attempt starts:
+
+```yaml
+tasks:
+  - id: fetch
+    command: curl -fsS https://example.com/data.json -o data.json
+    max_retries: 2
+    retry_delay: 30
+```
+
+Both default to 0, so a task retries immediately, or not at all. Each attempt keeps its
+own output — see [Task output](#task-output).
+
 ## Overlapping runs
 
 A job runs one at a time by default. If a run is still going when the schedule fires

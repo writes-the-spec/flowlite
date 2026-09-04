@@ -10,6 +10,7 @@ pub struct InsertTaskDataInput {
     pub depends_on: Vec<String>,
     pub timeout: u32,
     pub max_retries: u32,
+    pub retry_delay: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -45,6 +46,7 @@ pub struct Task {
     pub depends_on: sqlx::types::Json<Vec<String>>,
     pub timeout: u32,
     pub max_retries: u32,
+    pub retry_delay: u32,
 }
 
 
@@ -54,7 +56,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         sqlx::query(
-            "INSERT INTO mem.task (row_id, task_id, job_id, command, depends_on, timeout, max_retries) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO mem.task (row_id, task_id, job_id, command, depends_on, timeout, max_retries, retry_delay) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(data.input.row_id as i64)
         .bind(&data.input.task_id)
@@ -63,6 +65,7 @@ impl CRUD {
         .bind(sqlx::types::Json(&data.input.depends_on))
         .bind(&data.input.timeout)
         .bind(&data.input.max_retries)
+        .bind(&data.input.retry_delay)
         .execute(executor)
         .await?;
 
@@ -73,7 +76,7 @@ impl CRUD {
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
-        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT task_id, job_id, command, depends_on, timeout, max_retries FROM mem.task WHERE 1=1");
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT task_id, job_id, command, depends_on, timeout, max_retries, retry_delay FROM mem.task WHERE 1=1");
 
         if let Some(task_id) = &data.filter.task_id {
             query_builder.push(" AND task_id = ");

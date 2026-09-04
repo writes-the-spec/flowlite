@@ -6,6 +6,7 @@ CREATE TABLE task (
     depends_on TEXT NOT NULL,
     timeout INTEGER NOT NULL,
     max_retries INTEGER NOT NULL,
+    retry_delay INTEGER NOT NULL,
     PRIMARY KEY (task_id, job_id),
     FOREIGN KEY (job_id) REFERENCES job (job_id),
     UNIQUE (row_id)

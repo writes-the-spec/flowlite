@@ -84,6 +84,7 @@ impl CRUD {
                                 depends_on: task_yaml.depends_on.clone(),
                                 timeout: task_yaml.timeout,
                                 max_retries: task_yaml.max_retries,
+                                retry_delay: task_yaml.retry_delay,
                             }
                         })
                             .await
