@@ -1,10 +1,10 @@
 use std::sync::Arc;
-use std::time::Duration;
 use crate::crud::CRUD;
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, UpdateJobRunsData, UpdateJobRunsDataFilter, UpdateJobRunsDataInput};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRun, TaskRunStatus};
+use crate::poller::Service;
+use crate::signals::Signals;
 use chrono::Utc;
-use tokio::time::interval;
 
 
 /// Watches running job runs and finishes them once all their task runs are done.
@@ -12,6 +12,7 @@ use tokio::time::interval;
 pub struct JobRunMonitor {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
+    pub signals: Arc<Signals>,
 }
 
 
@@ -20,70 +21,20 @@ impl JobRunMonitor {
     pub fn new(
         crud: Arc<CRUD>,
         conn_pool: Arc<sqlx::SqlitePool>,
+        signals: Arc<Signals>,
     ) -> Self {
         Self {
             crud,
             conn_pool,
+            signals,
         }
-    }
-
-    /// Spawns the polling loop and returns immediately, restarting it on error.
-    pub fn start(self: &Self) {
-
-        let crud = self.crud.clone();
-        let conn_pool = self.conn_pool.clone();
-
-        tokio::spawn(async move {
-            loop {
-                if let Err(e) = Self::run(crud.clone(), conn_pool.clone()).await {
-                    eprintln!("Job Run Monitor error, restarting in 5s: {e:?}");
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                }
-            }
-        });
-
-    }
-
-    /// Handles every running job run, once per second, until selecting them fails.
-    async fn run(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-    ) -> anyhow::Result<()> {
-
-        let mut timer = interval(Duration::from_secs(1));
-
-        loop {
-
-            timer.tick().await;
-
-            let job_runs = Self::get_running_job_runs(crud.clone(), conn_pool.clone()).await?;
-
-            // A row the service can never handle is logged and left for the next tick:
-            // failing the whole loop over it would stop every other row from being
-            // handled, since the restarted loop would select the same row again.
-            for job_run in &job_runs {
-                if let Err(e) = Self::handle_running_job_run(
-                    crud.clone(),
-                    conn_pool.clone(),
-                    job_run,
-                ).await {
-                    eprintln!("Job Run Monitor error on job run {}: {e:?}", job_run.id);
-                }
-            }
-
-        }
-
     }
 
     /// Finishes the job run once its task runs say it is done.
-    async fn handle_running_job_run(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        job_run: &JobRun,
-    ) -> anyhow::Result<()> {
+    async fn handle_running_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
-        let task_runs = crud.select_task_runs(
-            &*conn_pool,
+        let task_runs = self.crud.select_task_runs(
+            &*self.conn_pool,
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
                     id: None,
@@ -100,28 +51,13 @@ impl JobRunMonitor {
             return Ok(());
         };
 
-        Self::handle_job_run_finish(
-            job_run,
-            crud.clone(),
-            conn_pool.clone(),
-            status,
-        ).await
+        self.handle_job_run_finish(job_run, status).await
     }
 
     /// Writes the finished status of the job run.
-    async fn handle_job_run_finish(
-        job_run: &JobRun,
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        status: JobRunStatus,
-    ) -> anyhow::Result<()> {
+    async fn handle_job_run_finish(&self, job_run: &JobRun, status: JobRunStatus) -> anyhow::Result<()> {
 
-        Self::update_job_run_status(
-            job_run,
-            crud.clone(),
-            conn_pool.clone(),
-            status,
-        ).await
+        self.update_job_run_status(job_run, status).await
     }
 
     /// Derives the status a running job run moves to from its task runs, the first
@@ -156,13 +92,10 @@ impl JobRunMonitor {
         Some(JobRunStatus::Succeeded)
     }
 
-    async fn get_running_job_runs(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-    ) -> anyhow::Result<Vec<JobRun>> {
+    async fn get_running_job_runs(&self) -> anyhow::Result<Vec<JobRun>> {
 
-        crud.select_job_runs(
-            &*conn_pool,
+        self.crud.select_job_runs(
+            &*self.conn_pool,
             &SelectJobRunsData {
                 filter: SelectJobRunsDataFilter {
                     id: None,
@@ -177,15 +110,10 @@ impl JobRunMonitor {
 
     }
 
-    async fn update_job_run_status(
-        job_run: &JobRun,
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        status: JobRunStatus,
-    ) -> anyhow::Result<()> {
-        crud
+    async fn update_job_run_status(&self, job_run: &JobRun, status: JobRunStatus) -> anyhow::Result<()> {
+        self.crud
             .update_job_runs(
-                &*conn_pool,
+                &*self.conn_pool,
                 &UpdateJobRunsData {
                     filter: UpdateJobRunsDataFilter { id: Some(job_run.id) },
                     input: UpdateJobRunsDataInput {
@@ -197,7 +125,101 @@ impl JobRunMonitor {
             )
             .await?;
 
+        self.signals.publish();
+
         Ok(())
     }
 
+}
+
+
+impl Service for JobRunMonitor {
+    type Row = JobRun;
+
+    fn name(&self) -> &'static str {
+        "Job Run Monitor"
+    }
+
+    fn row_context(&self, job_run: &JobRun) -> String {
+        format!("job run {}", job_run.id)
+    }
+
+    async fn select(&self) -> anyhow::Result<Vec<JobRun>> {
+        self.get_running_job_runs().await
+    }
+
+    async fn handle(&self, job_run: &JobRun) -> anyhow::Result<()> {
+        self.handle_running_job_run(job_run).await
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crud::task_run::TaskRunStatus;
+
+    fn task_run(status: TaskRunStatus) -> TaskRun {
+        TaskRun {
+            id: 1,
+            job_run_id: 1,
+            job_id: "job".to_string(),
+            task_id: "task".to_string(),
+            command: "true".to_string(),
+            depends_on: sqlx::types::Json(Vec::new()),
+            timeout: 3600,
+            max_retries: 0,
+            retry_delay: 60,
+            created_at: Utc::now(),
+            started_at: None,
+            finished_at: None,
+            status,
+        }
+    }
+
+    #[test]
+    fn an_unfinished_task_run_keeps_the_job_run_running() {
+        let task_runs = vec![
+            task_run(TaskRunStatus::Succeeded),
+            task_run(TaskRunStatus::Running),
+        ];
+
+        assert_eq!(JobRunMonitor::derive_next_job_run_status(&task_runs), None);
+    }
+
+    #[test]
+    fn every_task_run_succeeding_succeeds_the_job_run() {
+        let task_runs = vec![task_run(TaskRunStatus::Succeeded)];
+
+        assert_eq!(
+            JobRunMonitor::derive_next_job_run_status(&task_runs),
+            Some(JobRunStatus::Succeeded),
+        );
+    }
+
+    #[test]
+    fn an_aborted_task_run_outranks_a_failed_one() {
+        let task_runs = vec![
+            task_run(TaskRunStatus::Failed),
+            task_run(TaskRunStatus::Aborted),
+        ];
+
+        assert_eq!(
+            JobRunMonitor::derive_next_job_run_status(&task_runs),
+            Some(JobRunStatus::Aborted),
+        );
+    }
+
+    #[test]
+    fn a_skipped_task_run_with_no_failure_skips_the_job_run() {
+        let task_runs = vec![
+            task_run(TaskRunStatus::Succeeded),
+            task_run(TaskRunStatus::Skipped),
+        ];
+
+        assert_eq!(
+            JobRunMonitor::derive_next_job_run_status(&task_runs),
+            Some(JobRunStatus::Skipped),
+        );
+    }
 }
