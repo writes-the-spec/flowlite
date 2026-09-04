@@ -8,6 +8,7 @@ pub struct InsertJobDataInput {
     pub job_id: String,
     pub name: String,
     pub description: String,
+    pub max_active_runs: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -40,6 +41,7 @@ pub struct Job {
     pub job_id: String,
     pub name: String,
     pub description: String,
+    pub max_active_runs: u32,
 }
 
 
@@ -49,12 +51,13 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         sqlx::query(
-            "INSERT INTO mem.job (row_id, job_id, name, description) VALUES (?, ?, ?, ?)"
+            "INSERT INTO mem.job (row_id, job_id, name, description, max_active_runs) VALUES (?, ?, ?, ?, ?)"
         )
         .bind(data.input.row_id as i64)
         .bind(&data.input.job_id)
         .bind(&data.input.name)
         .bind(&data.input.description)
+        .bind(data.input.max_active_runs)
         .execute(executor)
         .await?;
 
@@ -65,7 +68,7 @@ impl CRUD {
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
-        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT job_id, name, description FROM mem.job WHERE 1=1");
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT job_id, name, description, max_active_runs FROM mem.job WHERE 1=1");
 
         if let Some(job_id) = &data.filter.job_id {
             query_builder.push(" AND job_id = ");

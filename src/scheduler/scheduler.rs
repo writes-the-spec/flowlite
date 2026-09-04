@@ -114,11 +114,29 @@ impl Scheduler {
             }
         ).await?;
 
+        // A job still busy with an earlier run is passed over rather than queued: the
+        // next tick of the schedule is a better time to run it than right after itself.
         for schedule_job in schedule_jobs.iter() {
-            crud.submit_job(
-                &*conn_pool,
-                &schedule_job.job_id,
-            ).await?;
+
+            let at_max_active_runs = {
+                let mut conn = conn_pool.acquire().await?;
+
+                crud.is_job_at_max_active_runs(
+                    &mut conn,
+                    &schedule_job.job_id,
+                ).await?
+            };
+
+            if at_max_active_runs {
+                eprintln!(
+                    "Scheduler skipped job {} of schedule {}: it is already at its max_active_runs",
+                    schedule_job.job_id,
+                    schedule.schedule_id,
+                );
+                continue;
+            }
+
+            crud.submit_job(&*conn_pool, &schedule_job.job_id).await?;
         }
 
         let cron_trigger = CronTrigger::from_schedule(schedule);

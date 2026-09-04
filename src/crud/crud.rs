@@ -5,11 +5,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::fs;
 use crate::crud::job::{InsertJobData, InsertJobDataInput};
-use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRunStatus};
 use crate::crud::schedule::{InsertScheduleData, InsertScheduleDataInput};
 use crate::crud::schedule_job::{InsertScheduleJobData, InsertScheduleJobDataInput};
-use crate::crud::task::{InsertTaskData, InsertTaskDataInput, SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort};
-use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, TaskRunStatus};
+use crate::crud::task::{InsertTaskData, InsertTaskDataInput};
 use crate::crud::task_dependent::{InsertTaskDependentData, InsertTaskDependentDataInput};
 use crate::toolkit::Toolkit;
 use crate::yaml_models::job_yaml::JobYaml;
@@ -65,6 +63,7 @@ impl CRUD {
                             job_id: job_yaml.id.clone(),
                             name: job_yaml.name,
                             description: job_yaml.description,
+                            max_active_runs: job_yaml.max_active_runs,
                         }
                     })
                         .await
@@ -320,56 +319,6 @@ impl CRUD {
         paths.sort();
 
         Ok(paths)
-    }
-
-    pub async fn submit_job<'e, 'c, E>(
-        &self,
-        executor: E,
-        job_id: &str,
-    ) -> anyhow::Result<i64>
-    where
-        E: sqlx::Executor<'e, Database = sqlx::Sqlite> + sqlx::Acquire<'c, Database = sqlx::Sqlite>,
-    {
-        let mut conn = executor.acquire().await?;
-
-        let job_run_id = self.insert_job_run(
-            &mut *conn,
-            &InsertJobRunData {
-                input: InsertJobRunDataInput {
-                    job_id: job_id.to_string(),
-                    status: JobRunStatus::Pending,
-                }
-            }
-        ).await?;
-
-        let tasks = self.select_tasks(
-            &mut *conn,
-            &SelectTasksData {
-                filter: SelectTasksDataFilter {
-                    task_id: None,
-                    job_id: Some(job_id.to_string()),
-                },
-                sort: Some(SelectTasksDataSort::RowId),
-                limit: None,
-                offset: None,
-            }
-        ).await?;
-
-        for task in tasks {
-            self.insert_task_run(
-                &mut *conn,
-                &InsertTaskRunData {
-                    input: InsertTaskRunDataInput {
-                        job_run_id,
-                        job_id: task.job_id.clone(),
-                        task_id: task.task_id.clone(),
-                        status: TaskRunStatus::Pending,
-                    }
-                }
-            ).await?;
-        }
-
-        Ok(job_run_id)
     }
 
 }

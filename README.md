@@ -82,6 +82,29 @@ dags:
   - id: hello-world
 ```
 
+## Overlapping runs
+
+A job runs one at a time by default. If a run is still going when the schedule fires
+again, the new one is passed over rather than queued, and the scheduler says so on
+stderr — so a job that takes longer than its interval can't pile up on itself.
+
+Raise or lift the limit per job:
+
+```yaml
+id: nightly-sync
+name: Nightly Sync
+max_active_runs: 2   # 0 for no limit
+tasks:
+  - id: sync
+    command: ./sync.sh
+```
+
+Submitting by hand is held to the same limit, with a way past it:
+
+```bash
+flowlite job submit nightly-sync --force
+```
+
 ## Task output
 
 Every task's stdout and stderr are captured as it runs and kept per attempt, so a task

@@ -3,6 +3,7 @@ CREATE TABLE job (
     job_id TEXT NOT NULL,
     name TEXT NOT NULL,
     description TEXT NOT NULL,
+    max_active_runs INTEGER NOT NULL,
 
     PRIMARY KEY (job_id),
     UNIQUE (row_id)
