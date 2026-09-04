@@ -8,6 +8,7 @@ use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
 use crate::orchestrator::Orchestrator;
 use crate::scheduler::Scheduler;
+use crate::signals::Signals;
 
 #[derive(Args)]
 pub struct ServeCmd {
@@ -35,6 +36,8 @@ impl ServeCmd {
 
         crud.init(&*conn_pool).await?;
 
+        let signals = Arc::new(Signals::new());
+
         let scheduler = Scheduler::new(
             toolkit.clone(),
             crud.clone(),
@@ -46,6 +49,7 @@ impl ServeCmd {
         let orchestrator = Orchestrator::new(
             crud.clone(),
             conn_pool.clone(),
+            signals.clone(),
         );
 
         orchestrator.start();
