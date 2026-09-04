@@ -66,9 +66,14 @@ impl Orchestrator {
         let task_run_dispatcher = TaskRunDispatcher::new(
             self.crud.clone(),
             self.conn_pool.clone(),
+            self.signals.clone(),
         );
 
-        task_run_dispatcher.start();
+        Poller::new(
+            Arc::new(task_run_dispatcher),
+            self.signals.register(),
+            Duration::from_secs(1),
+        ).start();
 
         let task_run_monitor = TaskRunMonitor::new(
             self.crud.clone(),

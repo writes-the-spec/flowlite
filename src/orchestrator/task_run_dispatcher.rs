@@ -1,10 +1,10 @@
 use std::sync::Arc;
-use std::time::Duration;
 use crate::crud::CRUD;
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRun, TaskRunStatus, UpdateTaskRunsData, UpdateTaskRunsDataFilter, UpdateTaskRunsDataInput};
+use crate::poller::Service;
+use crate::signals::Signals;
 use chrono::Utc;
-use tokio::time::interval;
 
 
 /// Picks up pending task runs and either skips them or sets them to running.
@@ -12,6 +12,7 @@ use tokio::time::interval;
 pub struct TaskRunDispatcher {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
+    pub signals: Arc<Signals>,
 }
 
 
@@ -20,125 +21,50 @@ impl TaskRunDispatcher {
     pub fn new(
         crud: Arc<CRUD>,
         conn_pool: Arc<sqlx::SqlitePool>,
+        signals: Arc<Signals>,
     ) -> Self {
         Self {
             crud,
             conn_pool,
+            signals,
         }
-    }
-
-    /// Spawns the polling loop and returns immediately, restarting it on error.
-    pub fn start(self: &Self) {
-
-        let crud = self.crud.clone();
-        let conn_pool = self.conn_pool.clone();
-
-        tokio::spawn(async move {
-            loop {
-                if let Err(e) = Self::run(crud.clone(), conn_pool.clone()).await {
-                    eprintln!("Task Run Dispatcher error, restarting in 5s: {e:?}");
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                }
-            }
-        });
-
-    }
-
-    /// Handles every pending task run, once per second, until selecting them fails.
-    async fn run(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-    ) -> anyhow::Result<()> {
-
-        let mut timer = interval(Duration::from_secs(1));
-
-        loop {
-
-            timer.tick().await;
-
-            let task_runs = Self::get_pending_task_runs(crud.clone(), conn_pool.clone()).await?;
-
-            // A row the service can never handle is logged and left for the next tick:
-            // failing the whole loop over it would stop every other row from being
-            // handled, since the restarted loop would select the same row again.
-            for task_run in &task_runs {
-                if let Err(e) = Self::handle_pending_task_run(
-                    crud.clone(),
-                    conn_pool.clone(),
-                    task_run,
-                ).await {
-                    eprintln!("Task Run Dispatcher error on task run {}: {e:?}", task_run.id);
-                }
-            }
-
-        }
-
     }
 
     /// Skips the task run if its job run was stopped or if a task run it depends on
     /// did not succeed, and starts it once all of them have succeeded.
-    async fn handle_pending_task_run(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<()> {
+    async fn handle_pending_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
-        let status = Self::derive_next_task_run_status(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run,
-        ).await?;
+        let status = self.derive_next_task_run_status(task_run).await?;
 
         let Some(status) = status else {
             return Ok(());
         };
 
         if status == TaskRunStatus::Running {
-            return Self::handle_start_task_run(crud.clone(), conn_pool.clone(), task_run).await;
+            return self.handle_start_task_run(task_run).await;
         }
 
-        Self::update_task_run_status(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run,
-            status,
-        ).await
+        self.update_task_run_status(task_run, status).await
     }
 
     /// Derives the status a pending task run moves to: skipped if its job run was
     /// stopped or a task run it depends on did not succeed, running once all of them
     /// have succeeded, and none while any of them is still on its way there.
-    async fn derive_next_task_run_status(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<Option<TaskRunStatus>> {
+    async fn derive_next_task_run_status(&self, task_run: &TaskRun) -> anyhow::Result<Option<TaskRunStatus>> {
 
-        let job_run_stopped = Self::is_job_run_stopped(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run,
-        ).await?;
+        let job_run_stopped = self.is_job_run_stopped(task_run).await?;
 
         if job_run_stopped {
             return Ok(Some(TaskRunStatus::Skipped));
         }
 
-        let any_dependent_task_run_failed = Self::did_any_dependent_task_run_finish_but_not_succeed(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run,
-        ).await?;
+        let any_dependent_task_run_failed = self.did_any_dependent_task_run_finish_but_not_succeed(task_run).await?;
 
         if any_dependent_task_run_failed {
             return Ok(Some(TaskRunStatus::Skipped));
         }
 
-        let all_dependent_task_runs_succeeded = Self::have_all_dependent_task_runs_succeeded(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run,
-        ).await?;
+        let all_dependent_task_runs_succeeded = self.have_all_dependent_task_runs_succeeded(task_run).await?;
 
         if all_dependent_task_runs_succeeded {
             return Ok(Some(TaskRunStatus::Running));
@@ -148,14 +74,10 @@ impl TaskRunDispatcher {
     }
 
     /// Sets the task run to running, which is what makes TaskRunMonitor pick it up.
-    async fn handle_start_task_run(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<()> {
+    async fn handle_start_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
-        crud.update_task_runs(
-            &*conn_pool,
+        self.crud.update_task_runs(
+            &*self.conn_pool,
             &UpdateTaskRunsData {
                 filter: UpdateTaskRunsDataFilter {
                     id: Some(task_run.id),
@@ -170,16 +92,15 @@ impl TaskRunDispatcher {
             }
         ).await?;
 
+        self.signals.publish();
+
         Ok(())
     }
 
-    async fn get_pending_task_runs(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-    ) -> anyhow::Result<Vec<TaskRun>> {
+    async fn get_pending_task_runs(&self) -> anyhow::Result<Vec<TaskRun>> {
 
-        crud.select_task_runs(
-            &*conn_pool,
+        self.crud.select_task_runs(
+            &*self.conn_pool,
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
                     id: None,
@@ -194,14 +115,10 @@ impl TaskRunDispatcher {
 
     }
 
-    async fn is_job_run_stopped(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<bool> {
+    async fn is_job_run_stopped(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
-        let job_run_stop = crud.select_job_run_stop(
-            &*conn_pool,
+        let job_run_stop = self.crud.select_job_run_stop(
+            &*self.conn_pool,
             &SelectJobRunStopsData {
                 filter: SelectJobRunStopsDataFilter {
                     id: None,
@@ -217,17 +134,9 @@ impl TaskRunDispatcher {
 
     }
 
-    async fn did_any_dependent_task_run_finish_but_not_succeed(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<bool> {
+    async fn did_any_dependent_task_run_finish_but_not_succeed(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
-        let dependent_task_runs = Self::get_dependent_task_runs(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run,
-        ).await?;
+        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
 
         let any_failed = dependent_task_runs.iter().any(|tr| matches!(
             tr.status,
@@ -241,17 +150,9 @@ impl TaskRunDispatcher {
 
     }
 
-    async fn have_all_dependent_task_runs_succeeded(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<bool> {
+    async fn have_all_dependent_task_runs_succeeded(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
-        let dependent_task_runs = Self::get_dependent_task_runs(
-            crud.clone(),
-            conn_pool.clone(),
-            task_run,
-        ).await?;
+        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
 
         let all_succeeded = dependent_task_runs.iter().all(|tr| tr.status == TaskRunStatus::Succeeded);
 
@@ -260,18 +161,14 @@ impl TaskRunDispatcher {
     }
 
     /// Loads the task runs of the same job run that this task run depends on.
-    async fn get_dependent_task_runs(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-    ) -> anyhow::Result<Vec<TaskRun>> {
+    async fn get_dependent_task_runs(&self, task_run: &TaskRun) -> anyhow::Result<Vec<TaskRun>> {
 
         let mut dependent_task_runs = Vec::new();
 
         for dependent_task_id in task_run.depends_on.0.iter() {
 
-            let dependent_task_run = crud.select_task_run(
-                &*conn_pool,
+            let dependent_task_run = self.crud.select_task_run(
+                &*self.conn_pool,
                 &SelectTaskRunsData {
                     filter: SelectTaskRunsDataFilter {
                         id: None,
@@ -298,15 +195,10 @@ impl TaskRunDispatcher {
 
     }
 
-    async fn update_task_run_status(
-        crud: Arc<CRUD>,
-        conn_pool: Arc<sqlx::SqlitePool>,
-        task_run: &TaskRun,
-        status: TaskRunStatus,
-    ) -> anyhow::Result<()> {
+    async fn update_task_run_status(&self, task_run: &TaskRun, status: TaskRunStatus) -> anyhow::Result<()> {
 
-        crud.update_task_runs(
-            &*conn_pool,
+        self.crud.update_task_runs(
+            &*self.conn_pool,
             &UpdateTaskRunsData {
                 filter: UpdateTaskRunsDataFilter {
                     id: Some(task_run.id),
@@ -321,7 +213,30 @@ impl TaskRunDispatcher {
             }
         ).await?;
 
+        self.signals.publish();
+
         Ok(())
     }
 
+}
+
+
+impl Service for TaskRunDispatcher {
+    type Row = TaskRun;
+
+    fn name(&self) -> &'static str {
+        "Task Run Dispatcher"
+    }
+
+    fn row_context(&self, task_run: &TaskRun) -> String {
+        format!("task run {}", task_run.id)
+    }
+
+    async fn select(&self) -> anyhow::Result<Vec<TaskRun>> {
+        self.get_pending_task_runs().await
+    }
+
+    async fn handle(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+        self.handle_pending_task_run(task_run).await
+    }
 }
