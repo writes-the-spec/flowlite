@@ -9,7 +9,7 @@ use chrono::Utc;
 
 
 /// Picks up pending job runs, oldest first, and either skips them or sets them to
-/// running as their job's max_active_runs allows.
+/// running as their job's max_parallel_runs allows.
 /// Hands off to JobRunMonitor through the job run status only, never by calling it.
 pub struct JobRunDispatcher {
     pub crud: Arc<CRUD>,
@@ -33,7 +33,7 @@ impl JobRunDispatcher {
     }
 
     /// Moves a pending job run on: skipped if it was stopped before it could run,
-    /// running once its job is under its max_active_runs, and left pending until then.
+    /// running once its job is under its max_parallel_runs, and left pending until then.
     async fn handle_pending_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         if self.transition_to_skipped(job_run).await? {
@@ -89,7 +89,7 @@ impl JobRunDispatcher {
     }
 
     /// Sets the job run to running, which is what makes JobRunMonitor pick it up, unless
-    /// its job is already at its max_active_runs. Returns whether it transitioned; a job
+    /// its job is already at its max_parallel_runs. Returns whether it transitioned; a job
     /// run held back here stays pending and is reconsidered on every pass.
     ///
     /// This is the only place the limit is enforced. Submitting a job never rejects it,
@@ -97,9 +97,9 @@ impl JobRunDispatcher {
     /// behind the same gate without having to know about it.
     async fn transition_to_running(&self, job_run: &JobRun) -> anyhow::Result<bool> {
 
-        let at_max_active_runs = self.is_job_at_max_active_runs(job_run).await?;
+        let at_max_parallel_runs = self.is_job_at_max_parallel_runs(job_run).await?;
 
-        if at_max_active_runs {
+        if at_max_parallel_runs {
             return Ok(false);
         }
 
@@ -138,11 +138,11 @@ impl JobRunDispatcher {
 
     }
 
-    async fn is_job_at_max_active_runs(&self, job_run: &JobRun) -> anyhow::Result<bool> {
+    async fn is_job_at_max_parallel_runs(&self, job_run: &JobRun) -> anyhow::Result<bool> {
 
         let mut conn = self.conn_pool.acquire().await?;
 
-        self.crud.is_job_at_max_active_runs(&mut conn, &job_run.job_id).await
+        self.crud.is_job_at_max_parallel_runs(&mut conn, &job_run.job_id).await
 
     }
 

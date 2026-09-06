@@ -112,7 +112,7 @@ Raise or lift the limit per job:
 ```yaml
 id: nightly-sync
 name: Nightly Sync
-max_active_runs: 2   # 0 for no limit
+max_parallel_runs: 2   # 0 for no limit
 tasks:
   - id: sync
     command: ./sync.sh

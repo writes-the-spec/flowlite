@@ -210,8 +210,8 @@ impl CRUD {
 
     /// Whether the job already has as many runs in flight as it allows. Only a running
     /// job run holds a slot — a pending one is waiting for exactly this answer — and a
-    /// max_active_runs of 0 means the job has no limit at all.
-    pub async fn is_job_at_max_active_runs(
+    /// max_parallel_runs of 0 means the job has no limit at all.
+    pub async fn is_job_at_max_parallel_runs(
         &self,
         conn: &mut SqliteConnection,
         job_id: &str,
@@ -231,7 +231,7 @@ impl CRUD {
             return Ok(false);
         };
 
-        if job.max_active_runs == 0 {
+        if job.max_parallel_runs == 0 {
             return Ok(false);
         }
 
@@ -246,7 +246,7 @@ impl CRUD {
             offset: None,
         }).await?;
 
-        Ok(running_job_runs.len() >= job.max_active_runs as usize)
+        Ok(running_job_runs.len() >= job.max_parallel_runs as usize)
     }
 
 }

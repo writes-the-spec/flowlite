@@ -63,7 +63,7 @@ impl CRUD {
                             job_id: job_yaml.id.clone(),
                             name: job_yaml.name,
                             description: job_yaml.description,
-                            max_active_runs: job_yaml.max_active_runs,
+                            max_parallel_runs: job_yaml.max_parallel_runs,
                         }
                     })
                         .await

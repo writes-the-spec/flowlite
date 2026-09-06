@@ -25,9 +25,9 @@ pub struct JobYaml {
     pub name: String,
     #[serde(default)]
     pub description: String,
-    /// How many runs of this job may be active at once, 0 for no limit.
+    /// How many runs of this job may run in parallel, 0 for no limit.
     #[serde(default = "default_u32::<1>")]
-    pub max_active_runs: u32,
+    pub max_parallel_runs: u32,
     #[serde(default)]
     pub tasks: Vec<JobYamlTask>,
 }

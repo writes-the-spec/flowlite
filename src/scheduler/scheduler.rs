@@ -70,7 +70,7 @@ impl Scheduler {
         ).await?;
 
         // A job still busy with an earlier run is submitted anyway and queues as a pending
-        // job run: JobRunDispatcher is the one place max_active_runs is enforced.
+        // job run: JobRunDispatcher is the one place max_parallel_runs is enforced.
         for schedule_job in schedule_jobs.iter() {
 
             let mut conn = self.conn_pool.acquire().await?;
