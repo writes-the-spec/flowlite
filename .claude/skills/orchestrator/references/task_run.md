@@ -19,7 +19,7 @@
 `TaskRunDispatcher` ([src/orchestrator/task_run_dispatcher.rs](../../../../src/orchestrator/task_run_dispatcher.rs)) polls **all** `Pending` task runs, whatever their job run's status, on a signal wake-up or its one-second interval, whichever comes first. It settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened:
 
 1. `settle_as_skipped` → `Skipped` if the **job run was stopped**, or if **any dependency finished but didn't succeed** (`Failed`, `Skipped`, `Aborted`, `TimedOut`). Either way the task run can never run.
-2. `settle_as_running` → `Running` with `started_at = now`, once **all dependencies have `Succeeded`**.
+2. `settle_as_running` → `Running` with `started_at = now`, once **all dependencies have `Succeeded`**. It also inserts **attempt 1** (`Pending`), *before* the status write — `TaskRunMonitor` decides from the last attempt, so a `Running` task run without one is a state it cannot act on. Same ordering rule as the child-before-status hand-off one level down.
 3. `settle_as_pending` → **any dependency still `Pending` or `Running`** → the row stays `Pending` for the next tick. **It writes nothing, and exists to say so.**
 4. Past all three → `anyhow::bail!`.
 
@@ -37,12 +37,12 @@ This transition runs **at most once per task run**: a retry keeps the row `Runni
 
 ## Monitor: Running → finished
 
-`TaskRunMonitor` ([src/orchestrator/task_run_monitor.rs](../../../../src/orchestrator/task_run_monitor.rs)) polls `Running` task runs on the same wake-up-or-interval schedule and looks only at their `task_run_attempt` rows — it never touches a process. No attempt yet → insert attempt 1 (`Pending`). Otherwise the **last** attempt (highest id) picks the handler:
+`TaskRunMonitor` ([src/orchestrator/task_run_monitor.rs](../../../../src/orchestrator/task_run_monitor.rs)) polls `Running` task runs on the same wake-up-or-interval schedule and looks only at their `task_run_attempt` rows — it never touches a process. The **last** attempt (highest id) picks the outcome; `get_last_task_run_attempt` returns it or raises, since a `Running` task run always has one:
 
 | Last attempt | Outcome | Task run |
 |---|---|---|
 | `Succeeded` | `settle_for_succeeded` | `Succeeded` |
-| none yet, `Pending`, `Running`, or `Failed` with a retry left | `settle_for_running` | left `Running`; starts the first attempt or the retry, once `task_run.retry_delay` has elapsed |
+| `Pending`, `Running`, or `Failed` with a retry left | `settle_for_running` | left `Running`; inserts the retry once `task_run.retry_delay` has elapsed |
 | `Failed`, no retry left | `settle_for_failed` | `Failed` |
 | `TimedOut` | `settle_for_timed_out` | `TimedOut` |
 | `is_stopped` — `Aborted` or `Skipped` | `settle_for_aborted` | `Aborted` — the task run had started, so a stop aborts it |

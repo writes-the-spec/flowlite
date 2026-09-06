@@ -43,27 +43,25 @@ impl TaskRunMonitor {
     /// `Poller::run` logs it with the row id.
     async fn handle_running_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
-        let task_run_attempts = self.get_task_run_attempts(task_run).await?;
+        let last_task_run_attempt = self.get_last_task_run_attempt(task_run).await?;
 
-        let last_task_run_attempt = task_run_attempts.last();
-
-        if self.settle_for_succeeded(task_run, last_task_run_attempt).await? {
+        if self.settle_for_succeeded(task_run, &last_task_run_attempt).await? {
             return Ok(());
         }
 
-        if self.settle_for_running(task_run, last_task_run_attempt).await? {
+        if self.settle_for_running(task_run, &last_task_run_attempt).await? {
             return Ok(());
         }
 
-        if self.settle_for_failed(task_run, last_task_run_attempt).await? {
+        if self.settle_for_failed(task_run, &last_task_run_attempt).await? {
             return Ok(());
         }
 
-        if self.settle_for_timed_out(task_run, last_task_run_attempt).await? {
+        if self.settle_for_timed_out(task_run, &last_task_run_attempt).await? {
             return Ok(());
         }
 
-        if self.settle_for_aborted(task_run, last_task_run_attempt).await? {
+        if self.settle_for_aborted(task_run, &last_task_run_attempt).await? {
             return Ok(());
         }
 
@@ -77,10 +75,10 @@ impl TaskRunMonitor {
     async fn settle_for_succeeded(
         &self,
         task_run: &TaskRun,
-        last_task_run_attempt: Option<&TaskRunAttempt>,
+        last_task_run_attempt: &TaskRunAttempt,
     ) -> anyhow::Result<bool> {
 
-        if !Self::last_attempt_has_status(last_task_run_attempt, TaskRunAttemptStatus::Succeeded) {
+        if last_task_run_attempt.status != TaskRunAttemptStatus::Succeeded {
             return Ok(false);
         }
 
@@ -89,19 +87,14 @@ impl TaskRunMonitor {
         Ok(true)
     }
 
-    /// Keeps the task run running and makes sure an attempt is in flight: starts the first
-    /// one, waits out a retry delay, or starts the retry. Writes no task run status — the
-    /// task run stays Running for the whole retry loop.
+    /// Keeps the task run running: waits while an attempt is in flight, waits out a retry
+    /// delay, or starts the retry. Writes no task run status — the task run stays Running
+    /// for the whole retry loop.
     async fn settle_for_running(
         &self,
         task_run: &TaskRun,
-        last_task_run_attempt: Option<&TaskRunAttempt>,
+        last_task_run_attempt: &TaskRunAttempt,
     ) -> anyhow::Result<bool> {
-
-        let Some(last_task_run_attempt) = last_task_run_attempt else {
-            self.start_task_run_attempt(task_run, 1).await?;
-            return Ok(true);
-        };
 
         match last_task_run_attempt.status {
 
@@ -132,16 +125,12 @@ impl TaskRunMonitor {
     async fn settle_for_failed(
         &self,
         task_run: &TaskRun,
-        last_task_run_attempt: Option<&TaskRunAttempt>,
+        last_task_run_attempt: &TaskRunAttempt,
     ) -> anyhow::Result<bool> {
 
-        if !Self::last_attempt_has_status(last_task_run_attempt, TaskRunAttemptStatus::Failed) {
+        if last_task_run_attempt.status != TaskRunAttemptStatus::Failed {
             return Ok(false);
         }
-
-        let Some(last_task_run_attempt) = last_task_run_attempt else {
-            return Ok(false);
-        };
 
         if Self::has_retry_left(task_run, last_task_run_attempt) {
             return Ok(false);
@@ -155,10 +144,10 @@ impl TaskRunMonitor {
     async fn settle_for_timed_out(
         &self,
         task_run: &TaskRun,
-        last_task_run_attempt: Option<&TaskRunAttempt>,
+        last_task_run_attempt: &TaskRunAttempt,
     ) -> anyhow::Result<bool> {
 
-        if !Self::last_attempt_has_status(last_task_run_attempt, TaskRunAttemptStatus::TimedOut) {
+        if last_task_run_attempt.status != TaskRunAttemptStatus::TimedOut {
             return Ok(false);
         }
 
@@ -176,25 +165,16 @@ impl TaskRunMonitor {
     async fn settle_for_aborted(
         &self,
         task_run: &TaskRun,
-        last_task_run_attempt: Option<&TaskRunAttempt>,
+        last_task_run_attempt: &TaskRunAttempt,
     ) -> anyhow::Result<bool> {
 
-        let stopped = matches!(last_task_run_attempt, Some(attempt) if attempt.status.is_stopped());
-
-        if !stopped {
+        if !last_task_run_attempt.status.is_stopped() {
             return Ok(false);
         }
 
         self.update_task_run_status(task_run, TaskRunStatus::Aborted).await?;
 
         Ok(true)
-    }
-
-    fn last_attempt_has_status(
-        last_task_run_attempt: Option<&TaskRunAttempt>,
-        status: TaskRunAttemptStatus,
-    ) -> bool {
-        matches!(last_task_run_attempt, Some(attempt) if attempt.status == status)
     }
 
     /// Attempts count from 1, so the task run gets `max_retries + 1` of them.
@@ -220,8 +200,9 @@ impl TaskRunMonitor {
     /// A skipped attempt does **not** make the task run Skipped. It only ever sees Running
     /// task runs, which had started and may already have left output, so Skipped would
     /// claim nothing ran.
-    /// Inserts the pending attempt TaskRunAttemptDispatcher clears to run. Writes no task
-    /// run status: the task run stays Running for the whole retry loop.
+    /// Inserts the retry TaskRunAttemptDispatcher clears to run. Writes no task run status:
+    /// the task run stays Running for the whole retry loop. Attempt 1 is not inserted here
+    /// — TaskRunDispatcher creates it as it starts the task run.
     async fn start_task_run_attempt(&self, task_run: &TaskRun, attempt: u32) -> anyhow::Result<()> {
 
         self.crud.insert_task_run_attempt(
@@ -261,9 +242,15 @@ impl TaskRunMonitor {
 
     }
 
-    async fn get_task_run_attempts(&self, task_run: &TaskRun) -> anyhow::Result<Vec<TaskRunAttempt>> {
+    /// The attempt that decides what the task run does next, which is the highest id: the
+    /// earlier ones are the retries already accounted for.
+    ///
+    /// A Running task run always has one — TaskRunDispatcher inserts attempt 1 before it
+    /// writes Running — so none at all is a broken invariant rather than a state to handle,
+    /// and this says so instead of leaving the caller an Option to interpret.
+    async fn get_last_task_run_attempt(&self, task_run: &TaskRun) -> anyhow::Result<TaskRunAttempt> {
 
-        self.crud.select_task_run_attempts(
+        let task_run_attempts = self.crud.select_task_run_attempts(
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
@@ -274,7 +261,15 @@ impl TaskRunMonitor {
                 },
                 sort: Some(SelectTaskRunAttemptsDataSort::Id),
             }
-        ).await
+        ).await?;
+
+        task_run_attempts
+            .into_iter()
+            .last()
+            .ok_or_else(|| anyhow::anyhow!(
+                "Task run {} is running with no attempt to decide from",
+                task_run.id,
+            ))
 
     }
 

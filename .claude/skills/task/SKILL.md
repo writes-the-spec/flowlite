@@ -34,10 +34,10 @@ Four **independent** background services, mirroring the job side (see the [job s
 
 - **`TaskRunDispatcher`** ([src/orchestrator/task_run_dispatcher.rs](../../../src/orchestrator/task_run_dispatcher.rs)) — polls all `Pending` task runs, once a second or as soon as a wake-up arrives, and settles each row as exactly one outcome, each returning whether it is what happened:
   1. `settle_as_skipped` → `Skipped`, if the job run was stopped or any dependency task run finished but didn't succeed (`Failed`/`Skipped`/`Aborted`/`TimedOut`)
-  2. `settle_as_running` → `Running`, once all dependency task runs have `Succeeded`
+  2. `settle_as_running` → `Running`, once all dependency task runs have `Succeeded`; also inserts attempt 1, before the status write
   3. `settle_as_pending` → nothing written, the row waits, because a dependency is still `Pending` or `Running`
   4. past all three → an error, rather than a row left sitting with nobody accountable for it
-- **`TaskRunMonitor`** ([src/orchestrator/task_run_monitor.rs](../../../src/orchestrator/task_run_monitor.rs)) — polls `Running` task runs on the same schedule and drives them through their attempts: it inserts the attempt rows, decides retries, and moves the task run to a finished status. It reads attempt rows and writes task run rows; it never touches a process.
+- **`TaskRunMonitor`** ([src/orchestrator/task_run_monitor.rs](../../../src/orchestrator/task_run_monitor.rs)) — polls `Running` task runs on the same schedule and drives them through their attempts: it inserts the retry rows, decides retries, and moves the task run to a finished status. Attempt 1 comes from `TaskRunDispatcher`, which inserts it before writing the task run `Running`. It reads attempt rows and writes task run rows; it never touches a process.
 - **`TaskRunAttemptDispatcher`** ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../src/orchestrator/task_run_attempt_dispatcher.rs)) — polls `Pending` attempt rows and settles each as `Skipped` (the job run was stopped before the command started) or `Running` (spawns its command). Two outcomes only, with no waiting case: the dependencies were already settled one level up.
 - **`TaskRunAttemptMonitor`** ([src/orchestrator/task_run_attempt_monitor.rs](../../../src/orchestrator/task_run_attempt_monitor.rs)) — polls `Running` attempt rows, waits on the processes the dispatcher spawned and finishes them. It reads and writes attempt rows only; it knows nothing about task runs, retries or dependencies.
 
@@ -60,7 +60,7 @@ The two attempt services share one `TaskRunAttemptChildren` ([src/orchestrator/t
 
 ## How the monitor retries a task run
 
-`TaskRunMonitor` looks at the **last** attempt row of each `Running` task run: none yet → insert a `Pending` attempt; otherwise the attempt's status picks one `settle_for_*` outcome. `Pending` and `Running` wait, a `Failed` attempt is retried while `attempt < task_run.max_retries + 1` — once `task_run.retry_delay` seconds have passed since it finished — by inserting the next attempt row, and every other status finishes it without a retry (a stop is never undone by a retry) — `Succeeded` succeeds it, `TimedOut` times it out, and both `Aborted` and `Skipped` **abort** it, since a task run that reached `Running` had started and a stop can only interrupt it. Attempts count from 1, so total executions are `1 + max_retries`.
+`TaskRunMonitor` looks at the **last** attempt row of each `Running` task run — always present, since `TaskRunDispatcher` inserts attempt 1 before writing `Running`, and the monitor raises if it is not — and that attempt's status picks one `settle_for_*` outcome. `Pending` and `Running` wait, a `Failed` attempt is retried while `attempt < task_run.max_retries + 1` — once `task_run.retry_delay` seconds have passed since it finished — by inserting the next attempt row, and every other status finishes it without a retry (a stop is never undone by a retry) — `Succeeded` succeeds it, `TimedOut` times it out, and both `Aborted` and `Skipped` **abort** it, since a task run that reached `Running` had started and a stop can only interrupt it. Attempts count from 1, so total executions are `1 + max_retries`.
 
 Both numbers come off the `task_run` row, not `mem.task`: a run retries on the policy it was submitted with, however the YAML has moved since.
 

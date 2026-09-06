@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use crate::crud::CRUD;
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
+use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, TaskRunAttemptStatus};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRun, TaskRunStatus, UpdateTaskRunsData, UpdateTaskRunsDataFilter, UpdateTaskRunsDataInput};
 use crate::poller::Service;
 use crate::signals::Signals;
@@ -92,7 +93,12 @@ impl TaskRunDispatcher {
     }
 
     /// Sets the task run to running, which is what makes TaskRunMonitor pick it up, once
-    /// every task run it depends on has succeeded.
+    /// every task run it depends on has succeeded, and gives it the first attempt to run.
+    ///
+    /// The attempt row is inserted **before** the status, for the same reason the attempt
+    /// dispatcher hands its child over before writing Running: TaskRunMonitor decides from
+    /// the last attempt, so a Running task run without one is a state it cannot act on.
+    /// Every later attempt is a retry, and those are TaskRunMonitor's.
     async fn settle_as_running(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
         let all_dependent_task_runs_succeeded = self.have_all_dependent_task_runs_succeeded(task_run).await?;
@@ -100,6 +106,20 @@ impl TaskRunDispatcher {
         if !all_dependent_task_runs_succeeded {
             return Ok(false);
         }
+
+        self.crud.insert_task_run_attempt(
+            &*self.conn_pool,
+            &InsertTaskRunAttemptData {
+                input: InsertTaskRunAttemptDataInput {
+                    task_run_id: task_run.id,
+                    job_run_id: task_run.job_run_id,
+                    job_id: task_run.job_id.clone(),
+                    task_id: task_run.task_id.clone(),
+                    attempt: 1,
+                    status: TaskRunAttemptStatus::Pending,
+                },
+            },
+        ).await?;
 
         self.crud.update_task_runs(
             &*self.conn_pool,
