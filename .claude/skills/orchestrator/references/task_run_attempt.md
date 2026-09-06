@@ -16,10 +16,10 @@ Same seven variants as `TaskRunStatus`, because both levels have the same dispat
 
 ## Dispatcher: Pending → Running / Skipped
 
-`TaskRunAttemptDispatcher` ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../../src/orchestrator/task_run_attempt_dispatcher.rs)) polls **all** `Pending` attempts, on a signal wake-up or its one-second interval, whichever comes first. `derive_next_task_run_attempt_status` has only two outcomes — the task run above it already resolved the dependencies:
+`TaskRunAttemptDispatcher` ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../../src/orchestrator/task_run_attempt_dispatcher.rs)) polls **all** `Pending` attempts, on a signal wake-up or its one-second interval, whichever comes first. It asks two questions per row, each of which owns its own guard and returns whether it transitioned — and only the first has one, since the task run above it already resolved the dependencies:
 
-1. **Job run stopped?** → `Skipped`, `finished_at` set, `started_at` left NULL: the command never ran.
-2. **Otherwise** → load the attempt's `task_run` row by `task_run_id`, for the `command` and `timeout` the run was submitted with, spawn `sh -c <command>` with piped stdout/stderr, insert the child into `TaskRunAttemptChildren`, then write `Running` and `started_at = now`.
+1. `transition_to_skipped` — **job run stopped?** → `Skipped`, `finished_at` set, `started_at` left NULL: the command never ran.
+2. `transition_to_running` — otherwise, unconditionally: load the attempt's `task_run` row by `task_run_id`, for the `command` and `timeout` the run was submitted with, spawn `sh -c <command>` with piped stdout/stderr, insert the child into `TaskRunAttemptChildren`, then write `Running` and `started_at = now`. This is the one transition that does work outside the database, so a spawn failure propagates as the row's error and `Poller::run` logs it and moves to the next attempt.
 
 **The child goes into the map before the status is written.** In the other order the monitor can see a `Running` attempt whose process isn't in the map yet and abort it.
 

@@ -16,12 +16,10 @@
 
 ## Dispatcher: Pending → Running / Skipped
 
-`JobRunDispatcher` ([src/orchestrator/job_run_dispatcher.rs](../../../../src/orchestrator/job_run_dispatcher.rs)) polls `Pending` job runs — on a signal wake-up or its one-second interval, whichever comes first — and, per row:
+`JobRunDispatcher` ([src/orchestrator/job_run_dispatcher.rs](../../../../src/orchestrator/job_run_dispatcher.rs)) polls `Pending` job runs — on a signal wake-up or its one-second interval, whichever comes first — and asks two questions per row, each of which owns its own guard and returns whether it transitioned:
 
-1. **Stopped?** (a `job_run_stop` row exists) → `handle_stopped_job_run`: the job run goes `Skipped`, and so do all of its task runs in one update. It never runs.
-2. **Otherwise** → `handle_start_job_run`: `status = Running`, `started_at = now`.
-
-Starting is otherwise unconditional — no queue, no concurrency limit, no readiness check. Whatever is `Pending` starts on the next tick.
+1. `transition_to_skipped` — **stopped?** (a `job_run_stop` row exists) → the job run goes `Skipped`, and so do all of its task runs in one update. It never runs.
+2. `transition_to_running` — otherwise, unconditionally: `status = Running`, `started_at = now`. No queue, no concurrency limit, no readiness check; whatever is `Pending` and not stopped starts on the next tick.
 
 `started_at` is written exactly once, here; task run retries never touch it.
 

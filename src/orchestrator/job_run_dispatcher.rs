@@ -31,53 +31,28 @@ impl JobRunDispatcher {
         }
     }
 
-    /// Skips the job run if it was stopped, otherwise starts it.
+    /// Moves a pending job run on: skipped if it was stopped before it could run,
+    /// running otherwise. There is nothing else to wait for.
     async fn handle_pending_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
-        let status = self.derive_next_job_run_status(job_run).await?;
-
-        if status == JobRunStatus::Skipped {
-            return self.handle_stopped_job_run(job_run).await;
+        if self.transition_to_skipped(job_run).await? {
+            return Ok(());
         }
 
-        self.handle_start_job_run(job_run).await
-    }
-
-    /// Derives the status a pending job run moves to: skipped if it was stopped
-    /// before it could run, running otherwise. There is nothing else to wait for.
-    async fn derive_next_job_run_status(&self, job_run: &JobRun) -> anyhow::Result<JobRunStatus> {
-
-        let job_run_stopped = self.is_job_run_stopped(job_run).await?;
-
-        if job_run_stopped {
-            return Ok(JobRunStatus::Skipped);
-        }
-
-        Ok(JobRunStatus::Running)
-    }
-
-    /// Sets the job run to running, which is what makes JobRunMonitor pick it up.
-    async fn handle_start_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
-
-        self.crud.update_job_runs(
-            &*self.conn_pool,
-            &UpdateJobRunsData {
-                filter: UpdateJobRunsDataFilter { id: Some(job_run.id) },
-                input: UpdateJobRunsDataInput {
-                    status: Some(JobRunStatus::Running),
-                    started_at: Some(Some(Utc::now())),
-                    finished_at: None,
-                },
-            }
-        ).await?;
-
-        self.signals.publish();
+        self.transition_to_running(job_run).await?;
 
         Ok(())
     }
 
-    /// Skips the job run and all of its task runs, none of which ever started.
-    async fn handle_stopped_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
+    /// Skips the job run, and with it all of its task runs, none of which ever
+    /// started, if it was stopped before it could run. Returns whether it transitioned.
+    async fn transition_to_skipped(&self, job_run: &JobRun) -> anyhow::Result<bool> {
+
+        let job_run_stopped = self.is_job_run_stopped(job_run).await?;
+
+        if !job_run_stopped {
+            return Ok(false);
+        }
 
         self.crud.update_job_runs(
             &*self.conn_pool,
@@ -109,7 +84,28 @@ impl JobRunDispatcher {
 
         self.signals.publish();
 
-        Ok(())
+        Ok(true)
+    }
+
+    /// Sets the job run to running, which is what makes JobRunMonitor pick it up.
+    /// Returns whether it transitioned; a pending job run that was not stopped always does.
+    async fn transition_to_running(&self, job_run: &JobRun) -> anyhow::Result<bool> {
+
+        self.crud.update_job_runs(
+            &*self.conn_pool,
+            &UpdateJobRunsData {
+                filter: UpdateJobRunsDataFilter { id: Some(job_run.id) },
+                input: UpdateJobRunsDataInput {
+                    status: Some(JobRunStatus::Running),
+                    started_at: Some(Some(Utc::now())),
+                    finished_at: None,
+                },
+            }
+        ).await?;
+
+        self.signals.publish();
+
+        Ok(true)
     }
 
     async fn get_pending_job_runs(&self) -> anyhow::Result<Vec<JobRun>> {

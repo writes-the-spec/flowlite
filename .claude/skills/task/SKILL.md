@@ -32,10 +32,9 @@ These are genuinely redundant (same source data, same list, written together) ra
 
 Four **independent** background services, mirroring the job side (see the [job skill](../job/SKILL.md)) and coordinating only through row status — a dispatcher and a monitor for each level of the `task_run` → `task_run_attempt` hierarchy:
 
-- **`TaskRunDispatcher`** ([src/orchestrator/task_run_dispatcher.rs](../../../src/orchestrator/task_run_dispatcher.rs)) — polls all `Pending` task runs, once a second or as soon as a wake-up arrives, and decides, in order:
-  1. Job run stopped? → `Skipped`
-  2. Any dependency task run finished but didn't succeed (`Failed`/`Skipped`/`Aborted`/`TimedOut`)? → `Skipped`
-  3. All dependency task runs `Succeeded`? → `Running` (`handle_start_task_run`), otherwise leave it `Pending` for the next pass
+- **`TaskRunDispatcher`** ([src/orchestrator/task_run_dispatcher.rs](../../../src/orchestrator/task_run_dispatcher.rs)) — polls all `Pending` task runs, once a second or as soon as a wake-up arrives, and tries two transitions in order, each returning whether it fired:
+  1. `transition_to_skipped` → `Skipped`, if the job run was stopped or any dependency task run finished but didn't succeed (`Failed`/`Skipped`/`Aborted`/`TimedOut`)
+  2. `transition_to_running` → `Running`, once all dependency task runs have `Succeeded`; otherwise nothing is written and the row is left `Pending` for the next pass
 - **`TaskRunMonitor`** ([src/orchestrator/task_run_monitor.rs](../../../src/orchestrator/task_run_monitor.rs)) — polls `Running` task runs on the same schedule and drives them through their attempts: it inserts the attempt rows, decides retries, and moves the task run to a finished status. It reads attempt rows and writes task run rows; it never touches a process.
 - **`TaskRunAttemptDispatcher`** ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../src/orchestrator/task_run_attempt_dispatcher.rs)) — polls `Pending` attempt rows and either `Skipped`s them (the job run was stopped before the command started) or spawns their command and sets them `Running`. Two outcomes only: the dependencies were already settled one level up.
 - **`TaskRunAttemptMonitor`** ([src/orchestrator/task_run_attempt_monitor.rs](../../../src/orchestrator/task_run_attempt_monitor.rs)) — polls `Running` attempt rows, waits on the processes the dispatcher spawned and finishes them. It reads and writes attempt rows only; it knows nothing about task runs, retries or dependencies.

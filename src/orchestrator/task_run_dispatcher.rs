@@ -30,51 +30,62 @@ impl TaskRunDispatcher {
         }
     }
 
-    /// Skips the task run if its job run was stopped or if a task run it depends on
-    /// did not succeed, and starts it once all of them have succeeded.
+    /// Moves a pending task run on: skipped if its job run was stopped or a task run it
+    /// depends on did not succeed, running once all of them have succeeded, and left
+    /// pending while any of them is still on its way there.
     async fn handle_pending_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
-        let status = self.derive_next_task_run_status(task_run).await?;
-
-        let Some(status) = status else {
+        if self.transition_to_skipped(task_run).await? {
             return Ok(());
-        };
-
-        if status == TaskRunStatus::Running {
-            return self.handle_start_task_run(task_run).await;
         }
 
-        self.update_task_run_status(task_run, status).await
+        self.transition_to_running(task_run).await?;
+
+        Ok(())
     }
 
-    /// Derives the status a pending task run moves to: skipped if its job run was
-    /// stopped or a task run it depends on did not succeed, running once all of them
-    /// have succeeded, and none while any of them is still on its way there.
-    async fn derive_next_task_run_status(&self, task_run: &TaskRun) -> anyhow::Result<Option<TaskRunStatus>> {
+    /// Skips the task run if its job run was stopped or a task run it depends on did not
+    /// succeed, in which case it will never be able to run. Returns whether it transitioned.
+    async fn transition_to_skipped(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
-        let job_run_stopped = self.is_job_run_stopped(task_run).await?;
+        let must_skip = self.is_job_run_stopped(task_run).await?
+            || self.did_any_dependent_task_run_finish_but_not_succeed(task_run).await?;
 
-        if job_run_stopped {
-            return Ok(Some(TaskRunStatus::Skipped));
+        if !must_skip {
+            return Ok(false);
         }
 
-        let any_dependent_task_run_failed = self.did_any_dependent_task_run_finish_but_not_succeed(task_run).await?;
+        self.crud.update_task_runs(
+            &*self.conn_pool,
+            &UpdateTaskRunsData {
+                filter: UpdateTaskRunsDataFilter {
+                    id: Some(task_run.id),
+                    job_run_id: None,
+                    status: None,
+                },
+                input: UpdateTaskRunsDataInput {
+                    status: Some(TaskRunStatus::Skipped),
+                    started_at: None,
+                    finished_at: Some(Some(Utc::now())),
+                },
+            }
+        ).await?;
 
-        if any_dependent_task_run_failed {
-            return Ok(Some(TaskRunStatus::Skipped));
-        }
+        self.signals.publish();
+
+        Ok(true)
+    }
+
+    /// Sets the task run to running, which is what makes TaskRunMonitor pick it up, once
+    /// every task run it depends on has succeeded. Returns whether it transitioned; a task
+    /// run still waiting on a dependency stays pending and is reconsidered on every pass.
+    async fn transition_to_running(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
         let all_dependent_task_runs_succeeded = self.have_all_dependent_task_runs_succeeded(task_run).await?;
 
-        if all_dependent_task_runs_succeeded {
-            return Ok(Some(TaskRunStatus::Running));
+        if !all_dependent_task_runs_succeeded {
+            return Ok(false);
         }
-
-        Ok(None)
-    }
-
-    /// Sets the task run to running, which is what makes TaskRunMonitor pick it up.
-    async fn handle_start_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         self.crud.update_task_runs(
             &*self.conn_pool,
@@ -94,7 +105,7 @@ impl TaskRunDispatcher {
 
         self.signals.publish();
 
-        Ok(())
+        Ok(true)
     }
 
     async fn get_pending_task_runs(&self) -> anyhow::Result<Vec<TaskRun>> {
@@ -193,29 +204,6 @@ impl TaskRunDispatcher {
 
         Ok(dependent_task_runs)
 
-    }
-
-    async fn update_task_run_status(&self, task_run: &TaskRun, status: TaskRunStatus) -> anyhow::Result<()> {
-
-        self.crud.update_task_runs(
-            &*self.conn_pool,
-            &UpdateTaskRunsData {
-                filter: UpdateTaskRunsDataFilter {
-                    id: Some(task_run.id),
-                    job_run_id: None,
-                    status: None,
-                },
-                input: UpdateTaskRunsDataInput {
-                    status: Some(status),
-                    started_at: None,
-                    finished_at: Some(Some(Utc::now())),
-                },
-            }
-        ).await?;
-
-        self.signals.publish();
-
-        Ok(())
     }
 
 }

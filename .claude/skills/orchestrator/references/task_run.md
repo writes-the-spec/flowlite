@@ -16,18 +16,18 @@
 
 ## Dispatcher: Pending → Running / Skipped
 
-`TaskRunDispatcher` ([src/orchestrator/task_run_dispatcher.rs](../../../../src/orchestrator/task_run_dispatcher.rs)) polls **all** `Pending` task runs, whatever their job run's status, on a signal wake-up or its one-second interval, whichever comes first. `derive_next_task_run_status`, first match winning:
+`TaskRunDispatcher` ([src/orchestrator/task_run_dispatcher.rs](../../../../src/orchestrator/task_run_dispatcher.rs)) polls **all** `Pending` task runs, whatever their job run's status, on a signal wake-up or its one-second interval, whichever comes first. It asks two questions per row, each of which owns its own guard and returns whether it transitioned:
 
-1. **Job run stopped?** → `Skipped`
-2. **Any dependency finished but didn't succeed** (`Failed`, `Skipped`, `Aborted`, `TimedOut`) → `Skipped`
-3. **All dependencies `Succeeded`** → `Running`, via `handle_start_task_run`, which sets `started_at = now`
-4. Otherwise → `None`, left `Pending` for the next tick
+1. `transition_to_skipped` → `Skipped` if the **job run was stopped**, or if **any dependency finished but didn't succeed** (`Failed`, `Skipped`, `Aborted`, `TimedOut`). Either way the task run can never run.
+2. `transition_to_running` → `Running` with `started_at = now`, once **all dependencies have `Succeeded`**. Otherwise it transitions nothing and the row stays `Pending` for the next tick.
+
+The two guards short-circuit in that order, so a stopped job run costs one query and never loads the dependencies.
 
 Dependencies come from `task_run.depends_on` — the list copied off `task.depends_on` when the run was submitted — resolved to the task runs of the same job run by `get_dependent_task_runs`. A task with no dependencies falls straight through to step 3, since `all()` over an empty list is true.
 
 This transition runs **at most once per task run**: a retry keeps the row `Running`, so the dependency check happens once and `started_at` means "when the task run started", covering every attempt.
 
-`JobRunDispatcher::handle_stopped_job_run` short-circuits step 1 for a job run stopped while still `Pending`, skipping all of its task runs in one update instead of one per pass.
+`JobRunDispatcher::transition_to_skipped` short-circuits the stop check for a job run stopped while still `Pending`, skipping all of its task runs in one update instead of one per pass.
 
 ## Monitor: Running → finished
 
@@ -53,4 +53,4 @@ Because the decision comes from the attempt rows alone, a stop landing *between*
 - **A `Running` task run must always have either an unfinished attempt or a finished last attempt to decide on.** An attempt row that never finishes stalls the task run, and through it the job run.
 - **A new `TaskRunAttemptStatus` needs an arm** in `handle_running_task_run`, whose match over the last attempt's status is exhaustive, plus a `handle_last_task_run_attempt_*` function.
 - **A new terminal `TaskRunStatus` needs three edits**: the failure list in `did_any_dependent_task_run_finish_but_not_succeed` (or downstream task runs wait forever), a rule in `JobRunMonitor::derive_next_job_run_status`, and a badge arm in `templates/routes/job_runs/job_run_id/route.html`.
-- **Terminal statuses set `finished_at`**, via `update_task_run_status`.
+- **Terminal statuses set `finished_at`** — `TaskRunMonitor::update_task_run_status` for the ones it derives, `TaskRunDispatcher::transition_to_skipped` for a skip.

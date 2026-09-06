@@ -38,40 +38,59 @@ impl TaskRunAttemptDispatcher {
         }
     }
 
-    /// Skips the attempt if its job run was stopped, otherwise starts it.
+    /// Moves a pending attempt on: skipped if its job run was stopped before its command
+    /// could start, running otherwise. There is nothing else to wait for, the task run has
+    /// already resolved its dependencies.
     async fn handle_pending_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
-        let status = self.derive_next_task_run_attempt_status(task_run_attempt).await?;
-
-        if status == TaskRunAttemptStatus::Skipped {
-            return self.handle_stopped_job_run(task_run_attempt).await;
+        if self.transition_to_skipped(task_run_attempt).await? {
+            return Ok(());
         }
 
-        self.handle_start_task_run_attempt(task_run_attempt).await
+        self.transition_to_running(task_run_attempt).await?;
+
+        Ok(())
     }
 
-    /// Derives the status a pending attempt moves to: skipped if its job run was
-    /// stopped before it could run, running otherwise. There is nothing else to wait
-    /// for, the task run has already resolved its dependencies.
-    async fn derive_next_task_run_attempt_status(
-        &self,
-        task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<TaskRunAttemptStatus> {
+    /// Skips the attempt if its job run was stopped, in which case its command never
+    /// started. Returns whether it transitioned.
+    async fn transition_to_skipped(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
 
         let job_run_stopped = self.is_job_run_stopped(task_run_attempt).await?;
 
-        if job_run_stopped {
-            return Ok(TaskRunAttemptStatus::Skipped);
+        if !job_run_stopped {
+            return Ok(false);
         }
 
-        Ok(TaskRunAttemptStatus::Running)
+        self.crud.update_task_run_attempts(
+            &*self.conn_pool,
+            &UpdateTaskRunAttemptsData {
+                filter: UpdateTaskRunAttemptsDataFilter {
+                    id: Some(task_run_attempt.id),
+                    task_run_id: None,
+                },
+                input: UpdateTaskRunAttemptsDataInput {
+                    status: Some(TaskRunAttemptStatus::Skipped),
+                    started_at: None,
+                    finished_at: Some(Some(Utc::now())),
+                    stdout: None,
+                    stderr: None,
+                },
+            },
+        ).await?;
+
+        self.signals.publish();
+
+        Ok(true)
     }
 
     /// Spawns the command of the attempt, hands the child process over and sets the
-    /// attempt to running, which is what makes TaskRunAttemptMonitor pick it up.
+    /// attempt to running, which is what makes TaskRunAttemptMonitor pick it up. Returns
+    /// whether it transitioned; an attempt whose job run was not stopped always does.
+    ///
     /// The child has to be in TaskRunAttemptChildren before the status is written, or
     /// the monitor sees a running attempt with no process and aborts it.
-    async fn handle_start_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
+    async fn transition_to_running(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
 
         let task_run = self.get_task_run(task_run_attempt).await?;
 
@@ -120,32 +139,7 @@ impl TaskRunAttemptDispatcher {
 
         self.signals.publish();
 
-        Ok(())
-    }
-
-    /// Skips the attempt of a stopped job run, whose command never started.
-    async fn handle_stopped_job_run(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
-
-        self.crud.update_task_run_attempts(
-            &*self.conn_pool,
-            &UpdateTaskRunAttemptsData {
-                filter: UpdateTaskRunAttemptsDataFilter {
-                    id: Some(task_run_attempt.id),
-                    task_run_id: None,
-                },
-                input: UpdateTaskRunAttemptsDataInput {
-                    status: Some(TaskRunAttemptStatus::Skipped),
-                    started_at: None,
-                    finished_at: Some(Some(Utc::now())),
-                    stdout: None,
-                    stderr: None,
-                },
-            },
-        ).await?;
-
-        self.signals.publish();
-
-        Ok(())
+        Ok(true)
     }
 
     async fn get_pending_task_run_attempts(&self) -> anyhow::Result<Vec<TaskRunAttempt>> {
