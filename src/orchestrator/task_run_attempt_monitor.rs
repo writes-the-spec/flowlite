@@ -1,4 +1,3 @@
-use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 use crate::crud::CRUD;
@@ -43,56 +42,37 @@ impl TaskRunAttemptMonitor {
         }
     }
 
-    /// Aborts, times out or finishes the attempt, keeps its process otherwise, and
-    /// aborts the attempt that has no process at all.
+    /// Tries each way a running attempt can finish, in order, and keeps its process for
+    /// the next pass if none of them fired. An attempt whose process is gone is aborted
+    /// before any of them is asked, since they all need a process to act on.
     async fn handle_running_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         let task_run_attempt_child = self.children.remove(task_run_attempt.id).await;
 
         let Some(mut task_run_attempt_child) = task_run_attempt_child else {
-            return self.handle_missing_task_run_attempt_child(task_run_attempt).await;
+            self.transition_to_aborted_without_child(task_run_attempt).await?;
+            return Ok(());
         };
 
-        let job_run_stopped = self.is_job_run_stopped(task_run_attempt).await?;
-
-        if job_run_stopped {
-            return self.handle_job_run_stopped(task_run_attempt, task_run_attempt_child).await;
+        if self.transition_to_aborted(task_run_attempt, &mut task_run_attempt_child).await? {
+            return Ok(());
         }
 
-        let task_run_attempt_timed_out = Self::is_task_run_attempt_timed_out(&task_run_attempt_child);
-
-        if task_run_attempt_timed_out {
-            return self.handle_timed_out_task_run_attempt(task_run_attempt, task_run_attempt_child).await;
+        if self.transition_to_timed_out(task_run_attempt, &mut task_run_attempt_child).await? {
+            return Ok(());
         }
 
-        if let Some(exit_status) = task_run_attempt_child.child.try_wait()? {
-            return self.handle_exited_task_run_attempt(task_run_attempt, task_run_attempt_child, exit_status).await;
+        if self.transition_to_exit_status(task_run_attempt, &mut task_run_attempt_child).await? {
+            return Ok(());
         }
 
-        self.handle_unfinished_task_run_attempt(task_run_attempt, task_run_attempt_child).await
-    }
-
-    /// Persists the output of an attempt whose process is still running and puts the
-    /// process back for the next pass.
-    async fn handle_unfinished_task_run_attempt(
-        &self,
-        task_run_attempt: &TaskRunAttempt,
-        mut task_run_attempt_child: TaskRunAttemptChild,
-    ) -> anyhow::Result<()> {
-
-        Self::read_output(&mut task_run_attempt_child).await;
-
-        self.update_task_run_attempt_output(task_run_attempt, &task_run_attempt_child).await?;
-
-        self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
-
-        Ok(())
+        self.keep_task_run_attempt_running(task_run_attempt, task_run_attempt_child).await
     }
 
     /// Aborts an attempt whose process is not in TaskRunAttemptChildren: it was spawned
     /// by an earlier run of this program, so there is nothing left to wait for and its
-    /// output is whatever was persisted before.
-    async fn handle_missing_task_run_attempt_child(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
+    /// output is whatever was persisted before. This is the restart path.
+    async fn transition_to_aborted_without_child(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         self.crud.update_task_run_attempts(
             &*self.conn_pool,
@@ -116,50 +96,99 @@ impl TaskRunAttemptMonitor {
         Ok(())
     }
 
-    /// Kills the process of a stopped job run and aborts the attempt.
-    async fn handle_job_run_stopped(
+    /// Kills the process of a stopped job run and aborts the attempt. Returns whether it
+    /// transitioned.
+    async fn transition_to_aborted(
         &self,
         task_run_attempt: &TaskRunAttempt,
-        mut running_task_run_attempt: TaskRunAttemptChild,
-    ) -> anyhow::Result<()> {
+        task_run_attempt_child: &mut TaskRunAttemptChild,
+    ) -> anyhow::Result<bool> {
 
-        Self::read_output(&mut running_task_run_attempt).await;
+        let job_run_stopped = self.is_job_run_stopped(task_run_attempt).await?;
 
-        let _ = running_task_run_attempt.child.kill().await;
+        if !job_run_stopped {
+            return Ok(false);
+        }
 
-        self.finish_task_run_attempt(task_run_attempt, &running_task_run_attempt, TaskRunAttemptStatus::Aborted).await
+        Self::read_output(task_run_attempt_child).await;
+
+        let _ = task_run_attempt_child.child.kill().await;
+
+        self.finish_task_run_attempt(
+            task_run_attempt,
+            task_run_attempt_child,
+            TaskRunAttemptStatus::Aborted,
+        ).await?;
+
+        Ok(true)
     }
 
-    /// Kills the process that ran past its timeout and times the attempt out.
-    async fn handle_timed_out_task_run_attempt(
+    /// Kills the process that ran past its timeout and times the attempt out. Returns
+    /// whether it transitioned.
+    async fn transition_to_timed_out(
         &self,
         task_run_attempt: &TaskRunAttempt,
-        mut running_task_run_attempt: TaskRunAttemptChild,
-    ) -> anyhow::Result<()> {
+        task_run_attempt_child: &mut TaskRunAttemptChild,
+    ) -> anyhow::Result<bool> {
 
-        Self::read_output(&mut running_task_run_attempt).await;
+        let timed_out = Self::is_task_run_attempt_timed_out(task_run_attempt_child);
 
-        let _ = running_task_run_attempt.child.kill().await;
+        if !timed_out {
+            return Ok(false);
+        }
 
-        self.finish_task_run_attempt(task_run_attempt, &running_task_run_attempt, TaskRunAttemptStatus::TimedOut).await
+        Self::read_output(task_run_attempt_child).await;
+
+        let _ = task_run_attempt_child.child.kill().await;
+
+        self.finish_task_run_attempt(
+            task_run_attempt,
+            task_run_attempt_child,
+            TaskRunAttemptStatus::TimedOut,
+        ).await?;
+
+        Ok(true)
     }
 
-    /// Finishes the attempt with the status its process exited with.
-    async fn handle_exited_task_run_attempt(
+    /// Finishes the attempt with the status its process exited with, once it has exited.
+    /// Returns whether it transitioned.
+    async fn transition_to_exit_status(
         &self,
         task_run_attempt: &TaskRunAttempt,
-        mut running_task_run_attempt: TaskRunAttemptChild,
-        exit_status: ExitStatus,
-    ) -> anyhow::Result<()> {
+        task_run_attempt_child: &mut TaskRunAttemptChild,
+    ) -> anyhow::Result<bool> {
 
-        Self::read_output(&mut running_task_run_attempt).await;
+        let Some(exit_status) = task_run_attempt_child.child.try_wait()? else {
+            return Ok(false);
+        };
+
+        Self::read_output(task_run_attempt_child).await;
 
         let status = match exit_status.success() {
             true => TaskRunAttemptStatus::Succeeded,
             false => TaskRunAttemptStatus::Failed,
         };
 
-        self.finish_task_run_attempt(task_run_attempt, &running_task_run_attempt, status).await
+        self.finish_task_run_attempt(task_run_attempt, task_run_attempt_child, status).await?;
+
+        Ok(true)
+    }
+
+    /// Persists the output of an attempt none of the transitions finished and puts its
+    /// process back for the next pass.
+    async fn keep_task_run_attempt_running(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        mut task_run_attempt_child: TaskRunAttemptChild,
+    ) -> anyhow::Result<()> {
+
+        Self::read_output(&mut task_run_attempt_child).await;
+
+        self.update_task_run_attempt_output(task_run_attempt, &task_run_attempt_child).await?;
+
+        self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
+
+        Ok(())
     }
 
     fn is_task_run_attempt_timed_out(task_run_attempt_child: &TaskRunAttemptChild) -> bool {

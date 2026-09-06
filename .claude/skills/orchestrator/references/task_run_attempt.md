@@ -27,12 +27,14 @@ Same seven variants as `TaskRunStatus`, because both levels have the same dispat
 
 `TaskRunAttemptMonitor` ([src/orchestrator/task_run_attempt_monitor.rs](../../../../src/orchestrator/task_run_attempt_monitor.rs)) polls `Running` attempts on the same wake-up-or-interval schedule and takes their child out of `TaskRunAttemptChildren`:
 
-- **No child** → `handle_missing_task_run_attempt_child`: `Aborted`, output left as last persisted. The map holds only processes *this* program spawned, so a `Running` row without one belongs to an earlier run of it. This is the restart path.
-- **Child present** → drain its output, then, in order:
-  1. **Job run stopped?** → kill it, `Aborted`.
-  2. **Past `task_run.timeout`?** → kill it, `TimedOut`. Measured from the in-memory spawn time (`times_out_at`), so neither the wait for dispatch nor the spawn counts against it.
-  3. **Exited?** → `Succeeded`/`Failed` from the exit status, after a final drain.
-  4. **Otherwise** → persist the output so far and put the child back for the next tick.
+- **No child** → `transition_to_aborted_without_child`: `Aborted`, output left as last persisted. The map holds only processes *this* program spawned, so a `Running` row without one belongs to an earlier run of it. This is the restart path, and it is asked first because every transition below needs a process to act on.
+- **Child present** → each transition owns its guard, drains the output itself and returns whether it fired, tried in this order:
+  1. `transition_to_aborted` — **job run stopped?** → kill it, `Aborted`.
+  2. `transition_to_timed_out` — **past `task_run.timeout`?** → kill it, `TimedOut`. Measured from the in-memory spawn time (`times_out_at`), so neither the wait for dispatch nor the spawn counts against it.
+  3. `transition_to_exit_status` — **exited?** → `Succeeded`/`Failed` from the exit status.
+  4. None fired → `keep_task_run_attempt_running`: persist the output so far and put the child back for the next tick.
+
+The transitions borrow the child (`&mut TaskRunAttemptChild`) rather than taking it, so the caller still owns it when none of them fires and can hand it back to the map.
 
 It never reads or writes a task run row: retries and the task run status are `TaskRunMonitor`'s business.
 

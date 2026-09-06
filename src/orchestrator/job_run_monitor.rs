@@ -31,9 +31,124 @@ impl JobRunMonitor {
     }
 
     /// Finishes the job run once its task runs say it is done.
+    ///
+    /// **The order of these transitions is the job run's status precedence, and changing
+    /// it changes what a mixed set of task runs reports.** A task run that is still going
+    /// holds every one of them off; after that the worst outcome wins, so that a job run
+    /// with one aborted and one failed task run reports the abort rather than the failure.
     async fn handle_running_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
-        let task_runs = self.crud.select_task_runs(
+        let task_runs = self.get_task_runs(job_run).await?;
+
+        if Self::has_unfinished_task_run(&task_runs) {
+            return Ok(());
+        }
+
+        if self.transition_to_aborted(job_run, &task_runs).await? {
+            return Ok(());
+        }
+
+        if self.transition_to_timed_out(job_run, &task_runs).await? {
+            return Ok(());
+        }
+
+        if self.transition_to_failed(job_run, &task_runs).await? {
+            return Ok(());
+        }
+
+        if self.transition_to_skipped(job_run, &task_runs).await? {
+            return Ok(());
+        }
+
+        self.transition_to_succeeded(job_run).await?;
+
+        Ok(())
+    }
+
+    /// Aborts the job run if any of its task runs was killed mid-flight. Returns whether
+    /// it transitioned.
+    async fn transition_to_aborted(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+
+        if !Self::has_task_run_with_status(task_runs, TaskRunStatus::Aborted) {
+            return Ok(false);
+        }
+
+        self.update_job_run_status(job_run, JobRunStatus::Aborted).await?;
+
+        Ok(true)
+    }
+
+    /// Times the job run out if any of its task runs ran past its timeout with no retry
+    /// left. Returns whether it transitioned.
+    async fn transition_to_timed_out(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+
+        if !Self::has_task_run_with_status(task_runs, TaskRunStatus::TimedOut) {
+            return Ok(false);
+        }
+
+        self.update_job_run_status(job_run, JobRunStatus::TimedOut).await?;
+
+        Ok(true)
+    }
+
+    /// Fails the job run if any of its task runs failed with no retry left. Returns
+    /// whether it transitioned.
+    async fn transition_to_failed(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+
+        if !Self::has_task_run_with_status(task_runs, TaskRunStatus::Failed) {
+            return Ok(false);
+        }
+
+        self.update_job_run_status(job_run, JobRunStatus::Failed).await?;
+
+        Ok(true)
+    }
+
+    /// Skips the job run if any of its task runs was skipped. Returns whether it
+    /// transitioned.
+    ///
+    /// This ranks below the three failure transitions for a reason: a skip means either a
+    /// stop or a dependency that did not succeed, and in the second case that dependency
+    /// is itself failed, timed out or aborted — so by the time this is asked, nothing has
+    /// failed, and a skip can only mean the run was stopped.
+    async fn transition_to_skipped(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+
+        if !Self::has_task_run_with_status(task_runs, TaskRunStatus::Skipped) {
+            return Ok(false);
+        }
+
+        self.update_job_run_status(job_run, JobRunStatus::Skipped).await?;
+
+        Ok(true)
+    }
+
+    /// Succeeds the job run, which is what is left once no task run reports anything
+    /// worse. Returns whether it transitioned; reaching here it always does, and a job
+    /// run with no task runs at all reaches it immediately.
+    async fn transition_to_succeeded(&self, job_run: &JobRun) -> anyhow::Result<bool> {
+
+        self.update_job_run_status(job_run, JobRunStatus::Succeeded).await?;
+
+        Ok(true)
+    }
+
+    /// Whether a task run of the job run has yet to reach a terminal status, which is
+    /// what keeps the job run Running however bad the statuses of the others already are.
+    fn has_unfinished_task_run(task_runs: &[TaskRun]) -> bool {
+
+        task_runs.iter().any(|task_run| matches!(
+            task_run.status,
+            TaskRunStatus::Pending | TaskRunStatus::Running,
+        ))
+    }
+
+    fn has_task_run_with_status(task_runs: &[TaskRun], status: TaskRunStatus) -> bool {
+        task_runs.iter().any(|task_run| task_run.status == status)
+    }
+
+    async fn get_task_runs(&self, job_run: &JobRun) -> anyhow::Result<Vec<TaskRun>> {
+
+        self.crud.select_task_runs(
             &*self.conn_pool,
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
@@ -45,51 +160,8 @@ impl JobRunMonitor {
                 },
                 sort: Some(SelectTaskRunsDataSort::Id),
             }
-        ).await?;
+        ).await
 
-        let Some(status) = Self::derive_next_job_run_status(&task_runs) else {
-            return Ok(());
-        };
-
-        self.handle_job_run_finish(job_run, status).await
-    }
-
-    /// Writes the finished status of the job run.
-    async fn handle_job_run_finish(&self, job_run: &JobRun, status: JobRunStatus) -> anyhow::Result<()> {
-
-        self.update_job_run_status(job_run, status).await
-    }
-
-    /// Derives the status a running job run moves to from its task runs, the first
-    /// matching rule winning, or None while it has to keep running.
-    fn derive_next_job_run_status(
-        task_runs: &[TaskRun],
-    ) -> Option<JobRunStatus> {
-
-        let has_status = |status: TaskRunStatus| task_runs.iter().any(|tr| tr.status == status);
-
-        if has_status(TaskRunStatus::Pending) || has_status(TaskRunStatus::Running) {
-            return None;
-        }
-
-        if has_status(TaskRunStatus::Aborted) {
-            return Some(JobRunStatus::Aborted);
-        }
-
-        if has_status(TaskRunStatus::TimedOut) {
-            return Some(JobRunStatus::TimedOut);
-        }
-
-        if has_status(TaskRunStatus::Failed) {
-            return Some(JobRunStatus::Failed);
-        }
-
-        // Nothing failed, so a skipped task run can only come from a stop.
-        if has_status(TaskRunStatus::Skipped) {
-            return Some(JobRunStatus::Skipped);
-        }
-
-        Some(JobRunStatus::Succeeded)
     }
 
     async fn get_running_job_runs(&self) -> anyhow::Result<Vec<JobRun>> {
@@ -178,74 +250,93 @@ mod tests {
     }
 
     #[test]
-    fn an_unfinished_task_run_keeps_the_job_run_running() {
+    fn a_running_task_run_keeps_the_job_run_running() {
         let task_runs = vec![
             task_run(TaskRunStatus::Succeeded),
             task_run(TaskRunStatus::Running),
         ];
 
-        assert_eq!(JobRunMonitor::derive_next_job_run_status(&task_runs), None);
+        assert!(JobRunMonitor::has_unfinished_task_run(&task_runs));
     }
 
     #[test]
-    fn every_task_run_succeeding_succeeds_the_job_run() {
-        let task_runs = vec![task_run(TaskRunStatus::Succeeded)];
-
-        assert_eq!(
-            JobRunMonitor::derive_next_job_run_status(&task_runs),
-            Some(JobRunStatus::Succeeded),
-        );
-    }
-
-    #[test]
-    fn an_aborted_task_run_outranks_a_failed_one() {
+    fn a_pending_task_run_keeps_the_job_run_running() {
         let task_runs = vec![
             task_run(TaskRunStatus::Failed),
-            task_run(TaskRunStatus::Aborted),
+            task_run(TaskRunStatus::Pending),
         ];
 
-        assert_eq!(
-            JobRunMonitor::derive_next_job_run_status(&task_runs),
-            Some(JobRunStatus::Aborted),
-        );
+        assert!(JobRunMonitor::has_unfinished_task_run(&task_runs));
     }
 
     #[test]
-    fn a_skipped_task_run_with_no_failure_skips_the_job_run() {
+    fn task_runs_that_all_finished_hold_nothing_off() {
         let task_runs = vec![
             task_run(TaskRunStatus::Succeeded),
             task_run(TaskRunStatus::Skipped),
         ];
 
-        assert_eq!(
-            JobRunMonitor::derive_next_job_run_status(&task_runs),
-            Some(JobRunStatus::Skipped),
-        );
+        assert!(!JobRunMonitor::has_unfinished_task_run(&task_runs));
     }
 
     #[test]
-    fn a_timed_out_task_run_outranks_a_failed_one() {
+    fn a_job_run_with_no_task_runs_holds_nothing_off() {
+        assert!(!JobRunMonitor::has_unfinished_task_run(&[]));
+    }
+
+    /// The four failure guards are asked in the order Aborted, TimedOut, Failed, Skipped
+    /// by handle_running_job_run, so a set matching more than one of them reports the
+    /// first. These assert the guards themselves match; the order they are asked in lives
+    /// in handle_running_job_run.
+    #[test]
+    fn an_aborted_task_run_is_seen_beside_a_failed_one() {
+        let task_runs = vec![
+            task_run(TaskRunStatus::Failed),
+            task_run(TaskRunStatus::Aborted),
+        ];
+
+        assert!(JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::Aborted));
+        assert!(JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::Failed));
+    }
+
+    #[test]
+    fn a_timed_out_task_run_is_seen_beside_a_failed_one() {
         let task_runs = vec![
             task_run(TaskRunStatus::Failed),
             task_run(TaskRunStatus::TimedOut),
         ];
 
-        assert_eq!(
-            JobRunMonitor::derive_next_job_run_status(&task_runs),
-            Some(JobRunStatus::TimedOut),
-        );
+        assert!(JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::TimedOut));
+        assert!(JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::Failed));
     }
 
     #[test]
-    fn an_aborted_task_run_outranks_a_timed_out_one() {
+    fn a_set_with_no_failure_matches_no_failure_guard() {
         let task_runs = vec![
-            task_run(TaskRunStatus::TimedOut),
-            task_run(TaskRunStatus::Aborted),
+            task_run(TaskRunStatus::Succeeded),
+            task_run(TaskRunStatus::Skipped),
         ];
 
-        assert_eq!(
-            JobRunMonitor::derive_next_job_run_status(&task_runs),
-            Some(JobRunStatus::Aborted),
-        );
+        assert!(!JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::Aborted));
+        assert!(!JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::TimedOut));
+        assert!(!JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::Failed));
+        assert!(JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::Skipped));
+    }
+
+    #[test]
+    fn task_runs_that_all_succeeded_match_no_guard_at_all() {
+        let task_runs = vec![
+            task_run(TaskRunStatus::Succeeded),
+            task_run(TaskRunStatus::Succeeded),
+        ];
+
+        for status in [
+            TaskRunStatus::Aborted,
+            TaskRunStatus::TimedOut,
+            TaskRunStatus::Failed,
+            TaskRunStatus::Skipped,
+        ] {
+            assert!(!JobRunMonitor::has_task_run_with_status(&task_runs, status));
+        }
     }
 }

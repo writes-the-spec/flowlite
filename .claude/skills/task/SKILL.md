@@ -58,7 +58,7 @@ The two attempt services share one `TaskRunAttemptChildren` ([src/orchestrator/t
 
 ## How the monitor retries a task run
 
-`TaskRunMonitor` looks at the **last** attempt row of each `Running` task run: none yet → insert a `Pending` attempt; otherwise the attempt's status picks one `handle_last_task_run_attempt_*` function. `Pending` and `Running` wait, a `Failed` attempt is retried while `attempt < task_run.max_retries + 1` — once `task_run.retry_delay` seconds have passed since it finished — by inserting the next attempt row, and every other status is copied onto the task run — so `Succeeded` succeeds it, and `Skipped`, `Aborted` and `TimedOut` finish it without a retry (a stop is never undone by a retry). Attempts count from 1, so total executions are `1 + max_retries`.
+`TaskRunMonitor` looks at the **last** attempt row of each `Running` task run: none yet → insert a `Pending` attempt; otherwise the attempt's status picks one arm of an exhaustive match. `Pending` and `Running` wait, a `Failed` attempt is retried while `attempt < task_run.max_retries + 1` — once `task_run.retry_delay` seconds have passed since it finished — by inserting the next attempt row, and every other status is copied onto the task run — so `Succeeded` succeeds it, and `Skipped`, `Aborted` and `TimedOut` finish it without a retry (a stop is never undone by a retry). Attempts count from 1, so total executions are `1 + max_retries`.
 
 Both numbers come off the `task_run` row, not `mem.task`: a run retries on the policy it was submitted with, however the YAML has moved since.
 

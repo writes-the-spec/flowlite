@@ -29,25 +29,27 @@ Only `Running` runs count against the limit. Counting `Pending` ones too would d
 
 ## Monitor: Running → finished
 
-`JobRunMonitor` ([src/orchestrator/job_run_monitor.rs](../../../../src/orchestrator/job_run_monitor.rs)) polls `Running` job runs on the same wake-up-or-interval schedule, loads all task runs of each, and hands them to the pure `derive_next_job_run_status(&[TaskRun]) -> Option<JobRunStatus>`, first match winning:
+`JobRunMonitor` ([src/orchestrator/job_run_monitor.rs](../../../../src/orchestrator/job_run_monitor.rs)) polls `Running` job runs on the same wake-up-or-interval schedule, loads all task runs of each, and asks its transitions in order, the first whose guard matches winning:
 
-0. Any task run `Pending` or `Running` → `None`, the job run stays `Running`
-1. Any `Aborted` → `Aborted`
-2. Any `TimedOut` → `TimedOut`
-3. Any `Failed` → `Failed`
-4. Any `Skipped` → `Skipped`
-5. Otherwise → `Succeeded`
+0. `has_unfinished_task_run` — any task run `Pending` or `Running` → nothing transitions, the job run stays `Running`
+1. `transition_to_aborted` — any `Aborted`
+2. `transition_to_timed_out` — any `TimedOut`
+3. `transition_to_failed` — any `Failed`
+4. `transition_to_skipped` — any `Skipped`
+5. `transition_to_succeeded` — the fallthrough, no guard
 
-The status is derived **entirely from its task runs** — the monitor never reads a stop signal. A stop reaches the job run only as the task run statuses it produced, through rules 1 and 4.
+**This call order in `handle_running_job_run` is the status precedence**, and reordering the lines changes what a mixed set of task runs reports. It is not encoded anywhere else: each transition's guard only asks whether its own status is present, so `transition_to_failed` would happily fire on a set that also holds an `Aborted` if it were asked first.
 
-Rule 4 does not require *all* task runs to be skipped: skips come either from a stop or from a dependency that didn't succeed, and in the second case that dependency is itself `Failed`/`TimedOut`/`Aborted` or skipped — so once rules 1–3 have not matched, a skip can only mean the run was stopped.
+The status comes **entirely from the task runs** — the monitor never reads a stop signal. A stop reaches the job run only as the task run statuses it produced, through steps 1 and 4.
 
-Every rule is an `any(...)`, so a job run with no task runs falls through to rule 5.
+Step 4 does not require *all* task runs to be skipped: skips come either from a stop or from a dependency that didn't succeed, and in the second case that dependency is itself `Failed`/`TimedOut`/`Aborted` or skipped — so once steps 1–3 have not matched, a skip can only mean the run was stopped. It stays a separate transition at rank 4 rather than folding into step 1 precisely so that a real failure outranks a stop.
+
+Every guard is an `any(...)`, so a job run with no task runs falls through to `transition_to_succeeded`.
 
 ## Invariants
 
 - **A job run must stay `Running` until every task run is terminal.** The monitor only visits `Running` rows, so finishing one early is final: its task runs keep executing but their outcome is never read again.
-- **The decision stays pure.** `derive_next_job_run_status` takes `&[TaskRun]` and does no I/O. Add rules there, not around the update call.
+- **The guards stay pure.** `has_unfinished_task_run` and `has_task_run_with_status` take `&[TaskRun]` and do no I/O, which is what the unit tests reach. The precedence between them is call order in `handle_running_job_run` and is **not** covered by a test — it has no seam a pure test can reach — so read that function before changing it.
 - **Terminal statuses set `finished_at`**, via `update_job_run_status`.
-- **A new terminal `TaskRunStatus` needs a rule here**, or it falls through to rule 5 and silently reports `Succeeded`.
+- **A new terminal `TaskRunStatus` needs a transition here**, placed at the right rank, or it falls through to `transition_to_succeeded` and silently reports `Succeeded`. Nothing in the compiler catches the omission: unlike `TaskRunMonitor`'s exhaustive match, this chain has a fallthrough.
 - **A new `JobRunStatus` needs a badge** in `templates/routes/home/job_run_table/route.html` and `templates/routes/job_runs/job_run_id/route.html`, plus an entry in the home route's `all_statuses` filter list.

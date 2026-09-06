@@ -33,13 +33,12 @@ This transition runs **at most once per task run**: a retry keeps the row `Runni
 
 `TaskRunMonitor` ([src/orchestrator/task_run_monitor.rs](../../../../src/orchestrator/task_run_monitor.rs)) polls `Running` task runs on the same wake-up-or-interval schedule and looks only at their `task_run_attempt` rows — it never touches a process. No attempt yet → insert attempt 1 (`Pending`). Otherwise the **last** attempt (highest id) picks the handler:
 
-| Last attempt | `handle_last_task_run_attempt_*` | Task run |
+| Last attempt | Arm | Task run |
 |---|---|---|
-| `Pending` | `_pending` | left `Running` — the attempt dispatcher owns it |
-| `Running` | `_running` | left `Running` — the attempt monitor owns it |
-| `Succeeded` | `_succeeded` | `Succeeded` |
-| `Failed` | `_failed` | next attempt while `attempt < task_run.max_retries + 1` and `task_run.retry_delay` has elapsed, otherwise `Failed` |
-| `Skipped` | `_skipped` | `Skipped` |
+| `Pending` \| `Running` | `Ok(())` | left `Running` — the attempt services still own it |
+| `Succeeded` | `transition_to_succeeded` | `Succeeded` |
+| `Failed` | `retry_or_transition_to_failed` | next attempt while `attempt < task_run.max_retries + 1` and `task_run.retry_delay` has elapsed, otherwise `Failed` |
+| `Skipped` | `transition_to_skipped` | `Skipped` |
 | `Aborted` | `_aborted` | `Aborted` — terminal, never retried, so a stop can't be undone by a retry |
 | `TimedOut` | `_timed_out` | `TimedOut` — terminal, not retried |
 
@@ -51,6 +50,6 @@ Because the decision comes from the attempt rows alone, a stop landing *between*
 
 - **A `Pending` or `Running` task run keeps its job run `Running`.** A task run that is never visited again strands its whole job run — see [job_run.md](job_run.md).
 - **A `Running` task run must always have either an unfinished attempt or a finished last attempt to decide on.** An attempt row that never finishes stalls the task run, and through it the job run.
-- **A new `TaskRunAttemptStatus` needs an arm** in `handle_running_task_run`, whose match over the last attempt's status is exhaustive, plus a `handle_last_task_run_attempt_*` function.
-- **A new terminal `TaskRunStatus` needs three edits**: the failure list in `did_any_dependent_task_run_finish_but_not_succeed` (or downstream task runs wait forever), a rule in `JobRunMonitor::derive_next_job_run_status`, and a badge arm in `templates/routes/job_runs/job_run_id/route.html`.
+- **A new `TaskRunAttemptStatus` needs an arm** in `handle_running_task_run`, whose match over the last attempt's status is exhaustive. That exhaustiveness is the reason this monitor keeps a `match` rather than the dispatchers' ordered `transition_to_*` chain: a chain of boolean guards would let a new status fall through every one of them and leave the task run `Running` forever, where the match refuses to compile.
+- **A new terminal `TaskRunStatus` needs three edits**: the failure list in `did_any_dependent_task_run_finish_but_not_succeed` (or downstream task runs wait forever), a transition in `JobRunMonitor::handle_running_job_run`, at the right rank, and a badge arm in `templates/routes/job_runs/job_run_id/route.html`.
 - **Terminal statuses set `finished_at`** — `TaskRunMonitor::update_task_run_status` for the ones it derives, `TaskRunDispatcher::transition_to_skipped` for a skip.

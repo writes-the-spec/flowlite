@@ -40,50 +40,35 @@ impl TaskRunMonitor {
         let task_run_attempts = self.get_task_run_attempts(task_run).await?;
 
         let Some(last_task_run_attempt) = task_run_attempts.last() else {
-            return self.handle_start_task_run_attempt(task_run, 1).await;
+            return self.start_task_run_attempt(task_run, 1).await;
         };
 
+        // The match is exhaustive on purpose: a new TaskRunAttemptStatus must be given a
+        // transition here rather than falling into a catch-all that leaves the task run
+        // Running forever.
         match last_task_run_attempt.status {
-            TaskRunAttemptStatus::Pending => Self::handle_last_task_run_attempt_pending(),
-            TaskRunAttemptStatus::Running => Self::handle_last_task_run_attempt_running(),
-            TaskRunAttemptStatus::Succeeded => self.handle_last_task_run_attempt_succeeded(
-                task_run,
-            ).await,
-            TaskRunAttemptStatus::Failed => self.handle_last_task_run_attempt_failed(
+            // The attempt services still own the attempt, so the task run stays Running.
+            TaskRunAttemptStatus::Pending | TaskRunAttemptStatus::Running => Ok(()),
+            TaskRunAttemptStatus::Succeeded => self.transition_to_succeeded(task_run).await,
+            TaskRunAttemptStatus::Failed => self.retry_or_transition_to_failed(
                 task_run,
                 last_task_run_attempt,
             ).await,
-            TaskRunAttemptStatus::Skipped => self.handle_last_task_run_attempt_skipped(
-                task_run,
-            ).await,
-            TaskRunAttemptStatus::Aborted => self.handle_last_task_run_attempt_aborted(
-                task_run,
-            ).await,
-            TaskRunAttemptStatus::TimedOut => self.handle_last_task_run_attempt_timed_out(
-                task_run,
-            ).await,
+            TaskRunAttemptStatus::Skipped => self.transition_to_skipped(task_run).await,
+            TaskRunAttemptStatus::Aborted => self.transition_to_aborted(task_run).await,
+            TaskRunAttemptStatus::TimedOut => self.transition_to_timed_out(task_run).await,
         }
     }
 
-    /// TaskRunAttemptDispatcher still owns the attempt, so the task run stays Running.
-    fn handle_last_task_run_attempt_pending() -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// TaskRunAttemptMonitor still owns the attempt, so the task run stays Running.
-    fn handle_last_task_run_attempt_running() -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn handle_last_task_run_attempt_succeeded(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+    async fn transition_to_succeeded(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         self.update_task_run_status(task_run, TaskRunStatus::Succeeded).await
     }
 
-    /// Starts the next attempt while the task has a retry left, and fails the task run
-    /// once they are used up. Attempts count from 1, so the task run gets
-    /// `max_retries + 1` of them.
-    async fn handle_last_task_run_attempt_failed(
+    /// Starts the next attempt while the task has a retry left, and only transitions the
+    /// task run to failed once they are used up. Attempts count from 1, so the task run
+    /// gets `max_retries + 1` of them.
+    async fn retry_or_transition_to_failed(
         &self,
         task_run: &TaskRun,
         last_task_run_attempt: &TaskRunAttempt,
@@ -97,7 +82,7 @@ impl TaskRunMonitor {
                 return Ok(());
             }
 
-            return self.handle_start_task_run_attempt(
+            return self.start_task_run_attempt(
                 task_run,
                 last_task_run_attempt.attempt + 1,
             ).await;
@@ -118,23 +103,24 @@ impl TaskRunMonitor {
         Utc::now() < finished_at + TimeDelta::seconds(task_run.retry_delay as i64)
     }
 
-    async fn handle_last_task_run_attempt_skipped(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+    async fn transition_to_skipped(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         self.update_task_run_status(task_run, TaskRunStatus::Skipped).await
     }
 
-    async fn handle_last_task_run_attempt_aborted(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+    async fn transition_to_aborted(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         self.update_task_run_status(task_run, TaskRunStatus::Aborted).await
     }
 
-    async fn handle_last_task_run_attempt_timed_out(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+    async fn transition_to_timed_out(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         self.update_task_run_status(task_run, TaskRunStatus::TimedOut).await
     }
 
-    /// Inserts the pending attempt TaskRunAttemptDispatcher clears to run.
-    async fn handle_start_task_run_attempt(&self, task_run: &TaskRun, attempt: u32) -> anyhow::Result<()> {
+    /// Inserts the pending attempt TaskRunAttemptDispatcher clears to run. This writes no
+    /// task run status: the task run stays Running for the whole retry loop.
+    async fn start_task_run_attempt(&self, task_run: &TaskRun, attempt: u32) -> anyhow::Result<()> {
 
         self.crud.insert_task_run_attempt(
             &*self.conn_pool,
