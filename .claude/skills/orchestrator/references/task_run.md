@@ -27,7 +27,7 @@ Dependencies come from `task_run.depends_on` — the list copied off `task.depen
 
 This transition runs **at most once per task run**: a retry keeps the row `Running`, so the dependency check happens once and `started_at` means "when the task run started", covering every attempt.
 
-`JobRunDispatcher::transition_to_skipped` short-circuits the stop check for a job run stopped while still `Pending`, skipping all of its task runs in one update instead of one per pass.
+`JobRunDispatcher::settle_as_skipped` short-circuits the stop check for a job run stopped while still `Pending`, skipping all of its task runs in one update instead of one per pass.
 
 ## Monitor: Running → finished
 
