@@ -50,7 +50,7 @@ Every service settles a row by asking its outcomes in order — `settle_as_*` in
 **Read the call order as part of the logic.** Each guard asks only about its own case, deliberately — a shared guard covering several outcomes reads worse at every call site than the repetition does — so where a call sits is what separates it from the others, and neither the compiler nor the test suite pins it. Two rules recur:
 
 - **The outcome that leaves a row alone comes before any that finishes it**, wherever work can still be in flight. `JobRunMonitor::settle_for_running` ahead of its four failure outcomes is the sharp case: behind them, a job run with one failed task run and one still executing gets finished early, and finishing is irreversible because a monitor only ever visits `Running` rows.
-- **Outcomes that can match at once rank worst first.** A job run whose task runs are one aborted and one failed reports the abort, because `settle_for_aborted` is asked before `settle_for_failed`.
+- **Outcomes that can match at once are ranked deliberately.** In `JobRunMonitor` a real failure outranks a stop, so `settle_for_aborted` is asked last: a job run with one aborted and one failed task run reports the failure, the part worth acting on.
 
 Reordering those lines compiles and passes the suite. See [job_run.md](references/job_run.md) for the full ladder.
 

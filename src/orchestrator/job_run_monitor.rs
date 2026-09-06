@@ -38,8 +38,9 @@ impl JobRunMonitor {
     /// - `settle_for_running` has to precede the failure outcomes, or a job run holding one
     ///   failed task run and one still executing gets finished while its work carries on,
     ///   and finishing is irreversible — this monitor only ever visits Running rows.
-    /// - The four failure outcomes can all match at once, so they rank worst first: one
-    ///   aborted and one failed task run reports the abort.
+    /// - A real failure outranks a stop, so `settle_for_aborted` is asked last: a job run
+    ///   with one aborted and one failed task run reports the failure, which is the part
+    ///   worth acting on. Between the two failures, timed out outranks failed.
     ///
     /// Nothing here writes Skipped: a Running job run has started, so a stop aborts it.
     async fn handle_running_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
@@ -54,10 +55,6 @@ impl JobRunMonitor {
             return Ok(());
         }
 
-        if self.settle_for_aborted(job_run, &task_runs).await? {
-            return Ok(());
-        }
-
         if self.settle_for_timed_out(job_run, &task_runs).await? {
             return Ok(());
         }
@@ -66,13 +63,13 @@ impl JobRunMonitor {
             return Ok(());
         }
 
-        if self.settle_for_aborted_after_stop(job_run, &task_runs).await? {
+        if self.settle_for_aborted(job_run, &task_runs).await? {
             return Ok(());
         }
 
         anyhow::bail!(
             "Job run {} settled as nothing: all of its task runs finished, none of them \
-             failed, timed out, was aborted or was skipped, and they did not all succeed",
+             timed out, failed, was aborted or was skipped, and they did not all succeed",
             job_run.id,
         )
     }
@@ -97,21 +94,6 @@ impl JobRunMonitor {
     async fn settle_for_running(&self, _job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
         Ok(task_runs.iter().any(|task_run| !task_run.status.is_finished()))
-    }
-
-    /// Aborts the job run if a task run of it was killed mid-flight. Outranks every
-    /// failure below, and writes the same status as `settle_for_aborted_after_stop`.
-    async fn settle_for_aborted(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
-
-        let any_aborted = task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Aborted);
-
-        if !any_aborted {
-            return Ok(false);
-        }
-
-        self.update_job_run_status(job_run, JobRunStatus::Aborted).await?;
-
-        Ok(true)
     }
 
     /// Times the job run out if a task run of it ran past its timeout with no retry left.
@@ -142,16 +124,20 @@ impl JobRunMonitor {
         Ok(true)
     }
 
-    /// Aborts the job run whose task runs were skipped out from under it by a stop.
+    /// Aborts the job run that was stopped, which its task runs report in either of two
+    /// ways: one was killed mid-flight, or one was skipped before it could start.
     ///
-    /// A skip means a stop or a dependency that did not succeed, and such a dependency
-    /// would itself be failed, timed out or aborted — so once the three failure outcomes
-    /// have not matched, only a stop is left. Kept below them so a failure outranks a stop.
-    async fn settle_for_aborted_after_stop(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+    /// Asked last, so a real failure outranks a stop. A skipped task run means a stop or a
+    /// dependency that did not succeed, and such a dependency would itself be failed or
+    /// timed out — so by the time this is asked, nothing has failed and only a stop is left.
+    async fn settle_for_aborted(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
-        let any_skipped = task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Skipped);
+        let any_stopped = task_runs.iter().any(|task_run| matches!(
+            task_run.status,
+            TaskRunStatus::Aborted | TaskRunStatus::Skipped,
+        ));
 
-        if !any_skipped {
+        if !any_stopped {
             return Ok(false);
         }
 

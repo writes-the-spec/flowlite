@@ -41,22 +41,23 @@ Only `Running` runs count against the limit. Counting `Pending` ones too would d
 
 1. `settle_for_succeeded` — every task run `Succeeded`
 2. `settle_for_running` — any task run not finished → writes nothing
-3. `settle_for_aborted` — all finished, any `Aborted`
-4. `settle_for_timed_out` — all finished, any `TimedOut`
-5. `settle_for_failed` — all finished, any `Failed`
-6. `settle_for_aborted_after_stop` — all finished, any `Skipped`, which at this rank can only be a stop → `Aborted`
-7. Past all six → `anyhow::bail!`
+3. `settle_for_timed_out` — any `TimedOut`
+4. `settle_for_failed` — any `Failed`
+5. `settle_for_aborted` — any `Aborted` **or** `Skipped`, the two ways task runs report a stop
+6. Past all five → `anyhow::bail!`
 
 **The order is the logic here, not a formatting choice.** Each guard is a one-line `any(...)` over its own status and nothing else, so position is the only thing separating them:
 
-- **Step 2 must precede steps 3–6.** A job run holding one `Failed` task run and one still executing would otherwise be finished by step 5 while its work carried on — and finishing is irreversible, since this monitor only ever visits `Running` rows.
-- **Steps 3–6 rank worst first**, because they can all match at once: one aborted and one failed task run reports the abort.
+- **Step 2 must precede steps 3–5.** A job run holding one `Failed` task run and one still executing would otherwise be finished by step 4 while its work carried on — and finishing is irreversible, since this monitor only ever visits `Running` rows.
+- **A real failure outranks a stop**, so step 5 is last: a job run with one aborted and one failed task run reports the failure, which is the part worth acting on. Between the two failures, timed out outranks failed.
 
 Step 1 is exclusive with everything (it needs *every* task run succeeded) and could sit anywhere.
 
-Step 6 does not require *all* task runs to be skipped: skips come either from a stop or from a dependency that didn't succeed, and in the second case that dependency is itself `Failed`/`TimedOut`/`Aborted` or skipped — so once steps 3–5 have not matched, a skip can only mean the run was stopped. It stays separate from step 3 precisely so that a real failure outranks a stop.
+Step 5 folds both stop signals into one outcome, and does not require *all* task runs to be skipped. A skip means a stop or a dependency that didn't succeed, and in the second case that dependency is itself `Failed`/`TimedOut`/`Aborted` or skipped — so once steps 3–4 have not matched, a skip can only mean the run was stopped. Its `Aborted` half needs no such argument: a task run is only aborted by a stop.
 
-The status comes **entirely from the task runs** — the monitor never reads a stop signal. A stop reaches the job run only as the task run statuses it produced, through steps 3 and 6, both of which write `Aborted`.
+The narrow case step 5 exists for is a job run stopped when **nothing was executing** — between two tasks, or before the first one starts. Its task runs end up `Succeeded` + `Skipped`, with nothing failed and nothing aborted, so every other outcome declines. Without this step that job run reaches the bail and never finishes.
+
+The status comes **entirely from the task runs** — the monitor never reads a stop signal. A stop reaches the job run only as the task run statuses it produced, through step 5.
 
 Every guard is an `any(...)`/`all(...)`, so a job run with no task runs settles at step 1 immediately.
 
