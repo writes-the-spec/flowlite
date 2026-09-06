@@ -103,9 +103,9 @@ Each attempt keeps its own output — see [Task output](#task-output).
 
 ## Overlapping runs
 
-A job runs one at a time by default. If a run is still going when the schedule fires
-again, the new one is passed over rather than queued, and the scheduler says so on
-stderr — so a job that takes longer than its interval can't pile up on itself.
+A job runs one at a time by default. A run created while another one is still going is
+not rejected — it waits as a pending job run and starts as soon as the earlier one
+finishes, oldest waiting run first.
 
 Raise or lift the limit per job:
 
@@ -118,11 +118,10 @@ tasks:
     command: ./sync.sh
 ```
 
-Submitting by hand is held to the same limit, with a way past it:
-
-```bash
-flowlite job submit nightly-sync --force
-```
+The limit is enforced in one place, when a pending run is picked up to start, so every
+way of creating a run is held to it alike — `flowlite job submit`, a rerun, and the
+scheduler. A job that takes longer than its schedule interval will therefore queue up
+pending runs and work through them back to back.
 
 ## Task output
 

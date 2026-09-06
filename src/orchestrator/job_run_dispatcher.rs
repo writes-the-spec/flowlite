@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use crate::crud::CRUD;
-use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, UpdateJobRunsData, UpdateJobRunsDataFilter, UpdateJobRunsDataInput};
+use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort, UpdateJobRunsData, UpdateJobRunsDataFilter, UpdateJobRunsDataInput};
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run::{TaskRunStatus, UpdateTaskRunsData, UpdateTaskRunsDataFilter, UpdateTaskRunsDataInput};
 use crate::poller::Service;
@@ -8,7 +8,8 @@ use crate::signals::Signals;
 use chrono::Utc;
 
 
-/// Picks up pending job runs and either cancels them or sets them to running.
+/// Picks up pending job runs, oldest first, and either skips them or sets them to
+/// running as their job's max_active_runs allows.
 /// Hands off to JobRunMonitor through the job run status only, never by calling it.
 pub struct JobRunDispatcher {
     pub crud: Arc<CRUD>,
@@ -32,7 +33,7 @@ impl JobRunDispatcher {
     }
 
     /// Moves a pending job run on: skipped if it was stopped before it could run,
-    /// running otherwise. There is nothing else to wait for.
+    /// running once its job is under its max_active_runs, and left pending until then.
     async fn handle_pending_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         if self.transition_to_skipped(job_run).await? {
@@ -87,9 +88,20 @@ impl JobRunDispatcher {
         Ok(true)
     }
 
-    /// Sets the job run to running, which is what makes JobRunMonitor pick it up.
-    /// Returns whether it transitioned; a pending job run that was not stopped always does.
+    /// Sets the job run to running, which is what makes JobRunMonitor pick it up, unless
+    /// its job is already at its max_active_runs. Returns whether it transitioned; a job
+    /// run held back here stays pending and is reconsidered on every pass.
+    ///
+    /// This is the only place the limit is enforced. Submitting a job never rejects it,
+    /// so every path that creates a job run — the CLI, the scheduler, a rerun — queues
+    /// behind the same gate without having to know about it.
     async fn transition_to_running(&self, job_run: &JobRun) -> anyhow::Result<bool> {
+
+        let at_max_active_runs = self.is_job_at_max_active_runs(job_run).await?;
+
+        if at_max_active_runs {
+            return Ok(false);
+        }
 
         self.crud.update_job_runs(
             &*self.conn_pool,
@@ -118,11 +130,19 @@ impl JobRunDispatcher {
                     job_id: None,
                     status: Some(JobRunStatus::Pending)
                 },
-                sort: None,
+                sort: Some(SelectJobRunsDataSort::Id),
                 limit: None,
                 offset: None,
             }
         ).await
+
+    }
+
+    async fn is_job_at_max_active_runs(&self, job_run: &JobRun) -> anyhow::Result<bool> {
+
+        let mut conn = self.conn_pool.acquire().await?;
+
+        self.crud.is_job_at_max_active_runs(&mut conn, &job_run.job_id).await
 
     }
 

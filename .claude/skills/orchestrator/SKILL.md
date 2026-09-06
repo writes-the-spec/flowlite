@@ -11,7 +11,7 @@ It takes over from an existing job run, whatever created it — `job submit`, th
 
 | Service | Polls | Does |
 |---|---|---|
-| `JobRunDispatcher` | `Pending` job runs | starts or skips them |
+| `JobRunDispatcher` | `Pending` job runs | starts them as `max_active_runs` allows, or skips them |
 | `JobRunMonitor` | `Running` job runs | finishes them from their task runs |
 | `TaskRunDispatcher` | `Pending` task runs | starts or skips them |
 | `TaskRunMonitor` | `Running` task runs | drives their attempts, retries, finishes them |

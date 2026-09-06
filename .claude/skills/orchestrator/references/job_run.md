@@ -16,10 +16,14 @@
 
 ## Dispatcher: Pending → Running / Skipped
 
-`JobRunDispatcher` ([src/orchestrator/job_run_dispatcher.rs](../../../../src/orchestrator/job_run_dispatcher.rs)) polls `Pending` job runs — on a signal wake-up or its one-second interval, whichever comes first — and asks two questions per row, each of which owns its own guard and returns whether it transitioned:
+`JobRunDispatcher` ([src/orchestrator/job_run_dispatcher.rs](../../../../src/orchestrator/job_run_dispatcher.rs)) polls `Pending` job runs **oldest id first** — on a signal wake-up or its one-second interval, whichever comes first — and asks two questions per row, each of which owns its own guard and returns whether it transitioned:
 
 1. `transition_to_skipped` — **stopped?** (a `job_run_stop` row exists) → the job run goes `Skipped`, and so do all of its task runs in one update. It never runs.
-2. `transition_to_running` — otherwise, unconditionally: `status = Running`, `started_at = now`. No queue, no concurrency limit, no readiness check; whatever is `Pending` and not stopped starts on the next tick.
+2. `transition_to_running` — **is its job at `max_active_runs`?** (`CRUD::is_job_at_max_active_runs`, counting that job's `Running` job runs) → if so it transitions nothing and the row simply stays `Pending`, to be reconsidered next pass. Otherwise `status = Running`, `started_at = now`.
+
+**`transition_to_running` is the only place `max_active_runs` is enforced.** Nothing rejects a submission for being over the limit — not `job submit`, not a rerun, not the [scheduler](../../scheduler/SKILL.md) — so an over-limit run is created `Pending` like any other and queues here until a slot frees. Two things follow: the oldest-first sort is what makes the queue fair, and a job that takes longer than its schedule interval accumulates pending runs rather than losing them.
+
+Only `Running` runs count against the limit. Counting `Pending` ones too would deadlock the gate, since the row being considered is itself `Pending`.
 
 `started_at` is written exactly once, here; task run retries never touch it.
 

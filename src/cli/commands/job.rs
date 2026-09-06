@@ -22,10 +22,6 @@ pub struct JobListCmd {
 #[derive(Args)]
 pub struct JobSubmitCmd {
     pub job_name: String,
-
-    /// Submit even if the job is already at its max_active_runs.
-    #[arg(long)]
-    pub force: bool,
 }
 
 impl JobCmd {
@@ -94,21 +90,6 @@ impl JobSubmitCmd {
         let Some(job) = job else {
             anyhow::bail!("Job {} not found", self.job_name);
         };
-
-        if !self.force {
-            let at_max_active_runs = crud.is_job_at_max_active_runs(
-                &mut conn,
-                &job.job_id,
-            ).await?;
-
-            if at_max_active_runs {
-                anyhow::bail!(
-                    "Job {} already has its maximum of {} active run(s). Submit it anyway with --force.",
-                    self.job_name,
-                    job.max_active_runs,
-                );
-            }
-        }
 
         let job_run_id = crud.submit_job(&mut conn, &job.job_id).await?;
 

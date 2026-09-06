@@ -208,10 +208,9 @@ impl CRUD {
         })
     }
 
-    /// Whether the job already has as many active runs as it allows, which is the
-    /// question every caller has to answer before submitting it. A job run counts as
-    /// active until it finishes, so a queued one holds a slot just like a running one,
-    /// and a max_active_runs of 0 means the job has no limit at all.
+    /// Whether the job already has as many runs in flight as it allows. Only a running
+    /// job run holds a slot — a pending one is waiting for exactly this answer — and a
+    /// max_active_runs of 0 means the job has no limit at all.
     pub async fn is_job_at_max_active_runs(
         &self,
         conn: &mut SqliteConnection,
@@ -236,28 +235,6 @@ impl CRUD {
             return Ok(false);
         }
 
-        let active_job_runs = self.count_active_job_runs(&mut *conn, job_id).await?;
-
-        Ok(active_job_runs >= job.max_active_runs as usize)
-    }
-
-    async fn count_active_job_runs(
-        &self,
-        conn: &mut SqliteConnection,
-        job_id: &str,
-    ) -> anyhow::Result<usize> {
-
-        let pending_job_runs = self.select_job_runs(&mut *conn, &SelectJobRunsData {
-            filter: SelectJobRunsDataFilter {
-                id: None,
-                job_id: Some(job_id.to_string()),
-                status: Some(JobRunStatus::Pending),
-            },
-            sort: None,
-            limit: None,
-            offset: None,
-        }).await?;
-
         let running_job_runs = self.select_job_runs(&mut *conn, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
                 id: None,
@@ -269,7 +246,7 @@ impl CRUD {
             offset: None,
         }).await?;
 
-        Ok(pending_job_runs.len() + running_job_runs.len())
+        Ok(running_job_runs.len() >= job.max_active_runs as usize)
     }
 
 }
