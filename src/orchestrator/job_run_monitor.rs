@@ -32,15 +32,14 @@ impl JobRunMonitor {
 
     /// Settles a running job run as exactly one outcome, from its task runs alone.
     ///
-    /// **The order of these calls is the logic, not a formatting choice**, since each guard
-    /// asks only whether its own status is present:
+    /// The three failure outcomes each ask for every task run having finished as well as
+    /// for their own status, so none of them can finish a job run whose work is still
+    /// going — finishing is irreversible, since this monitor only visits Running rows.
     ///
-    /// - `settle_for_running` has to precede the failure outcomes, or a job run holding one
-    ///   failed task run and one still executing gets finished while its work carries on,
-    ///   and finishing is irreversible — this monitor only ever visits Running rows.
-    /// - A real failure outranks a stop, so `settle_for_aborted` is asked last: a job run
-    ///   with one aborted and one failed task run reports the failure, which is the part
-    ///   worth acting on. Between the two failures, timed out outranks failed.
+    /// **Order decides precedence**: a real failure outranks a stop, so `settle_for_aborted`
+    /// is last — a job run with one aborted and one failed task run reports the failure,
+    /// which is the part worth acting on. Failed outranks timed out. That ordering is also
+    /// what makes a skipped task run readable as a stop; see `TaskRunStatus::is_stopped`.
     ///
     /// Nothing here writes Skipped: a Running job run has started, so a stop aborts it.
     async fn handle_running_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
@@ -55,11 +54,11 @@ impl JobRunMonitor {
             return Ok(());
         }
 
-        if self.settle_for_timed_out(job_run, &task_runs).await? {
+        if self.settle_for_failed(job_run, &task_runs).await? {
             return Ok(());
         }
 
-        if self.settle_for_failed(job_run, &task_runs).await? {
+        if self.settle_for_timed_out(job_run, &task_runs).await? {
             return Ok(());
         }
 
@@ -96,30 +95,34 @@ impl JobRunMonitor {
         Ok(task_runs.iter().any(|task_run| !task_run.status.is_finished()))
     }
 
-    /// Times the job run out if a task run of it ran past its timeout with no retry left.
-    async fn settle_for_timed_out(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
-
-        let any_timed_out = task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::TimedOut);
-
-        if !any_timed_out {
-            return Ok(false);
-        }
-
-        self.update_job_run_status(job_run, JobRunStatus::TimedOut).await?;
-
-        Ok(true)
-    }
-
-    /// Fails the job run if a task run of it failed with no retry left.
+    /// Fails the job run if a task run of it failed with no retry left, once the rest have
+    /// finished too.
     async fn settle_for_failed(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
+        let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());
         let any_failed = task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Failed);
 
-        if !any_failed {
+        if !all_finished || !any_failed {
             return Ok(false);
         }
 
         self.update_job_run_status(job_run, JobRunStatus::Failed).await?;
+
+        Ok(true)
+    }
+
+    /// Times the job run out if a task run of it ran past its timeout with no retry left,
+    /// once the rest have finished too.
+    async fn settle_for_timed_out(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+
+        let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());
+        let any_timed_out = task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::TimedOut);
+
+        if !all_finished || !any_timed_out {
+            return Ok(false);
+        }
+
+        self.update_job_run_status(job_run, JobRunStatus::TimedOut).await?;
 
         Ok(true)
     }
@@ -132,12 +135,10 @@ impl JobRunMonitor {
     /// timed out — so by the time this is asked, nothing has failed and only a stop is left.
     async fn settle_for_aborted(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
-        let any_stopped = task_runs.iter().any(|task_run| matches!(
-            task_run.status,
-            TaskRunStatus::Aborted | TaskRunStatus::Skipped,
-        ));
+        let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());
+        let any_stopped = task_runs.iter().any(|task_run| task_run.status.is_stopped());
 
-        if !any_stopped {
+        if !all_finished || !any_stopped {
             return Ok(false);
         }
 

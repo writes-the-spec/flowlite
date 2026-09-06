@@ -31,6 +31,25 @@ impl TaskRunStatus {
         }
     }
 
+
+    /// Whether the task run reports a stop: killed mid-flight, or never started. Matched
+    /// exhaustively for the same reason as `is_finished`.
+    ///
+    /// `Aborted` always means a stop. `Skipped` means one only once a failure has been
+    /// ruled out, since a dependency that did not succeed skips its dependents too — so
+    /// ask this after the failure cases, not before them.
+    pub fn is_stopped(&self) -> bool {
+        match self {
+            TaskRunStatus::Aborted
+            | TaskRunStatus::Skipped => true,
+            TaskRunStatus::Pending
+            | TaskRunStatus::Running
+            | TaskRunStatus::Succeeded
+            | TaskRunStatus::Failed
+            | TaskRunStatus::TimedOut => false,
+        }
+    }
+
 }
 
 impl std::fmt::Display for TaskRunStatus {

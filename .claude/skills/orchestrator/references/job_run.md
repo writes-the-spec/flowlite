@@ -41,15 +41,14 @@ Only `Running` runs count against the limit. Counting `Pending` ones too would d
 
 1. `settle_for_succeeded` — every task run `Succeeded`
 2. `settle_for_running` — any task run not finished → writes nothing
-3. `settle_for_timed_out` — any `TimedOut`
-4. `settle_for_failed` — any `Failed`
-5. `settle_for_aborted` — any `Aborted` **or** `Skipped`, the two ways task runs report a stop
+3. `settle_for_failed` — any `Failed`
+4. `settle_for_timed_out` — any `TimedOut`
+5. `settle_for_aborted` — any task run `is_stopped`, meaning `Aborted` or `Skipped`, the two ways task runs report a stop
 6. Past all five → `anyhow::bail!`
 
-**The order is the logic here, not a formatting choice.** Each guard is a one-line `any(...)` over its own status and nothing else, so position is the only thing separating them:
+**Steps 3–5 each ask for every task run having finished** as well as for their own status, so none of them can finish a job run whose work is still going — finishing is irreversible, since this monitor only ever visits `Running` rows.
 
-- **Step 2 must precede steps 3–5.** A job run holding one `Failed` task run and one still executing would otherwise be finished by step 4 while its work carried on — and finishing is irreversible, since this monitor only ever visits `Running` rows.
-- **A real failure outranks a stop**, so step 5 is last: a job run with one aborted and one failed task run reports the failure, which is the part worth acting on. Between the two failures, timed out outranks failed.
+**Order decides precedence.** A real failure outranks a stop, so step 5 is last: a job run with one aborted and one failed task run reports the failure, which is the part worth acting on. Between the two failures, failed outranks timed out.
 
 Step 1 is exclusive with everything (it needs *every* task run succeeded) and could sit anywhere.
 
@@ -64,7 +63,7 @@ Every guard is an `any(...)`/`all(...)`, so a job run with no task runs settles 
 ## Invariants
 
 - **A job run must stay `Running` until every task run is terminal.** The monitor only visits `Running` rows, so finishing one early is final: its task runs keep executing but their outcome is never read again.
-- **Which statuses count as finished lives on the enum.** `TaskRunStatus::is_finished` ([src/crud/task_run.rs](../../../../src/crud/task_run.rs)) matches exhaustively, so a new status has to declare its side or stop compiling. It is the one thing `settle_for_running` asks.
+- **Which statuses count as finished, and which report a stop, live on the enum.** `TaskRunStatus::is_finished` and `is_stopped` ([src/crud/task_run.rs](../../../../src/crud/task_run.rs)) both match exhaustively, so a new status has to declare its side of each or stop compiling. `is_stopped` is only truthful *after* the failure outcomes: a dependency that didn't succeed skips its dependents too, so a skip means a stop only once a failure has been ruled out.
 - **Nothing here is covered by a test.** Every guard is inlined in its own outcome, so there is no pure function left to reach, and both ordering rules above live purely in the call order in `handle_running_job_run`. Reordering those six lines compiles, passes the suite, and silently changes what a stopped or mixed-outcome run reports.
 - **This monitor never writes `Skipped`.** It only ever visits `Running` rows, and a job run that reached `Running` has started — its earlier task runs may well have executed — so a stop aborts it. `Skipped` here would claim nothing ran while the logs showed output.
 - **Terminal statuses set `finished_at`**, via `update_job_run_status`.
