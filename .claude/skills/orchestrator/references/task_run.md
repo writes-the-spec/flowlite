@@ -42,11 +42,13 @@ This transition runs **at most once per task run**: a retry keeps the row `Runni
 | Last attempt | Outcome | Task run |
 |---|---|---|
 | `Succeeded` | `settle_for_succeeded` | `Succeeded` |
-| `Aborted` \| `Skipped` | `settle_for_aborted` | `Aborted` — the task run had started, so a stop aborts it |
-| `TimedOut` | `settle_for_timed_out` | `TimedOut` |
-| `Failed`, no retry left | `settle_for_failed` | `Failed` |
 | none yet, `Pending`, `Running`, or `Failed` with a retry left | `settle_for_running` | left `Running`; starts the first attempt or the retry, once `task_run.retry_delay` has elapsed |
+| `Failed`, no retry left | `settle_for_failed` | `Failed` |
+| `TimedOut` | `settle_for_timed_out` | `TimedOut` |
+| `is_stopped` — `Aborted` or `Skipped` | `settle_for_aborted` | `Aborted` — the task run had started, so a stop aborts it |
 | past all five | `anyhow::bail!` | — |
+
+These guards are exclusive, since the last attempt has exactly one status, so **the order here carries nothing** and matches [job_run.md](job_run.md)'s ladder only so the two read alike. `TaskRunAttemptStatus::is_stopped` needs no failure ruled out first, unlike its `TaskRunStatus` namesake: `TaskRunAttemptDispatcher` skips an attempt for one reason only.
 | `Aborted` | `_aborted` | `Aborted` — terminal, never retried, so a stop can't be undone by a retry |
 | `TimedOut` | `_timed_out` | `TimedOut` — terminal, not retried |
 

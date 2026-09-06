@@ -31,13 +31,15 @@ There is deliberately **no `settle_as_pending`** here, unlike the two dispatcher
 
 - **No child** → `settle_for_aborted_without_child`: `Aborted`, output left as last persisted. The map holds only processes *this* program spawned, so a `Running` row without one belongs to an earlier run of it. This is the restart path, and it is asked first because every transition below needs a process to act on.
 - **Child present** → each outcome owns its guard, drains the output itself and returns whether it fired, tried in this order:
-  1. `settle_for_aborted` — **job run stopped?** → kill it, `Aborted`.
+  1. `settle_for_exit_status` — **exited?** → `Succeeded`/`Failed` from the exit status.
   2. `settle_for_timed_out` — **past `task_run.timeout`?** → kill it, `TimedOut`. Measured from the in-memory spawn time (`times_out_at`), so neither the wait for dispatch nor the spawn counts against it.
-  3. `settle_for_exit_status` — **exited?** → `Succeeded`/`Failed` from the exit status.
+  3. `settle_for_aborted` — **job run stopped?** → kill it, `Aborted`.
   4. `settle_for_running` — persist the output so far and put the child back for the next tick.
   5. Past all four → `anyhow::bail!`, unreachable while step 4 claims everything the others left.
 
-Steps 1–3 borrow the child (`&mut TaskRunAttemptChild`) rather than taking it, so the caller still owns it when none of them fires and can hand it to step 4. Their guards are exclusive, so the order is not precedence — except that a stop is asked before the timeout, which decides only what a process past both is recorded as.
+Steps 1–3 borrow the child (`&mut TaskRunAttemptChild`) rather than taking it, so the caller still owns it when none of them fires and can hand it to step 4.
+
+**Order decides precedence here**, on the same rule as [job_run.md](job_run.md): a real outcome outranks a stop, so step 3 is last. A process that already exited reports what it exited with rather than being recorded as killed, and one past its timeout reports the timeout. A process still running when its job run is stopped is still killed on the same pass, because steps 1 and 2 decline and step 3 is reached immediately.
 
 It never reads or writes a task run row: retries and the task run status are `TaskRunMonitor`'s business.
 

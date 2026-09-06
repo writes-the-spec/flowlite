@@ -45,9 +45,11 @@ impl TaskRunAttemptMonitor {
     /// Settles a running attempt as exactly one outcome. A missing process is settled
     /// first, since every outcome below needs one to act on.
     ///
-    /// The guards are exclusive, so the order here is not precedence — except that a stop
-    /// is asked before the timeout, which decides only what a process that is past both
-    /// gets recorded as.
+    /// **Order decides precedence**, on the same rule as JobRunMonitor: a real outcome
+    /// outranks a stop, so `settle_for_aborted` is asked last. A process that has already
+    /// exited reports what it exited with rather than being recorded as killed, and one
+    /// past its timeout reports the timeout. A process still running when its job run is
+    /// stopped is still killed on this same pass, since the two outcomes above it decline.
     async fn handle_running_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         let task_run_attempt_child = self.children.remove(task_run_attempt.id).await;
@@ -57,7 +59,7 @@ impl TaskRunAttemptMonitor {
             return Ok(());
         };
 
-        if self.settle_for_aborted(task_run_attempt, &mut task_run_attempt_child).await? {
+        if self.settle_for_exit_status(task_run_attempt, &mut task_run_attempt_child).await? {
             return Ok(());
         }
 
@@ -65,7 +67,7 @@ impl TaskRunAttemptMonitor {
             return Ok(());
         }
 
-        if self.settle_for_exit_status(task_run_attempt, &mut task_run_attempt_child).await? {
+        if self.settle_for_aborted(task_run_attempt, &mut task_run_attempt_child).await? {
             return Ok(());
         }
 
@@ -107,28 +109,25 @@ impl TaskRunAttemptMonitor {
         Ok(())
     }
 
-    /// Kills the process of a stopped job run and aborts the attempt.
-    async fn settle_for_aborted(
+    /// Finishes the attempt with the status its process exited with, once it has exited.
+    async fn settle_for_exit_status(
         &self,
         task_run_attempt: &TaskRunAttempt,
         task_run_attempt_child: &mut TaskRunAttemptChild,
     ) -> anyhow::Result<bool> {
 
-        let job_run_stopped = self.is_job_run_stopped(task_run_attempt).await?;
-
-        if !job_run_stopped {
+        let Some(exit_status) = task_run_attempt_child.child.try_wait()? else {
             return Ok(false);
-        }
+        };
 
         Self::read_output(task_run_attempt_child).await;
 
-        let _ = task_run_attempt_child.child.kill().await;
+        let status = match exit_status.success() {
+            true => TaskRunAttemptStatus::Succeeded,
+            false => TaskRunAttemptStatus::Failed,
+        };
 
-        self.finish_task_run_attempt(
-            task_run_attempt,
-            task_run_attempt_child,
-            TaskRunAttemptStatus::Aborted,
-        ).await?;
+        self.finish_task_run_attempt(task_run_attempt, task_run_attempt_child, status).await?;
 
         Ok(true)
     }
@@ -159,25 +158,28 @@ impl TaskRunAttemptMonitor {
         Ok(true)
     }
 
-    /// Finishes the attempt with the status its process exited with, once it has exited.
-    async fn settle_for_exit_status(
+    /// Kills the process of a stopped job run and aborts the attempt.
+    async fn settle_for_aborted(
         &self,
         task_run_attempt: &TaskRunAttempt,
         task_run_attempt_child: &mut TaskRunAttemptChild,
     ) -> anyhow::Result<bool> {
 
-        let Some(exit_status) = task_run_attempt_child.child.try_wait()? else {
+        let job_run_stopped = self.is_job_run_stopped(task_run_attempt).await?;
+
+        if !job_run_stopped {
             return Ok(false);
-        };
+        }
 
         Self::read_output(task_run_attempt_child).await;
 
-        let status = match exit_status.success() {
-            true => TaskRunAttemptStatus::Succeeded,
-            false => TaskRunAttemptStatus::Failed,
-        };
+        let _ = task_run_attempt_child.child.kill().await;
 
-        self.finish_task_run_attempt(task_run_attempt, task_run_attempt_child, status).await?;
+        self.finish_task_run_attempt(
+            task_run_attempt,
+            task_run_attempt_child,
+            TaskRunAttemptStatus::Aborted,
+        ).await?;
 
         Ok(true)
     }

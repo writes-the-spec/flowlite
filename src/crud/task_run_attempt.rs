@@ -14,6 +14,28 @@ pub enum TaskRunAttemptStatus {
     TimedOut,
 }
 
+impl TaskRunAttemptStatus {
+
+    /// Whether the attempt reports a stop: its process was killed mid-flight, or its
+    /// command never started. Matched exhaustively so a new status has to declare its side.
+    ///
+    /// Both are only ever written for a stopped job run — TaskRunAttemptDispatcher skips an
+    /// attempt for no other reason — so unlike `TaskRunStatus::is_stopped` this needs no
+    /// failure ruled out first.
+    pub fn is_stopped(&self) -> bool {
+        match self {
+            TaskRunAttemptStatus::Aborted
+            | TaskRunAttemptStatus::Skipped => true,
+            TaskRunAttemptStatus::Pending
+            | TaskRunAttemptStatus::Running
+            | TaskRunAttemptStatus::Succeeded
+            | TaskRunAttemptStatus::Failed
+            | TaskRunAttemptStatus::TimedOut => false,
+        }
+    }
+
+}
+
 impl std::fmt::Display for TaskRunAttemptStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

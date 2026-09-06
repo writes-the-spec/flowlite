@@ -36,10 +36,11 @@ impl TaskRunMonitor {
     /// Settles a running task run as exactly one outcome, from its last attempt.
     ///
     /// The guards are exclusive — the last attempt has one status, and `settle_for_failed`
-    /// and `settle_for_running` split a failed one by whether a retry is left — so the
-    /// order here is not precedence. The bail replaces the exhaustive match this used to
-    /// be: a new TaskRunAttemptStatus no longer fails to compile, it reaches the bail at
-    /// runtime and `Poller::run` logs it with the row id.
+    /// and `settle_for_running` split a failed one by whether a retry is left — so unlike
+    /// JobRunMonitor the order here carries nothing, and matches that ladder only so the
+    /// two read alike. The bail replaces the exhaustive match this used to be: a new
+    /// TaskRunAttemptStatus no longer fails to compile, it reaches the bail at runtime and
+    /// `Poller::run` logs it with the row id.
     async fn handle_running_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         let task_run_attempts = self.get_task_run_attempts(task_run).await?;
@@ -50,11 +51,7 @@ impl TaskRunMonitor {
             return Ok(());
         }
 
-        if self.settle_for_aborted(task_run, last_task_run_attempt).await? {
-            return Ok(());
-        }
-
-        if self.settle_for_timed_out(task_run, last_task_run_attempt).await? {
+        if self.settle_for_running(task_run, last_task_run_attempt).await? {
             return Ok(());
         }
 
@@ -62,7 +59,11 @@ impl TaskRunMonitor {
             return Ok(());
         }
 
-        if self.settle_for_running(task_run, last_task_run_attempt).await? {
+        if self.settle_for_timed_out(task_run, last_task_run_attempt).await? {
+            return Ok(());
+        }
+
+        if self.settle_for_aborted(task_run, last_task_run_attempt).await? {
             return Ok(());
         }
 
@@ -84,69 +85,6 @@ impl TaskRunMonitor {
         }
 
         self.update_task_run_status(task_run, TaskRunStatus::Succeeded).await?;
-
-        Ok(true)
-    }
-
-    /// Aborts the task run, where both stop outcomes land: the attempt was killed
-    /// mid-flight, or skipped before its command started.
-    ///
-    /// A skipped attempt does **not** make the task run Skipped. It only ever sees Running
-    /// task runs, which had started and may already have left output, so Skipped would
-    /// claim nothing ran.
-    async fn settle_for_aborted(
-        &self,
-        task_run: &TaskRun,
-        last_task_run_attempt: Option<&TaskRunAttempt>,
-    ) -> anyhow::Result<bool> {
-
-        let stopped = Self::last_attempt_has_status(last_task_run_attempt, TaskRunAttemptStatus::Aborted)
-            || Self::last_attempt_has_status(last_task_run_attempt, TaskRunAttemptStatus::Skipped);
-
-        if !stopped {
-            return Ok(false);
-        }
-
-        self.update_task_run_status(task_run, TaskRunStatus::Aborted).await?;
-
-        Ok(true)
-    }
-
-    async fn settle_for_timed_out(
-        &self,
-        task_run: &TaskRun,
-        last_task_run_attempt: Option<&TaskRunAttempt>,
-    ) -> anyhow::Result<bool> {
-
-        if !Self::last_attempt_has_status(last_task_run_attempt, TaskRunAttemptStatus::TimedOut) {
-            return Ok(false);
-        }
-
-        self.update_task_run_status(task_run, TaskRunStatus::TimedOut).await?;
-
-        Ok(true)
-    }
-
-    /// Fails the task run once its attempts are used up.
-    async fn settle_for_failed(
-        &self,
-        task_run: &TaskRun,
-        last_task_run_attempt: Option<&TaskRunAttempt>,
-    ) -> anyhow::Result<bool> {
-
-        if !Self::last_attempt_has_status(last_task_run_attempt, TaskRunAttemptStatus::Failed) {
-            return Ok(false);
-        }
-
-        let Some(last_task_run_attempt) = last_task_run_attempt else {
-            return Ok(false);
-        };
-
-        if Self::has_retry_left(task_run, last_task_run_attempt) {
-            return Ok(false);
-        }
-
-        self.update_task_run_status(task_run, TaskRunStatus::Failed).await?;
 
         Ok(true)
     }
@@ -188,6 +126,68 @@ impl TaskRunMonitor {
 
             _ => Ok(false),
         }
+    }
+
+    /// Fails the task run once its attempts are used up.
+    async fn settle_for_failed(
+        &self,
+        task_run: &TaskRun,
+        last_task_run_attempt: Option<&TaskRunAttempt>,
+    ) -> anyhow::Result<bool> {
+
+        if !Self::last_attempt_has_status(last_task_run_attempt, TaskRunAttemptStatus::Failed) {
+            return Ok(false);
+        }
+
+        let Some(last_task_run_attempt) = last_task_run_attempt else {
+            return Ok(false);
+        };
+
+        if Self::has_retry_left(task_run, last_task_run_attempt) {
+            return Ok(false);
+        }
+
+        self.update_task_run_status(task_run, TaskRunStatus::Failed).await?;
+
+        Ok(true)
+    }
+
+    async fn settle_for_timed_out(
+        &self,
+        task_run: &TaskRun,
+        last_task_run_attempt: Option<&TaskRunAttempt>,
+    ) -> anyhow::Result<bool> {
+
+        if !Self::last_attempt_has_status(last_task_run_attempt, TaskRunAttemptStatus::TimedOut) {
+            return Ok(false);
+        }
+
+        self.update_task_run_status(task_run, TaskRunStatus::TimedOut).await?;
+
+        Ok(true)
+    }
+
+    /// Aborts the task run, where both stop outcomes land: the attempt was killed
+    /// mid-flight, or skipped before its command started.
+    ///
+    /// A skipped attempt does **not** make the task run Skipped. It only ever sees Running
+    /// task runs, which had started and may already have left output, so Skipped would
+    /// claim nothing ran.
+    async fn settle_for_aborted(
+        &self,
+        task_run: &TaskRun,
+        last_task_run_attempt: Option<&TaskRunAttempt>,
+    ) -> anyhow::Result<bool> {
+
+        let stopped = matches!(last_task_run_attempt, Some(attempt) if attempt.status.is_stopped());
+
+        if !stopped {
+            return Ok(false);
+        }
+
+        self.update_task_run_status(task_run, TaskRunStatus::Aborted).await?;
+
+        Ok(true)
     }
 
     fn last_attempt_has_status(
