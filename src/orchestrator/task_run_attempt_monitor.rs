@@ -42,9 +42,8 @@ impl TaskRunAttemptMonitor {
         }
     }
 
-    /// Tries each way a running attempt can finish, in order, and keeps its process for
-    /// the next pass if none of them fired. An attempt whose process is gone is aborted
-    /// before any of them is asked, since they all need a process to act on.
+    /// Tries each way a running attempt can finish, keeping its process for the next pass
+    /// if none fired. A missing process is handled first, since the rest need one.
     async fn handle_running_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         let task_run_attempt_child = self.children.remove(task_run_attempt.id).await;
@@ -96,8 +95,7 @@ impl TaskRunAttemptMonitor {
         Ok(())
     }
 
-    /// Kills the process of a stopped job run and aborts the attempt. Returns whether it
-    /// transitioned.
+    /// Kills the process of a stopped job run and aborts the attempt.
     async fn transition_to_aborted(
         &self,
         task_run_attempt: &TaskRunAttempt,
@@ -123,8 +121,7 @@ impl TaskRunAttemptMonitor {
         Ok(true)
     }
 
-    /// Kills the process that ran past its timeout and times the attempt out. Returns
-    /// whether it transitioned.
+    /// Kills the process that ran past its timeout and times the attempt out.
     async fn transition_to_timed_out(
         &self,
         task_run_attempt: &TaskRunAttempt,
@@ -151,7 +148,6 @@ impl TaskRunAttemptMonitor {
     }
 
     /// Finishes the attempt with the status its process exited with, once it has exited.
-    /// Returns whether it transitioned.
     async fn transition_to_exit_status(
         &self,
         task_run_attempt: &TaskRunAttempt,
@@ -174,8 +170,7 @@ impl TaskRunAttemptMonitor {
         Ok(true)
     }
 
-    /// Persists the output of an attempt none of the transitions finished and puts its
-    /// process back for the next pass.
+    /// Persists the output of an unfinished attempt and puts its process back.
     async fn keep_task_run_attempt_running(
         &self,
         task_run_attempt: &TaskRunAttempt,

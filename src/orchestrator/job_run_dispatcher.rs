@@ -8,9 +8,8 @@ use crate::signals::Signals;
 use chrono::Utc;
 
 
-/// Picks up pending job runs, oldest first, and settles each one as skipped, running,
-/// or still pending as their job's max_parallel_runs allows.
-/// Hands off to JobRunMonitor through the job run status only, never by calling it.
+/// Picks up pending job runs, oldest first, and settles each one as skipped, running or
+/// still pending. Hands off to JobRunMonitor through the job run status only.
 pub struct JobRunDispatcher {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
@@ -32,16 +31,9 @@ impl JobRunDispatcher {
         }
     }
 
-    /// Settles a pending job run into exactly one outcome: skipped if it was stopped
-    /// before it could run, running if its job is under its max_parallel_runs, and left
-    /// pending if it is not.
-    ///
-    /// The three are meant to be exhaustive over the reasons a pending job run can have,
-    /// and falling past all of them is treated as a bug rather than a quiet no-op. A guard
-    /// tightened on one outcome without a matching one added here would otherwise leave
-    /// the row pending forever, looking exactly like a job that is legitimately queued —
-    /// the one failure this service cannot distinguish by watching it. `Poller::run` logs
-    /// the error with the row id and moves on, so one such row cannot stop the loop.
+    /// Settles a pending job run as exactly one outcome. Falling past all three bails
+    /// rather than returning quietly: a row nobody handled looks exactly like one
+    /// legitimately queued, so silence is the one failure this service cannot spot.
     async fn handle_pending_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         if self.settle_as_skipped(job_run).await? {
@@ -63,8 +55,7 @@ impl JobRunDispatcher {
         )
     }
 
-    /// Skips the job run, and with it all of its task runs, none of which ever started,
-    /// if it was stopped before it could run. Returns whether this is what happened.
+    /// Skips the job run, and with it all of its task runs, none of which ever started.
     async fn settle_as_skipped(&self, job_run: &JobRun) -> anyhow::Result<bool> {
 
         let job_run_stopped = self.is_job_run_stopped(job_run).await?;
@@ -106,13 +97,10 @@ impl JobRunDispatcher {
         Ok(true)
     }
 
-    /// Sets the job run to running, which is what makes JobRunMonitor pick it up, unless
-    /// its job is already at its max_parallel_runs. Returns whether this is what happened;
-    /// a job run held back here is left to `settle_as_pending`.
+    /// Sets the job run to running, which is what makes JobRunMonitor pick it up.
     ///
-    /// This is the only place the limit is enforced. Submitting a job never rejects it,
-    /// so every path that creates a job run — the CLI, the scheduler, a rerun — queues
-    /// behind the same gate without having to know about it.
+    /// The only place max_parallel_runs is enforced: submitting never rejects a job, so
+    /// every path that creates a job run queues behind this gate without knowing about it.
     async fn settle_as_running(&self, job_run: &JobRun) -> anyhow::Result<bool> {
 
         let at_max_parallel_runs = self.is_job_at_max_parallel_runs(job_run).await?;
@@ -138,20 +126,9 @@ impl JobRunDispatcher {
         Ok(true)
     }
 
-    /// Leaves the job run pending, writing nothing, because its job is already at its
-    /// max_parallel_runs. Returns whether this is what happened.
-    ///
-    /// Having nothing to write is not the same as having nothing to say. This asks the
-    /// question `settle_as_running` just asked and claims the rows it turned down, so that
-    /// between them they account for every job run that was not stopped. That is what lets
-    /// `handle_pending_job_run` treat falling past all three as an error: without this
-    /// outcome, "left pending on purpose" and "left pending because nobody handled it"
-    /// would be the same silence.
-    ///
-    /// The repeated question costs a second `is_job_at_max_parallel_runs` for a held row,
-    /// which is a count over that job's running job runs. Passing the answer down from the
-    /// caller instead would save it, at the price of the guard no longer living with the
-    /// outcome it decides.
+    /// Leaves the job run pending, writing nothing. Re-asks the question `settle_as_running`
+    /// just asked, at the cost of a second count, so that it claims the rows that one
+    /// turned down and the two of them together account for every job run not stopped.
     async fn settle_as_pending(&self, job_run: &JobRun) -> anyhow::Result<bool> {
 
         self.is_job_at_max_parallel_runs(job_run).await

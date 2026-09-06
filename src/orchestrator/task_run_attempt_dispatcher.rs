@@ -10,8 +10,8 @@ use crate::signals::Signals;
 use chrono::{TimeDelta, Utc};
 
 
-/// Picks up pending task run attempts and either skips them or spawns their command and
-/// sets them to running. Hands the child process to TaskRunAttemptMonitor through
+/// Picks up pending task run attempts and settles each one as skipped, or as running by
+/// spawning its command. Hands the child process to TaskRunAttemptMonitor through
 /// TaskRunAttemptChildren, and the attempt itself through its status, never by calling
 /// it.
 pub struct TaskRunAttemptDispatcher {
@@ -38,23 +38,29 @@ impl TaskRunAttemptDispatcher {
         }
     }
 
-    /// Moves a pending attempt on: skipped if its job run was stopped before its command
-    /// could start, running otherwise. There is nothing else to wait for, the task run has
-    /// already resolved its dependencies.
+    /// Settles a pending attempt as exactly one outcome. No `settle_as_pending` here:
+    /// an attempt has nothing left to wait for, so `settle_as_running` takes every one
+    /// `settle_as_skipped` did not, and the bail is unreachable until a guard is added
+    /// to it.
     async fn handle_pending_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
-        if self.transition_to_skipped(task_run_attempt).await? {
+        if self.settle_as_skipped(task_run_attempt).await? {
             return Ok(());
         }
 
-        self.transition_to_running(task_run_attempt).await?;
+        if self.settle_as_running(task_run_attempt).await? {
+            return Ok(());
+        }
 
-        Ok(())
+        anyhow::bail!(
+            "Task run attempt {} settled as nothing: its job run was not stopped and it \
+             was not started",
+            task_run_attempt.id,
+        )
     }
 
-    /// Skips the attempt if its job run was stopped, in which case its command never
-    /// started. Returns whether it transitioned.
-    async fn transition_to_skipped(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
+    /// Skips the attempt if its job run was stopped, so its command never started.
+    async fn settle_as_skipped(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
 
         let job_run_stopped = self.is_job_run_stopped(task_run_attempt).await?;
 
@@ -85,12 +91,11 @@ impl TaskRunAttemptDispatcher {
     }
 
     /// Spawns the command of the attempt, hands the child process over and sets the
-    /// attempt to running, which is what makes TaskRunAttemptMonitor pick it up. Returns
-    /// whether it transitioned; an attempt whose job run was not stopped always does.
+    /// attempt to running, which is what makes TaskRunAttemptMonitor pick it up.
     ///
     /// The child has to be in TaskRunAttemptChildren before the status is written, or
     /// the monitor sees a running attempt with no process and aborts it.
-    async fn transition_to_running(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
+    async fn settle_as_running(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
 
         let task_run = self.get_task_run(task_run_attempt).await?;
 

@@ -32,13 +32,11 @@ impl JobRunMonitor {
 
     /// Finishes the job run once its task runs say it is done.
     ///
-    /// **The order of these transitions is the job run's status precedence, and changing
-    /// it changes what a mixed set of task runs reports.** A task run that is still going
-    /// holds every one of them off; after that the worst outcome wins, so that a job run
-    /// with one aborted and one failed task run reports the abort rather than the failure.
+    /// **This call order is the status precedence and the only thing encoding it**, since
+    /// each guard only asks whether its own status is present. Worst outcome first, so a
+    /// job run with one aborted and one failed task run reports the abort.
     ///
-    /// None of these transitions writes Skipped. A Running job run has started, so a stop
-    /// aborts it; only JobRunDispatcher skips a job run, and only one that never started.
+    /// Nothing here writes Skipped: a Running job run has started, so a stop aborts it.
     async fn handle_running_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         let task_runs = self.get_task_runs(job_run).await?;
@@ -68,9 +66,8 @@ impl JobRunMonitor {
         Ok(())
     }
 
-    /// Aborts the job run if any of its task runs was killed mid-flight. Returns whether
-    /// it transitioned. This outranks every failure; `transition_to_aborted_after_stop`
-    /// writes the same status from the other stop outcome, but below them.
+    /// Aborts the job run if any of its task runs was killed mid-flight. Outranks every
+    /// failure, unlike `transition_to_aborted_after_stop`, which writes the same status.
     async fn transition_to_aborted(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
         if !Self::has_task_run_with_status(task_runs, TaskRunStatus::Aborted) {
@@ -83,7 +80,7 @@ impl JobRunMonitor {
     }
 
     /// Times the job run out if any of its task runs ran past its timeout with no retry
-    /// left. Returns whether it transitioned.
+    /// left.
     async fn transition_to_timed_out(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
         if !Self::has_task_run_with_status(task_runs, TaskRunStatus::TimedOut) {
@@ -95,8 +92,7 @@ impl JobRunMonitor {
         Ok(true)
     }
 
-    /// Fails the job run if any of its task runs failed with no retry left. Returns
-    /// whether it transitioned.
+    /// Fails the job run if any of its task runs failed with no retry left.
     async fn transition_to_failed(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
         if !Self::has_task_run_with_status(task_runs, TaskRunStatus::Failed) {
@@ -109,19 +105,11 @@ impl JobRunMonitor {
     }
 
     /// Aborts the job run whose task runs were skipped out from under it by a stop.
-    /// Returns whether it transitioned.
     ///
-    /// This ranks below the three failure transitions for a reason: a skipped task run
-    /// means either a stop or a dependency that did not succeed, and in the second case
-    /// that dependency is itself failed, timed out or aborted — so by the time this is
-    /// asked, nothing has failed, and a skip can only mean the run was stopped. Keeping it
-    /// here rather than folding it into `transition_to_aborted` is what makes a real
-    /// failure outrank a stop.
-    ///
-    /// It writes Aborted, not Skipped: this monitor only ever sees Running job runs, so
-    /// the job run had already started — its earlier task runs may well have executed —
-    /// and Skipped would claim nothing ever ran. A job run stopped before it started is
-    /// Skipped by JobRunDispatcher instead.
+    /// A skipped task run means a stop or a dependency that did not succeed, and that
+    /// dependency would itself be failed, timed out or aborted — so once the three failure
+    /// transitions have not matched, only a stop is left. Kept below them, rather than
+    /// folded into `transition_to_aborted`, so a real failure outranks a stop.
     async fn transition_to_aborted_after_stop(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
         if !Self::has_task_run_with_status(task_runs, TaskRunStatus::Skipped) {
@@ -134,8 +122,7 @@ impl JobRunMonitor {
     }
 
     /// Succeeds the job run, which is what is left once no task run reports anything
-    /// worse. Returns whether it transitioned; reaching here it always does, and a job
-    /// run with no task runs at all reaches it immediately.
+    /// worse — including a job run with no task runs at all.
     async fn transition_to_succeeded(&self, job_run: &JobRun) -> anyhow::Result<bool> {
 
         self.update_job_run_status(job_run, JobRunStatus::Succeeded).await?;
@@ -143,8 +130,8 @@ impl JobRunMonitor {
         Ok(true)
     }
 
-    /// Whether a task run of the job run has yet to reach a terminal status, which is
-    /// what keeps the job run Running however bad the statuses of the others already are.
+    /// Whether any task run has yet to finish, which keeps the job run Running however
+    /// bad the others already look.
     fn has_unfinished_task_run(task_runs: &[TaskRun]) -> bool {
 
         task_runs.iter().any(|task_run| matches!(
@@ -295,10 +282,8 @@ mod tests {
         assert!(!JobRunMonitor::has_unfinished_task_run(&[]));
     }
 
-    /// The four failure guards are asked in the order Aborted, TimedOut, Failed, Skipped
-    /// by handle_running_job_run, so a set matching more than one of them reports the
-    /// first. These assert the guards themselves match; the order they are asked in lives
-    /// in handle_running_job_run.
+    /// These assert the guards match; the order they are asked in, which is the
+    /// precedence, lives in handle_running_job_run and no test reaches it.
     #[test]
     fn an_aborted_task_run_is_seen_beside_a_failed_one() {
         let task_runs = vec![

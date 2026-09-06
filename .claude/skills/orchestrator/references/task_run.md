@@ -16,12 +16,18 @@
 
 ## Dispatcher: Pending → Running / Skipped
 
-`TaskRunDispatcher` ([src/orchestrator/task_run_dispatcher.rs](../../../../src/orchestrator/task_run_dispatcher.rs)) polls **all** `Pending` task runs, whatever their job run's status, on a signal wake-up or its one-second interval, whichever comes first. It asks two questions per row, each of which owns its own guard and returns whether it transitioned:
+`TaskRunDispatcher` ([src/orchestrator/task_run_dispatcher.rs](../../../../src/orchestrator/task_run_dispatcher.rs)) polls **all** `Pending` task runs, whatever their job run's status, on a signal wake-up or its one-second interval, whichever comes first. It settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened:
 
-1. `transition_to_skipped` → `Skipped` if the **job run was stopped**, or if **any dependency finished but didn't succeed** (`Failed`, `Skipped`, `Aborted`, `TimedOut`). Either way the task run can never run.
-2. `transition_to_running` → `Running` with `started_at = now`, once **all dependencies have `Succeeded`**. Otherwise it transitions nothing and the row stays `Pending` for the next tick.
+1. `settle_as_skipped` → `Skipped` if the **job run was stopped**, or if **any dependency finished but didn't succeed** (`Failed`, `Skipped`, `Aborted`, `TimedOut`). Either way the task run can never run.
+2. `settle_as_running` → `Running` with `started_at = now`, once **all dependencies have `Succeeded`**.
+3. `settle_as_pending` → **any dependency still `Pending` or `Running`** → the row stays `Pending` for the next tick. **It writes nothing, and exists to say so.**
+4. Past all three → `anyhow::bail!`.
 
-The two guards short-circuit in that order, so a stopped job run costs one query and never loads the dependencies.
+Step 1's two guards short-circuit in order, so a stopped job run costs one query and never loads the dependencies.
+
+Step 3 is what makes step 4 possible. By the time it is asked, step 1 has ruled out every dependency that finished without succeeding, so each one is succeeded, pending or running — and step 3 claims exactly the rows step 2 turned down. Without it, a task run nobody handled would sit at `Pending` looking exactly like one legitimately waiting on a dependency, which is the one failure this service cannot spot by watching it.
+
+**The bail has a false-positive window.** Each outcome loads the dependencies for itself, so the three can see different snapshots: a dependency that fails between the first load and the last leaves a set that is neither all-succeeded nor still-running, and the bail fires on an ordinary state. It clears on the next pass, where `settle_as_skipped` sees the failure and claims the row. Loading the dependencies once in `handle_pending_task_run` and passing them down would close the window and drop two queries per row, at the cost of the guards no longer standing on their own.
 
 Dependencies come from `task_run.depends_on` — the list copied off `task.depends_on` when the run was submitted — resolved to the task runs of the same job run by `get_dependent_task_runs`. A task with no dependencies falls straight through to step 3, since `all()` over an empty list is true.
 
@@ -53,4 +59,4 @@ Because the decision comes from the attempt rows alone, a stop landing *between*
 - **A new `TaskRunAttemptStatus` needs an arm** in `handle_running_task_run`, whose match over the last attempt's status is exhaustive. That exhaustiveness is the reason this monitor keeps a `match` rather than the dispatchers' ordered `transition_to_*` chain: a chain of boolean guards would let a new status fall through every one of them and leave the task run `Running` forever, where the match refuses to compile.
 - **A new terminal `TaskRunStatus` needs three edits**: the failure list in `did_any_dependent_task_run_finish_but_not_succeed` (or downstream task runs wait forever), a transition in `JobRunMonitor::handle_running_job_run`, at the right rank, and a badge arm in `templates/routes/job_runs/job_run_id/route.html`.
 - **This monitor never writes `Skipped`.** It only ever visits `Running` task runs, which have started; a stop therefore aborts them. Only `TaskRunDispatcher` skips a task run, and only one that never started.
-- **Terminal statuses set `finished_at`** — `TaskRunMonitor::update_task_run_status` for the ones it derives, `TaskRunDispatcher::transition_to_skipped` for a skip.
+- **Terminal statuses set `finished_at`** — `TaskRunMonitor::update_task_run_status` for the ones it derives, `TaskRunDispatcher::settle_as_skipped` for a skip.

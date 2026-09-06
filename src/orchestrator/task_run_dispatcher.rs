@@ -7,8 +7,8 @@ use crate::signals::Signals;
 use chrono::Utc;
 
 
-/// Picks up pending task runs and either skips them or sets them to running.
-/// Hands off to TaskRunMonitor through the task run status only, never by calling it.
+/// Picks up pending task runs and settles each one as skipped, running or still pending
+/// on a dependency. Hands off to TaskRunMonitor through the task run status only.
 pub struct TaskRunDispatcher {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
@@ -30,23 +30,38 @@ impl TaskRunDispatcher {
         }
     }
 
-    /// Moves a pending task run on: skipped if its job run was stopped or a task run it
-    /// depends on did not succeed, running once all of them have succeeded, and left
-    /// pending while any of them is still on its way there.
+    /// Settles a pending task run as exactly one outcome. Falling past all three bails
+    /// rather than returning quietly: a row nobody handled looks exactly like one
+    /// legitimately waiting on a dependency.
+    ///
+    /// Each outcome loads the dependencies itself, so a dependency failing mid-pass can
+    /// leave a set that is neither all-succeeded nor still-running and bail on an ordinary
+    /// state. It clears next pass, when `settle_as_skipped` claims the row.
     async fn handle_pending_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
-        if self.transition_to_skipped(task_run).await? {
+        if self.settle_as_skipped(task_run).await? {
             return Ok(());
         }
 
-        self.transition_to_running(task_run).await?;
+        if self.settle_as_running(task_run).await? {
+            return Ok(());
+        }
 
-        Ok(())
+        if self.settle_as_pending(task_run).await? {
+            return Ok(());
+        }
+
+        anyhow::bail!(
+            "Task run {} settled as nothing: its job run was not stopped, no task run it \
+             depends on failed, they have not all succeeded, and none of them is still \
+             running",
+            task_run.id,
+        )
     }
 
-    /// Skips the task run if its job run was stopped or a task run it depends on did not
-    /// succeed, in which case it will never be able to run. Returns whether it transitioned.
-    async fn transition_to_skipped(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
+    /// Skips the task run if its job run was stopped or a dependency did not succeed,
+    /// either of which means it can never run.
+    async fn settle_as_skipped(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
         let must_skip = self.is_job_run_stopped(task_run).await?
             || self.did_any_dependent_task_run_finish_but_not_succeed(task_run).await?;
@@ -77,9 +92,8 @@ impl TaskRunDispatcher {
     }
 
     /// Sets the task run to running, which is what makes TaskRunMonitor pick it up, once
-    /// every task run it depends on has succeeded. Returns whether it transitioned; a task
-    /// run still waiting on a dependency stays pending and is reconsidered on every pass.
-    async fn transition_to_running(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
+    /// every task run it depends on has succeeded.
+    async fn settle_as_running(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
         let all_dependent_task_runs_succeeded = self.have_all_dependent_task_runs_succeeded(task_run).await?;
 
@@ -106,6 +120,14 @@ impl TaskRunDispatcher {
         self.signals.publish();
 
         Ok(true)
+    }
+
+    /// Leaves the task run pending, writing nothing. `settle_as_skipped` has already ruled
+    /// out every dependency that finished without succeeding, so what is left here is
+    /// exactly the rows `settle_as_running` turned down.
+    async fn settle_as_pending(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
+
+        self.has_unfinished_dependent_task_run(task_run).await
     }
 
     async fn get_pending_task_runs(&self) -> anyhow::Result<Vec<TaskRun>> {
@@ -158,6 +180,19 @@ impl TaskRunDispatcher {
         ));
 
         Ok(any_failed)
+
+    }
+
+    async fn has_unfinished_dependent_task_run(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
+
+        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
+
+        let any_unfinished = dependent_task_runs.iter().any(|tr| matches!(
+            tr.status,
+            TaskRunStatus::Pending | TaskRunStatus::Running,
+        ));
+
+        Ok(any_unfinished)
 
     }
 

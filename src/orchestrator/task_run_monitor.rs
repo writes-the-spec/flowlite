@@ -43,9 +43,8 @@ impl TaskRunMonitor {
             return self.start_task_run_attempt(task_run, 1).await;
         };
 
-        // The match is exhaustive on purpose: a new TaskRunAttemptStatus must be given a
-        // transition here rather than falling into a catch-all that leaves the task run
-        // Running forever.
+        // Exhaustive on purpose: a new TaskRunAttemptStatus must be given a transition
+        // here rather than falling through and leaving the task run Running forever.
         match last_task_run_attempt.status {
             // The attempt services still own the attempt, so the task run stays Running.
             TaskRunAttemptStatus::Pending | TaskRunAttemptStatus::Running => Ok(()),
@@ -103,14 +102,12 @@ impl TaskRunMonitor {
         Utc::now() < finished_at + TimeDelta::seconds(task_run.retry_delay as i64)
     }
 
-    /// Aborts the task run, which is where both of the stop outcomes land: its attempt was
-    /// killed mid-flight, or it was skipped before its command started.
+    /// Aborts the task run, where both stop outcomes land: the attempt was killed
+    /// mid-flight, or skipped before its command started.
     ///
-    /// A skipped attempt does **not** make the task run Skipped. This monitor only ever
-    /// sees Running task runs, so the task run had already started — possibly with earlier
-    /// attempts that ran and left output — and Skipped would claim nothing ever ran.
-    /// TaskRunAttemptDispatcher skips an attempt for one reason only, the job run being
-    /// stopped, so a skipped attempt always means this task run was stopped after starting.
+    /// A skipped attempt does **not** make the task run Skipped. It only ever sees Running
+    /// task runs, which had started and may already have left output, so Skipped would
+    /// claim nothing ran.
     async fn transition_to_aborted(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         self.update_task_run_status(task_run, TaskRunStatus::Aborted).await
@@ -121,8 +118,8 @@ impl TaskRunMonitor {
         self.update_task_run_status(task_run, TaskRunStatus::TimedOut).await
     }
 
-    /// Inserts the pending attempt TaskRunAttemptDispatcher clears to run. This writes no
-    /// task run status: the task run stays Running for the whole retry loop.
+    /// Inserts the pending attempt TaskRunAttemptDispatcher clears to run. Writes no task
+    /// run status: the task run stays Running for the whole retry loop.
     async fn start_task_run_attempt(&self, task_run: &TaskRun, attempt: u32) -> anyhow::Result<()> {
 
         self.crud.insert_task_run_attempt(
