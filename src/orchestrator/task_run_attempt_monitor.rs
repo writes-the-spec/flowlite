@@ -42,36 +42,48 @@ impl TaskRunAttemptMonitor {
         }
     }
 
-    /// Tries each way a running attempt can finish, keeping its process for the next pass
-    /// if none fired. A missing process is handled first, since the rest need one.
+    /// Settles a running attempt as exactly one outcome. A missing process is settled
+    /// first, since every outcome below needs one to act on.
+    ///
+    /// The guards are exclusive, so the order here is not precedence — except that a stop
+    /// is asked before the timeout, which decides only what a process that is past both
+    /// gets recorded as.
     async fn handle_running_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         let task_run_attempt_child = self.children.remove(task_run_attempt.id).await;
 
         let Some(mut task_run_attempt_child) = task_run_attempt_child else {
-            self.transition_to_aborted_without_child(task_run_attempt).await?;
+            self.settle_for_aborted_without_child(task_run_attempt).await?;
             return Ok(());
         };
 
-        if self.transition_to_aborted(task_run_attempt, &mut task_run_attempt_child).await? {
+        if self.settle_for_aborted(task_run_attempt, &mut task_run_attempt_child).await? {
             return Ok(());
         }
 
-        if self.transition_to_timed_out(task_run_attempt, &mut task_run_attempt_child).await? {
+        if self.settle_for_timed_out(task_run_attempt, &mut task_run_attempt_child).await? {
             return Ok(());
         }
 
-        if self.transition_to_exit_status(task_run_attempt, &mut task_run_attempt_child).await? {
+        if self.settle_for_exit_status(task_run_attempt, &mut task_run_attempt_child).await? {
             return Ok(());
         }
 
-        self.keep_task_run_attempt_running(task_run_attempt, task_run_attempt_child).await
+        if self.settle_for_running(task_run_attempt, task_run_attempt_child).await? {
+            return Ok(());
+        }
+
+        anyhow::bail!(
+            "Task run attempt {} settled as nothing: its job run was not stopped, it was \
+             not past its timeout, its process had not exited, and it was not kept running",
+            task_run_attempt.id,
+        )
     }
 
     /// Aborts an attempt whose process is not in TaskRunAttemptChildren: it was spawned
     /// by an earlier run of this program, so there is nothing left to wait for and its
     /// output is whatever was persisted before. This is the restart path.
-    async fn transition_to_aborted_without_child(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
+    async fn settle_for_aborted_without_child(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         self.crud.update_task_run_attempts(
             &*self.conn_pool,
@@ -96,7 +108,7 @@ impl TaskRunAttemptMonitor {
     }
 
     /// Kills the process of a stopped job run and aborts the attempt.
-    async fn transition_to_aborted(
+    async fn settle_for_aborted(
         &self,
         task_run_attempt: &TaskRunAttempt,
         task_run_attempt_child: &mut TaskRunAttemptChild,
@@ -122,7 +134,7 @@ impl TaskRunAttemptMonitor {
     }
 
     /// Kills the process that ran past its timeout and times the attempt out.
-    async fn transition_to_timed_out(
+    async fn settle_for_timed_out(
         &self,
         task_run_attempt: &TaskRunAttempt,
         task_run_attempt_child: &mut TaskRunAttemptChild,
@@ -148,7 +160,7 @@ impl TaskRunAttemptMonitor {
     }
 
     /// Finishes the attempt with the status its process exited with, once it has exited.
-    async fn transition_to_exit_status(
+    async fn settle_for_exit_status(
         &self,
         task_run_attempt: &TaskRunAttempt,
         task_run_attempt_child: &mut TaskRunAttemptChild,
@@ -170,12 +182,14 @@ impl TaskRunAttemptMonitor {
         Ok(true)
     }
 
-    /// Persists the output of an unfinished attempt and puts its process back.
-    async fn keep_task_run_attempt_running(
+    /// Leaves the attempt running: persists what its process has written so far and puts
+    /// the process back for the next pass. Takes every attempt the outcomes above did not,
+    /// so the bail is unreachable until one of them grows a guard.
+    async fn settle_for_running(
         &self,
         task_run_attempt: &TaskRunAttempt,
         mut task_run_attempt_child: TaskRunAttemptChild,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
 
         Self::read_output(&mut task_run_attempt_child).await;
 
@@ -183,7 +197,7 @@ impl TaskRunAttemptMonitor {
 
         self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
 
-        Ok(())
+        Ok(true)
     }
 
     fn is_task_run_attempt_timed_out(task_run_attempt_child: &TaskRunAttemptChild) -> bool {

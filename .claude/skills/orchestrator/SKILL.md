@@ -43,6 +43,17 @@ Three consequences:
 
 The one shared piece of memory is `TaskRunAttemptChildren` ([src/orchestrator/task_run_attempt_children.rs](../../../src/orchestrator/task_run_attempt_children.rs)), which the two attempt services use to hand child processes over — see [task_run_attempt.md](references/task_run_attempt.md).
 
+## The settle chain, and why its order matters
+
+Every service settles a row by asking its outcomes in order — `settle_as_*` in the dispatchers, `settle_for_*` in the monitors — each returning whether it is what happened, and bailing past the last one rather than returning quietly. Naming the outcome that writes nothing is the point of the shape: a row left alone on purpose and a row nobody handled are otherwise the same silence.
+
+**Read the call order as part of the logic.** Each guard asks only about its own case, deliberately — a shared guard covering several outcomes reads worse at every call site than the repetition does — so where a call sits is what separates it from the others, and neither the compiler nor the test suite pins it. Two rules recur:
+
+- **The outcome that leaves a row alone comes before any that finishes it**, wherever work can still be in flight. `JobRunMonitor::settle_for_running` ahead of its four failure outcomes is the sharp case: behind them, a job run with one failed task run and one still executing gets finished early, and finishing is irreversible because a monitor only ever visits `Running` rows.
+- **Outcomes that can match at once rank worst first.** A job run whose task runs are one aborted and one failed reports the abort, because `settle_for_aborted` is asked before `settle_for_failed`.
+
+Reordering those lines compiles and passes the suite. See [job_run.md](references/job_run.md) for the full ladder.
+
 ## Stopping a run
 
 A stop is an insert-only `job_run_stop` row, never a status update. `JobRunDispatcher`, `TaskRunDispatcher`, `TaskRunAttemptDispatcher` and `TaskRunAttemptMonitor` each check for it on every pass — a signal wake-up or the one-second interval, whichever came first — and finish only what they own: rows that never started go `Skipped`, an in-flight process is killed and its attempt goes `Aborted`. A stopped job run's status is therefore derived like any other — from its task runs, once they have all settled.

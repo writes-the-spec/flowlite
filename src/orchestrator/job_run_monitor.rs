@@ -30,47 +30,82 @@ impl JobRunMonitor {
         }
     }
 
-    /// Finishes the job run once its task runs say it is done.
+    /// Settles a running job run as exactly one outcome, from its task runs alone.
     ///
-    /// **This call order is the status precedence and the only thing encoding it**, since
-    /// each guard only asks whether its own status is present. Worst outcome first, so a
-    /// job run with one aborted and one failed task run reports the abort.
+    /// **The order of these calls is the logic, not a formatting choice**, since each guard
+    /// asks only whether its own status is present:
+    ///
+    /// - `settle_for_running` has to precede the failure outcomes, or a job run holding one
+    ///   failed task run and one still executing gets finished while its work carries on,
+    ///   and finishing is irreversible — this monitor only ever visits Running rows.
+    /// - The four failure outcomes can all match at once, so they rank worst first: one
+    ///   aborted and one failed task run reports the abort.
     ///
     /// Nothing here writes Skipped: a Running job run has started, so a stop aborts it.
     async fn handle_running_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         let task_runs = self.get_task_runs(job_run).await?;
 
-        if Self::has_unfinished_task_run(&task_runs) {
+        if self.settle_for_succeeded(job_run, &task_runs).await? {
             return Ok(());
         }
 
-        if self.transition_to_aborted(job_run, &task_runs).await? {
+        if self.settle_for_running(job_run, &task_runs).await? {
             return Ok(());
         }
 
-        if self.transition_to_timed_out(job_run, &task_runs).await? {
+        if self.settle_for_aborted(job_run, &task_runs).await? {
             return Ok(());
         }
 
-        if self.transition_to_failed(job_run, &task_runs).await? {
+        if self.settle_for_timed_out(job_run, &task_runs).await? {
             return Ok(());
         }
 
-        if self.transition_to_aborted_after_stop(job_run, &task_runs).await? {
+        if self.settle_for_failed(job_run, &task_runs).await? {
             return Ok(());
         }
 
-        self.transition_to_succeeded(job_run).await?;
+        if self.settle_for_aborted_after_stop(job_run, &task_runs).await? {
+            return Ok(());
+        }
 
-        Ok(())
+        anyhow::bail!(
+            "Job run {} settled as nothing: all of its task runs finished, none of them \
+             failed, timed out, was aborted or was skipped, and they did not all succeed",
+            job_run.id,
+        )
     }
 
-    /// Aborts the job run if any of its task runs was killed mid-flight. Outranks every
-    /// failure, unlike `transition_to_aborted_after_stop`, which writes the same status.
-    async fn transition_to_aborted(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+    /// Succeeds the job run once every task run has succeeded — including a job run with
+    /// no task runs at all, which `all` over an empty list settles here immediately.
+    async fn settle_for_succeeded(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
-        if !Self::has_task_run_with_status(task_runs, TaskRunStatus::Aborted) {
+        let all_succeeded = task_runs.iter().all(|task_run| task_run.status == TaskRunStatus::Succeeded);
+
+        if !all_succeeded {
+            return Ok(false);
+        }
+
+        self.update_job_run_status(job_run, JobRunStatus::Succeeded).await?;
+
+        Ok(true)
+    }
+
+    /// Leaves the job run running, writing nothing, while any task run of it is still
+    /// pending or running.
+    async fn settle_for_running(&self, _job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+
+        Ok(task_runs.iter().any(|task_run| !task_run.status.is_finished()))
+    }
+
+    /// Aborts the job run if a task run of it was killed mid-flight. Outranks every
+    /// failure below, and writes the same status as `settle_for_aborted_after_stop`.
+    async fn settle_for_aborted(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+
+        let any_aborted = task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Aborted);
+
+        if !any_aborted {
             return Ok(false);
         }
 
@@ -79,11 +114,12 @@ impl JobRunMonitor {
         Ok(true)
     }
 
-    /// Times the job run out if any of its task runs ran past its timeout with no retry
-    /// left.
-    async fn transition_to_timed_out(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+    /// Times the job run out if a task run of it ran past its timeout with no retry left.
+    async fn settle_for_timed_out(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
-        if !Self::has_task_run_with_status(task_runs, TaskRunStatus::TimedOut) {
+        let any_timed_out = task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::TimedOut);
+
+        if !any_timed_out {
             return Ok(false);
         }
 
@@ -92,10 +128,12 @@ impl JobRunMonitor {
         Ok(true)
     }
 
-    /// Fails the job run if any of its task runs failed with no retry left.
-    async fn transition_to_failed(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+    /// Fails the job run if a task run of it failed with no retry left.
+    async fn settle_for_failed(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
-        if !Self::has_task_run_with_status(task_runs, TaskRunStatus::Failed) {
+        let any_failed = task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Failed);
+
+        if !any_failed {
             return Ok(false);
         }
 
@@ -106,42 +144,20 @@ impl JobRunMonitor {
 
     /// Aborts the job run whose task runs were skipped out from under it by a stop.
     ///
-    /// A skipped task run means a stop or a dependency that did not succeed, and that
-    /// dependency would itself be failed, timed out or aborted — so once the three failure
-    /// transitions have not matched, only a stop is left. Kept below them, rather than
-    /// folded into `transition_to_aborted`, so a real failure outranks a stop.
-    async fn transition_to_aborted_after_stop(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+    /// A skip means a stop or a dependency that did not succeed, and such a dependency
+    /// would itself be failed, timed out or aborted — so once the three failure outcomes
+    /// have not matched, only a stop is left. Kept below them so a failure outranks a stop.
+    async fn settle_for_aborted_after_stop(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
-        if !Self::has_task_run_with_status(task_runs, TaskRunStatus::Skipped) {
+        let any_skipped = task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Skipped);
+
+        if !any_skipped {
             return Ok(false);
         }
 
         self.update_job_run_status(job_run, JobRunStatus::Aborted).await?;
 
         Ok(true)
-    }
-
-    /// Succeeds the job run, which is what is left once no task run reports anything
-    /// worse — including a job run with no task runs at all.
-    async fn transition_to_succeeded(&self, job_run: &JobRun) -> anyhow::Result<bool> {
-
-        self.update_job_run_status(job_run, JobRunStatus::Succeeded).await?;
-
-        Ok(true)
-    }
-
-    /// Whether any task run has yet to finish, which keeps the job run Running however
-    /// bad the others already look.
-    fn has_unfinished_task_run(task_runs: &[TaskRun]) -> bool {
-
-        task_runs.iter().any(|task_run| matches!(
-            task_run.status,
-            TaskRunStatus::Pending | TaskRunStatus::Running,
-        ))
-    }
-
-    fn has_task_run_with_status(task_runs: &[TaskRun], status: TaskRunStatus) -> bool {
-        task_runs.iter().any(|task_run| task_run.status == status)
     }
 
     async fn get_task_runs(&self, job_run: &JobRun) -> anyhow::Result<Vec<TaskRun>> {
@@ -224,115 +240,3 @@ impl Service for JobRunMonitor {
 }
 
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::crud::task_run::TaskRunStatus;
-
-    fn task_run(status: TaskRunStatus) -> TaskRun {
-        TaskRun {
-            id: 1,
-            job_run_id: 1,
-            job_id: "job".to_string(),
-            task_id: "task".to_string(),
-            command: "true".to_string(),
-            depends_on: sqlx::types::Json(Vec::new()),
-            timeout: 3600,
-            max_retries: 0,
-            retry_delay: 60,
-            created_at: Utc::now(),
-            started_at: None,
-            finished_at: None,
-            status,
-        }
-    }
-
-    #[test]
-    fn a_running_task_run_keeps_the_job_run_running() {
-        let task_runs = vec![
-            task_run(TaskRunStatus::Succeeded),
-            task_run(TaskRunStatus::Running),
-        ];
-
-        assert!(JobRunMonitor::has_unfinished_task_run(&task_runs));
-    }
-
-    #[test]
-    fn a_pending_task_run_keeps_the_job_run_running() {
-        let task_runs = vec![
-            task_run(TaskRunStatus::Failed),
-            task_run(TaskRunStatus::Pending),
-        ];
-
-        assert!(JobRunMonitor::has_unfinished_task_run(&task_runs));
-    }
-
-    #[test]
-    fn task_runs_that_all_finished_hold_nothing_off() {
-        let task_runs = vec![
-            task_run(TaskRunStatus::Succeeded),
-            task_run(TaskRunStatus::Skipped),
-        ];
-
-        assert!(!JobRunMonitor::has_unfinished_task_run(&task_runs));
-    }
-
-    #[test]
-    fn a_job_run_with_no_task_runs_holds_nothing_off() {
-        assert!(!JobRunMonitor::has_unfinished_task_run(&[]));
-    }
-
-    /// These assert the guards match; the order they are asked in, which is the
-    /// precedence, lives in handle_running_job_run and no test reaches it.
-    #[test]
-    fn an_aborted_task_run_is_seen_beside_a_failed_one() {
-        let task_runs = vec![
-            task_run(TaskRunStatus::Failed),
-            task_run(TaskRunStatus::Aborted),
-        ];
-
-        assert!(JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::Aborted));
-        assert!(JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::Failed));
-    }
-
-    #[test]
-    fn a_timed_out_task_run_is_seen_beside_a_failed_one() {
-        let task_runs = vec![
-            task_run(TaskRunStatus::Failed),
-            task_run(TaskRunStatus::TimedOut),
-        ];
-
-        assert!(JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::TimedOut));
-        assert!(JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::Failed));
-    }
-
-    #[test]
-    fn a_set_with_no_failure_matches_no_failure_guard() {
-        let task_runs = vec![
-            task_run(TaskRunStatus::Succeeded),
-            task_run(TaskRunStatus::Skipped),
-        ];
-
-        assert!(!JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::Aborted));
-        assert!(!JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::TimedOut));
-        assert!(!JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::Failed));
-        assert!(JobRunMonitor::has_task_run_with_status(&task_runs, TaskRunStatus::Skipped));
-    }
-
-    #[test]
-    fn task_runs_that_all_succeeded_match_no_guard_at_all() {
-        let task_runs = vec![
-            task_run(TaskRunStatus::Succeeded),
-            task_run(TaskRunStatus::Succeeded),
-        ];
-
-        for status in [
-            TaskRunStatus::Aborted,
-            TaskRunStatus::TimedOut,
-            TaskRunStatus::Failed,
-            TaskRunStatus::Skipped,
-        ] {
-            assert!(!JobRunMonitor::has_task_run_with_status(&task_runs, status));
-        }
-    }
-}

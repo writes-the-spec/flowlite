@@ -14,6 +14,25 @@ pub enum TaskRunStatus {
     TimedOut,
 }
 
+impl TaskRunStatus {
+
+    /// Whether the task run has settled and will not change again. Matched exhaustively
+    /// on purpose: a new status has to say which side of this line it falls on, or it
+    /// stops compiling.
+    pub fn is_finished(&self) -> bool {
+        match self {
+            TaskRunStatus::Pending
+            | TaskRunStatus::Running => false,
+            TaskRunStatus::Succeeded
+            | TaskRunStatus::Failed
+            | TaskRunStatus::Skipped
+            | TaskRunStatus::Aborted
+            | TaskRunStatus::TimedOut => true,
+        }
+    }
+
+}
+
 impl std::fmt::Display for TaskRunStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
