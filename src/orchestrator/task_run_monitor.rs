@@ -54,7 +54,7 @@ impl TaskRunMonitor {
                 task_run,
                 last_task_run_attempt,
             ).await,
-            TaskRunAttemptStatus::Skipped => self.transition_to_skipped(task_run).await,
+            TaskRunAttemptStatus::Skipped => self.transition_to_aborted(task_run).await,
             TaskRunAttemptStatus::Aborted => self.transition_to_aborted(task_run).await,
             TaskRunAttemptStatus::TimedOut => self.transition_to_timed_out(task_run).await,
         }
@@ -103,11 +103,14 @@ impl TaskRunMonitor {
         Utc::now() < finished_at + TimeDelta::seconds(task_run.retry_delay as i64)
     }
 
-    async fn transition_to_skipped(&self, task_run: &TaskRun) -> anyhow::Result<()> {
-
-        self.update_task_run_status(task_run, TaskRunStatus::Skipped).await
-    }
-
+    /// Aborts the task run, which is where both of the stop outcomes land: its attempt was
+    /// killed mid-flight, or it was skipped before its command started.
+    ///
+    /// A skipped attempt does **not** make the task run Skipped. This monitor only ever
+    /// sees Running task runs, so the task run had already started — possibly with earlier
+    /// attempts that ran and left output — and Skipped would claim nothing ever ran.
+    /// TaskRunAttemptDispatcher skips an attempt for one reason only, the job run being
+    /// stopped, so a skipped attempt always means this task run was stopped after starting.
     async fn transition_to_aborted(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         self.update_task_run_status(task_run, TaskRunStatus::Aborted).await

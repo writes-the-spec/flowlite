@@ -36,6 +36,9 @@ impl JobRunMonitor {
     /// it changes what a mixed set of task runs reports.** A task run that is still going
     /// holds every one of them off; after that the worst outcome wins, so that a job run
     /// with one aborted and one failed task run reports the abort rather than the failure.
+    ///
+    /// None of these transitions writes Skipped. A Running job run has started, so a stop
+    /// aborts it; only JobRunDispatcher skips a job run, and only one that never started.
     async fn handle_running_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         let task_runs = self.get_task_runs(job_run).await?;
@@ -56,7 +59,7 @@ impl JobRunMonitor {
             return Ok(());
         }
 
-        if self.transition_to_skipped(job_run, &task_runs).await? {
+        if self.transition_to_aborted_after_stop(job_run, &task_runs).await? {
             return Ok(());
         }
 
@@ -66,7 +69,8 @@ impl JobRunMonitor {
     }
 
     /// Aborts the job run if any of its task runs was killed mid-flight. Returns whether
-    /// it transitioned.
+    /// it transitioned. This outranks every failure; `transition_to_aborted_after_stop`
+    /// writes the same status from the other stop outcome, but below them.
     async fn transition_to_aborted(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
         if !Self::has_task_run_with_status(task_runs, TaskRunStatus::Aborted) {
@@ -104,20 +108,27 @@ impl JobRunMonitor {
         Ok(true)
     }
 
-    /// Skips the job run if any of its task runs was skipped. Returns whether it
-    /// transitioned.
+    /// Aborts the job run whose task runs were skipped out from under it by a stop.
+    /// Returns whether it transitioned.
     ///
-    /// This ranks below the three failure transitions for a reason: a skip means either a
-    /// stop or a dependency that did not succeed, and in the second case that dependency
-    /// is itself failed, timed out or aborted — so by the time this is asked, nothing has
-    /// failed, and a skip can only mean the run was stopped.
-    async fn transition_to_skipped(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+    /// This ranks below the three failure transitions for a reason: a skipped task run
+    /// means either a stop or a dependency that did not succeed, and in the second case
+    /// that dependency is itself failed, timed out or aborted — so by the time this is
+    /// asked, nothing has failed, and a skip can only mean the run was stopped. Keeping it
+    /// here rather than folding it into `transition_to_aborted` is what makes a real
+    /// failure outrank a stop.
+    ///
+    /// It writes Aborted, not Skipped: this monitor only ever sees Running job runs, so
+    /// the job run had already started — its earlier task runs may well have executed —
+    /// and Skipped would claim nothing ever ran. A job run stopped before it started is
+    /// Skipped by JobRunDispatcher instead.
+    async fn transition_to_aborted_after_stop(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
         if !Self::has_task_run_with_status(task_runs, TaskRunStatus::Skipped) {
             return Ok(false);
         }
 
-        self.update_job_run_status(job_run, JobRunStatus::Skipped).await?;
+        self.update_job_run_status(job_run, JobRunStatus::Aborted).await?;
 
         Ok(true)
     }

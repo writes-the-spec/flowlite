@@ -9,10 +9,10 @@
 | `Succeeded` | Its command exited 0. |
 | `Failed` | Its command exited non-zero and no retries were left. |
 | `TimedOut` | It ran past `task_run.timeout` and no retries were left. |
-| `Aborted` | Its process was killed mid-flight because the job run was stopped. |
-| `Skipped` | It never ran: a dependency didn't succeed, or the job run was stopped before it started. |
+| `Aborted` | The job run was stopped after this task run started — its process killed mid-flight, or its next attempt skipped before the command began. |
+| `Skipped` | It never started: a dependency didn't succeed, or the job run was stopped while it was still `Pending`. |
 
-`Skipped` also covers the ordinary dependency case, so it is not by itself a sign of a stop. There is no `Cancelled`: a stop finds a task run either not yet started (`Skipped`) or executing (`Aborted`).
+`Skipped` also covers the ordinary dependency case, so it is not by itself a sign of a stop. There is no `Cancelled`: a stop finds a task run either not yet started (`Skipped`, written by `TaskRunDispatcher`) or already started (`Aborted`, written by `TaskRunMonitor`). **Which one it is depends on the task run's own lifecycle, not on what its last attempt says** — a task run that already burned an attempt and was waiting to retry is `Aborted`, even though the attempt that never spawned is `Skipped`.
 
 ## Dispatcher: Pending → Running / Skipped
 
@@ -38,7 +38,7 @@ This transition runs **at most once per task run**: a retry keeps the row `Runni
 | `Pending` \| `Running` | `Ok(())` | left `Running` — the attempt services still own it |
 | `Succeeded` | `transition_to_succeeded` | `Succeeded` |
 | `Failed` | `retry_or_transition_to_failed` | next attempt while `attempt < task_run.max_retries + 1` and `task_run.retry_delay` has elapsed, otherwise `Failed` |
-| `Skipped` | `transition_to_skipped` | `Skipped` |
+| `Skipped` | `transition_to_aborted` | `Aborted` — the task run had started, so a stop aborts it |
 | `Aborted` | `_aborted` | `Aborted` — terminal, never retried, so a stop can't be undone by a retry |
 | `TimedOut` | `_timed_out` | `TimedOut` — terminal, not retried |
 
@@ -52,4 +52,5 @@ Because the decision comes from the attempt rows alone, a stop landing *between*
 - **A `Running` task run must always have either an unfinished attempt or a finished last attempt to decide on.** An attempt row that never finishes stalls the task run, and through it the job run.
 - **A new `TaskRunAttemptStatus` needs an arm** in `handle_running_task_run`, whose match over the last attempt's status is exhaustive. That exhaustiveness is the reason this monitor keeps a `match` rather than the dispatchers' ordered `transition_to_*` chain: a chain of boolean guards would let a new status fall through every one of them and leave the task run `Running` forever, where the match refuses to compile.
 - **A new terminal `TaskRunStatus` needs three edits**: the failure list in `did_any_dependent_task_run_finish_but_not_succeed` (or downstream task runs wait forever), a transition in `JobRunMonitor::handle_running_job_run`, at the right rank, and a badge arm in `templates/routes/job_runs/job_run_id/route.html`.
+- **This monitor never writes `Skipped`.** It only ever visits `Running` task runs, which have started; a stop therefore aborts them. Only `TaskRunDispatcher` skips a task run, and only one that never started.
 - **Terminal statuses set `finished_at`** — `TaskRunMonitor::update_task_run_status` for the ones it derives, `TaskRunDispatcher::transition_to_skipped` for a skip.

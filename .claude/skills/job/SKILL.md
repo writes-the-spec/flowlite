@@ -44,7 +44,7 @@ For exactly when a job run leaves `Running`, which finished status it gets, and 
 
 ## Stopping a job run
 
-A `job_run_stop` row (disk-persisted, [src/crud/job_run_stop.rs](../../../src/crud/job_run_stop.rs)) is an insert-only cancellation signal keyed by `job_run_id` — there's no "cancel" status update on `job_run` directly. `JobRunDispatcher`, `TaskRunDispatcher` and `TaskRunAttemptMonitor` all poll for a matching stop row on every pass — a wake-up or the one-second interval, whichever comes first — and, if present, finish what they own themselves — the job run `Skipped`, task runs that never started `Skipped` too, in-flight ones `Aborted`. When adding new run-control features (pause, retry-all, etc.), follow this same pattern: a small insert-only signal table that the pollers check, rather than mutating run state directly from an unrelated code path.
+A `job_run_stop` row (disk-persisted, [src/crud/job_run_stop.rs](../../../src/crud/job_run_stop.rs)) is an insert-only cancellation signal keyed by `job_run_id` — there's no "cancel" status update on `job_run` directly. `JobRunDispatcher`, `TaskRunDispatcher` and `TaskRunAttemptMonitor` all poll for a matching stop row on every pass — a wake-up or the one-second interval, whichever comes first — and, if present, finish what they own themselves — a job run or task run that never started goes `Skipped`, one that had already started goes `Aborted`. When adding new run-control features (pause, retry-all, etc.), follow this same pattern: a small insert-only signal table that the pollers check, rather than mutating run state directly from an unrelated code path.
 
 ## CLI
 
