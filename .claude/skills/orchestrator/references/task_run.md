@@ -51,8 +51,6 @@ This transition runs **at most once per task run**: a retry keeps the row `Runni
 | past all five | `anyhow::bail!` | — |
 
 These guards are exclusive, since the last attempt has exactly one status, so **the order here carries nothing** and matches [job_run.md](job_run.md)'s ladder only so the two read alike. `TaskRunAttemptStatus::is_stopped` needs no failure ruled out first, unlike its `TaskRunStatus` namesake: `TaskRunAttemptDispatcher` skips an attempt for one reason only.
-| `Aborted` | `_aborted` | `Aborted` — terminal, never retried, so a stop can't be undone by a retry |
-| `TimedOut` | `_timed_out` | `TimedOut` — terminal, not retried |
 
 `Failed` is the only retried status. A retry inserts attempt `last.attempt + 1` and leaves the task run `Running`. Attempts count from 1, so total executions are `1 + max_retries` and `max_retries: 0` means one attempt. Both the count and the delay are read off the `task_run` row, so a run retries on the policy it was submitted with rather than on whatever the YAML says now.
 
@@ -62,7 +60,7 @@ Because the decision comes from the attempt rows alone, a stop landing *between*
 
 - **A `Pending` or `Running` task run keeps its job run `Running`.** A task run that is never visited again strands its whole job run — see [job_run.md](job_run.md).
 - **A `Running` task run must always have either an unfinished attempt or a finished last attempt to decide on.** An attempt row that never finishes stalls the task run, and through it the job run.
-- **A new `TaskRunAttemptStatus` needs an outcome** in `handle_running_task_run`. This used to be an exhaustive `match`, so the compiler caught the omission; the `settle_for_*` chain replaced that check with the bail, which catches it at runtime instead — the row is logged with its id on every pass rather than silently staying `Running` forever. `settle_for_failed` and `settle_for_running` split a `Failed` last attempt between them on `has_retry_left`, so the two cannot both claim it or both pass it by.
+- **A new `TaskRunAttemptStatus` needs an outcome** in `handle_running_task_run`. This used to be an exhaustive `match`, so the compiler caught the omission; the `settle_for_*` chain replaced that check with the bail, which catches it at runtime instead — the row is logged with its id on every pass rather than silently staying `Running` forever. `settle_for_failed` and `settle_for_running` split a `Failed` last attempt between them on the same inlined comparison — `last.attempt` against `task_run.max_retries + 1`, in opposite directions — so the two cannot both claim it or both pass it by.
 - **A new terminal `TaskRunStatus` needs three edits**: the failure list in `TaskRunDispatcher::settle_as_skipped` (or downstream task runs wait forever), a transition in `JobRunMonitor::handle_running_job_run`, at the right rank, and a badge arm in `templates/routes/job_runs/job_run_id/route.html`.
 - **This monitor never writes `Skipped`.** It only ever visits `Running` task runs, which have started; a stop therefore aborts them. Only `TaskRunDispatcher` skips a task run, and only one that never started.
 - **Terminal statuses set `finished_at`** — `TaskRunMonitor::update_task_run_status` for the ones it derives, `TaskRunDispatcher::settle_as_skipped` for a skip.

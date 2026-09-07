@@ -57,7 +57,6 @@ It never reads or writes a task run row: retries and the task run status are `Ta
 ## Invariants
 
 - **A command is spawned exactly once per attempt row**, by the dispatcher. A `Running` attempt without a child is `Aborted`, never respawned — the retry comes from `TaskRunMonitor` inserting a *new* attempt row.
-
-**Attempt 1 comes from `TaskRunDispatcher`**, which inserts it before writing the task run `Running`, so `TaskRunMonitor` never sees a `Running` task run with nothing to decide from. It raises if it ever does.
+- **Attempt 1 comes from `TaskRunDispatcher`**, which inserts it before writing the task run `Running`, so `TaskRunMonitor` never sees a `Running` task run with nothing to decide from. It raises if it ever does.
 - **Terminal statuses set the attempt's `finished_at`**, via `finish_task_run_attempt`.
 - **A new `TaskRunAttemptStatus` needs a handler in `TaskRunMonitor`** — see [task_run.md](task_run.md).
