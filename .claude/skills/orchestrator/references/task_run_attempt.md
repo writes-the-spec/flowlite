@@ -44,10 +44,11 @@ Step 1 before step 2 is what makes a stop beat a waiting retry: a job run stoppe
 
 Steps 1–3 borrow the child (`&mut TaskRunAttemptChild`) rather than taking it, so the caller still owns it when none of them fires and can hand it to step 4.
 
-**Both kills go through `kill_process_group`**, which `killpg`s the group before reaping the `sh` — killing only the `sh` reported `TimedOut` or `Aborted` while the command's children carried on. Two consequences worth knowing:
+**Both kills go through `TaskRunAttemptChild::kill_process_group`**, which `killpg`s the group before reaping the `sh` — killing only the `sh` reported `TimedOut` or `Aborted` while the command's children carried on. There are three callers of it in all, and the third is shutdown:
 
-- **A task no longer dies with the terminal.** `sh` used to share flowlite's foreground process group, so Ctrl-C on `flowlite serve` killed running tasks incidentally. It no longer does, and nothing kills the groups on shutdown, so a task outlives flowlite and the next start aborts its attempt through `settle_for_aborted_without_child` while the work continues.
-- **The restart path cannot kill anything.** `settle_for_aborted_without_child` has no child and no group id — the map is memory — so it aborts the row and leaves whatever is still running.
+- **A task no longer dies with the terminal, so `serve` kills it deliberately.** `sh` used to share flowlite's foreground process group, so Ctrl-C killed running tasks incidentally; with its own group it survives one. `serve` therefore serves `with_graceful_shutdown` on Ctrl-C or SIGTERM and then calls `Orchestrator::shutdown` → `TaskRunAttemptChildren::kill_all`, which drains the map and kills each group. That is why the map lives on the `Orchestrator` rather than inside `start`.
+- **Shutdown leaves the attempt rows `Running` on purpose.** The next start settles them through `settle_for_aborted_without_child`, which is where an attempt with no process belongs — and killing the group is what makes that verdict true. Writing statuses during shutdown would race the pollers, which are still running.
+- **The restart path still cannot kill anything.** `settle_for_aborted_without_child` has no child and no group id — the map is memory — so an attempt left by a `SIGKILL`ed or crashed flowlite is aborted on the row while its process tree keeps running. Persisting the group id on the attempt row is what would close it.
 
 **Order decides precedence here**, on the same rule as [job_run.md](job_run.md): a real outcome outranks a stop, so step 3 is last. A process that already exited reports what it exited with rather than being recorded as killed, and one past its timeout reports the timeout. A process still running when its job run is stopped is still killed on the same pass, because steps 1 and 2 decline and step 3 is reached immediately.
 
