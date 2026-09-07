@@ -29,7 +29,7 @@ jobs:
   - id: my-job
 ```
 
-`CRUD::init` ([src/crud/crud.rs](../../../src/crud/crud.rs)) inserts one `mem.schedule` row plus one `mem.schedule_job` row per listed job, and computes the first `next_run` right there with `CronTrigger::get_next_run(None)`. Both tables are in-memory config data — see the [db-storage skill](../db-storage/SKILL.md).
+`CRUD::init` ([src/crud/crud.rs](../../../src/crud/crud.rs)) inserts one `mem.schedule` row plus one `mem.schedule_job` row per listed job, and computes the first `next_run` right there with `CronTrigger::get_next_run(None)`. Both tables are in-memory config data — see [schedule](../db-objects/references/schedule.md) and [schedule_job](../db-objects/references/schedule_job.md) in the db-objects skill.
 
 ## The loop
 

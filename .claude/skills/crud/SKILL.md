@@ -9,7 +9,7 @@ Each entity gets its own file under `src/crud/`, exposed via `src/crud/mod.rs`, 
 
 A method that runs **one** statement lives in its entity's file. A method that runs **several** statements to do one thing lives under `src/crud/multistatements/` (currently `misc.rs`) instead, because it spans more than one entity and so belongs to no single entity file. That split also decides how the method takes its database handle — see the two executor rules below.
 
-Before writing a table's migration, figure out whether it's YAML-seeded config data or runtime-created data — see the [db-storage skill](../db-storage/SKILL.md). That decides whether it's `mem.<table>` (in-memory) or `<table>` (persisted disk), which in turn decides its primary-key style and whether it ever gets an `update_*` method.
+Before writing a table's migration, figure out whether it's YAML-seeded config data or runtime-created data — see the [db-objects skill](../db-objects/SKILL.md). That decides whether it's `mem.<table>` (in-memory) or `<table>` (persisted disk), which in turn decides its primary-key style and whether it ever gets an `update_*` method.
 
 For the conventions of each operation, see:
 

@@ -37,7 +37,7 @@ tasks:
 
 ## What one task becomes
 
-`CRUD::init` writes each task's `depends_on` to **two** places from the same list: `task.depends_on` as a JSON array on the task row, and one normalized `task_dependent` row per edge. `task.depends_on` is the list a run's dependency graph is built *from*, not the one the runtime resolves — `CRUD::submit_job` copies it onto the run's own rows, and `TaskRunDispatcher::get_dependent_task_runs` resolves that copy (`task_run.depends_on`). `task_dependent` is read by nothing. See the [task skill](../../task/SKILL.md).
+`CRUD::init` writes each task's `depends_on` to **two** places from the same list: `task.depends_on` as a JSON array on the task row, and one normalized `task_dependent` row per edge. `task.depends_on` is the list a run's dependency graph is built *from*, not the one the runtime resolves — `CRUD::submit_job` copies it onto the run's own rows, and `TaskRunDispatcher::get_dependent_task_runs` resolves that copy (`task_run.depends_on`). `task_dependent` is read by nothing. See [task](../../db-objects/references/task.md) and [task_dependent](../../db-objects/references/task_dependent.md) in the db-objects skill.
 
 Submitting the job then creates one `task_run` per task, all `Pending`, each carrying a snapshot of its task's `command`, `depends_on`, `timeout` and retry settings — so the run executes the definition it was submitted with, whatever the YAML says later. Dependency order is enforced at dispatch time, not at submission. See the [orchestrator skill](../../orchestrator/references/task_run.md).
 

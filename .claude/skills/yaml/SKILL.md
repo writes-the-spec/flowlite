@@ -16,7 +16,7 @@ Everything flowlite knows before it runs comes from YAML files under the **confi
 
 ## Where they are read
 
-`CRUD::init` ([src/crud/crud.rs](../../../src/crud/crud.rs)) is the **only** caller, and it runs at the start of every process that needs the config — `serve`, `job list` and `job submit`. Not every CLI command does: `job-run logs` and `job-run rerun` read run history from disk alone, so they skip it deliberately and keep working against a config dir that no longer parses. It walks each directory, parses each file into its model, and inserts the rows into the in-memory `mem` schema, all inside one transaction. Nothing reads a YAML file again afterwards: at runtime the config *is* the `mem` tables (see the [db-storage skill](../db-storage/SKILL.md)).
+`CRUD::init` ([src/crud/crud.rs](../../../src/crud/crud.rs)) is the **only** caller, and it runs at the start of every process that needs the config — `serve`, `job list` and `job submit`. Not every CLI command does: `job-run logs` and `job-run rerun` read run history from disk alone, so they skip it deliberately and keep working against a config dir that no longer parses. It walks each directory, parses each file into its model, and inserts the rows into the in-memory `mem` schema, all inside one transaction. Nothing reads a YAML file again afterwards: at runtime the config *is* the `mem` tables (see the [db-objects skill](../db-objects/SKILL.md)).
 
 Three discovery rules worth knowing:
 
@@ -61,5 +61,5 @@ Rule of thumb: per-field rules belong on the model via `#[validate(...)]`; anyth
 
 1. New file in `src/yaml_models/`, `pub mod` it in [mod.rs](../../../src/yaml_models/mod.rs).
 2. Derive `Deserialize, Validate, Debug`, add a `from_yaml` in the shape above.
-3. Add its `mem` table migration under `db/schemas/memory/migrations/` — see [db-storage](../db-storage/SKILL.md).
+3. Add its `mem` table migration under `db/schemas/memory/migrations/` — see [db-objects](../db-objects/SKILL.md).
 4. Add its directory walk to `CRUD::init`, incrementing the shared `row_id` and wrapping each insert in `with_context`.
