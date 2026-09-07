@@ -3,6 +3,7 @@ use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
 use crate::crud::job_run::{SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt};
+use crate::crud::task_run_attempt_output::{group_task_run_attempt_output, SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort, TaskRunAttemptOutputStreams};
 use crate::router::app::format;
 
 #[derive(Args)]
@@ -80,8 +81,35 @@ impl JobRunLogsCmd {
             return Ok(());
         }
 
+        // The attempt list is already narrowed by `--task`, so filtering the output on the
+        // ids it holds narrows that query too: this reads only the output it prints, where
+        // filtering by job run would read every task's to print one task's.
+        let task_run_attempt_ids = task_run_attempts
+            .iter()
+            .map(|task_run_attempt| task_run_attempt.id)
+            .collect::<Vec<_>>();
+
+        let task_run_attempt_output = crud.select_task_run_attempt_outputs(&mut conn, &SelectTaskRunAttemptOutputsData {
+            filter: SelectTaskRunAttemptOutputsDataFilter {
+                id: None,
+                task_run_attempt_id: None,
+                task_run_attempt_ids: Some(task_run_attempt_ids),
+                stream: None,
+            },
+            sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),
+        }).await?;
+
+        let mut task_run_attempt_output = group_task_run_attempt_output(task_run_attempt_output);
+
         for task_run_attempt in task_run_attempts {
-            print_task_run_attempt(&task_run_attempt);
+
+            // An attempt with no rows printed nothing, which is empty output rather than
+            // unknown output.
+            let streams = task_run_attempt_output
+                .remove(&task_run_attempt.id)
+                .unwrap_or_default();
+
+            print_task_run_attempt(&task_run_attempt, &streams);
         }
 
         Ok(())
@@ -107,7 +135,10 @@ impl JobRunRerunCmd {
 }
 
 /// Both streams are printed unindented so that a copied line is the line the task wrote.
-fn print_task_run_attempt(task_run_attempt: &TaskRunAttempt) {
+fn print_task_run_attempt(
+    task_run_attempt: &TaskRunAttempt,
+    streams: &TaskRunAttemptOutputStreams,
+) {
 
     let duration = match task_run_attempt.started_at {
         Some(started_at) => {
@@ -128,14 +159,14 @@ fn print_task_run_attempt(task_run_attempt: &TaskRunAttempt) {
     println!("{}", "-".repeat(40));
 
     println!("stdout:");
-    match task_run_attempt.stdout.is_empty() {
+    match streams.stdout.is_empty() {
         true => println!("(nothing written)"),
-        false => println!("{}", task_run_attempt.stdout.trim_end()),
+        false => println!("{}", streams.stdout.trim_end()),
     }
 
     println!("stderr:");
-    match task_run_attempt.stderr.is_empty() {
+    match streams.stderr.is_empty() {
         true => println!("(nothing written)"),
-        false => println!("{}", task_run_attempt.stderr.trim_end()),
+        false => println!("{}", streams.stderr.trim_end()),
     }
 }

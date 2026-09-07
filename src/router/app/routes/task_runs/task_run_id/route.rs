@@ -6,6 +6,7 @@ use axum::Extension;
 use crate::crud::CRUD;
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRunStatus};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
+use crate::crud::task_run_attempt_output::{group_task_run_attempt_output, SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort, TaskRunAttemptOutputStreams};
 use crate::router::app::app_state::AppState;
 use crate::router::app::format;
 
@@ -44,7 +45,10 @@ struct TaskRunIdRouteTemplate {
     polling: bool,
 }
 
-fn build_attempt(task_run_attempt: TaskRunAttempt) -> AttemptDisplay {
+fn build_attempt(
+    task_run_attempt: TaskRunAttempt,
+    streams: TaskRunAttemptOutputStreams,
+) -> AttemptDisplay {
     let duration = task_run_attempt.started_at.map(|started_at| {
         let finished_at = task_run_attempt.finished_at.unwrap_or_else(chrono::Utc::now);
         format::duration(finished_at.signed_duration_since(started_at).num_seconds())
@@ -57,8 +61,8 @@ fn build_attempt(task_run_attempt: TaskRunAttempt) -> AttemptDisplay {
         started_at: task_run_attempt.started_at.map(format::timestamp),
         finished_at: task_run_attempt.finished_at.map(format::timestamp),
         duration,
-        stdout: task_run_attempt.stdout,
-        stderr: task_run_attempt.stderr,
+        stdout: streams.stdout,
+        stderr: streams.stderr,
     }
 }
 
@@ -95,7 +99,37 @@ pub async fn task_run_id_route(
         sort: Some(SelectTaskRunAttemptsDataSort::Id),
     }).await.unwrap_or_default();
 
-    let attempts = task_run_attempts.into_iter().map(build_attempt).collect::<Vec<_>>();
+    let task_run_attempt_ids = task_run_attempts
+        .iter()
+        .map(|task_run_attempt| task_run_attempt.id)
+        .collect::<Vec<_>>();
+
+    // One query for every attempt on the page rather than one per attempt: this view is
+    // exactly the N+1 the id list exists to avoid.
+    let task_run_attempt_output = crud.select_task_run_attempt_outputs(conn, &SelectTaskRunAttemptOutputsData {
+        filter: SelectTaskRunAttemptOutputsDataFilter {
+            id: None,
+            task_run_attempt_id: None,
+            task_run_attempt_ids: Some(task_run_attempt_ids),
+            stream: None,
+        },
+        sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),
+    }).await.unwrap_or_default();
+
+    let mut task_run_attempt_output = group_task_run_attempt_output(task_run_attempt_output);
+
+    let attempts = task_run_attempts
+        .into_iter()
+        .map(|task_run_attempt| {
+            // An attempt with no rows printed nothing, which is empty output rather than
+            // unknown output - the same thing the NOT NULL columns used to say.
+            let streams = task_run_attempt_output
+                .remove(&task_run_attempt.id)
+                .unwrap_or_default();
+
+            build_attempt(task_run_attempt, streams)
+        })
+        .collect::<Vec<_>>();
 
     let attempt_note = match attempts.len() {
         0 => "no attempts yet".to_string(),
