@@ -34,8 +34,8 @@ Four **independent** background services, mirroring the job side (see the [job s
 
 - **`TaskRunDispatcher`** ([src/orchestrator/task_run_dispatcher.rs](../../../src/orchestrator/task_run_dispatcher.rs)) — polls all `Pending` task runs, once a second or as soon as a wake-up arrives, and settles each row as exactly one outcome, each returning whether it is what happened:
   1. `settle_as_skipped` → `Skipped`, if the job run was stopped or any dependency task run finished but didn't succeed (`Failed`/`Skipped`/`Aborted`/`TimedOut`)
-  2. `settle_as_running` → `Running`, once all dependency task runs have `Succeeded`; also inserts attempt 1, before the status write
-  3. `settle_as_pending` → nothing written, the row waits, because a dependency is still `Pending` or `Running`
+  2. `settle_as_pending` → nothing written, the row waits, because a dependency is still `Pending` or `Running`
+  3. `settle_as_running` → `Running`, once all dependency task runs have `Succeeded`; also inserts attempt 1, before the status write
   4. past all three → an error, rather than a row left sitting with nobody accountable for it
 - **`TaskRunMonitor`** ([src/orchestrator/task_run_monitor.rs](../../../src/orchestrator/task_run_monitor.rs)) — polls `Running` task runs on the same schedule and drives them through their attempts: it inserts the retry rows, decides retries, and moves the task run to a finished status. Attempt 1 comes from `TaskRunDispatcher`, which inserts it before writing the task run `Running`. It reads attempt rows and writes task run rows; it never touches a process.
 - **`TaskRunAttemptDispatcher`** ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../src/orchestrator/task_run_attempt_dispatcher.rs)) — polls `Pending` attempt rows and settles each as `Skipped` (the job run was stopped before the command started), still `Pending` (a retry whose `retry_delay` has not passed), or `Running` (spawns its command). This is where `retry_delay` is enforced.

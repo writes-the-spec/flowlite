@@ -7,9 +7,9 @@ use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataS
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRunStatus};
 
 
-/// A job's definition, as one job run will execute it. It is built either from the
-/// config the YAML declares now or from an earlier run's snapshot, and the insert
-/// treats both alike: where a definition came from is its builder's business.
+/// A job's definition, as one job run will execute it. `submit_job` builds it from the
+/// config the YAML declares now and `rerun_job` from an earlier run's snapshot, and the
+/// insert treats both alike: where a definition came from is the caller's business.
 struct JobRunDefinition {
     job_id: String,
     job_name: String,
@@ -32,24 +32,14 @@ impl CRUD {
     /// Submits a run of the job's current definition. The definition is snapshotted onto
     /// the run's own rows, so what the run executes can no longer change under it -
     /// not when the YAML is edited, and not when the process restarts mid-run.
+    ///
+    /// A job with no config is an error rather than an empty run: the caller asked for a
+    /// job that isn't there.
     pub async fn submit_job(
         &self,
         conn: &mut SqliteConnection,
         job_id: &str,
     ) -> anyhow::Result<i64> {
-
-        let definition = self.build_job_run_definition_from_config(&mut *conn, job_id).await?;
-
-        self.insert_job_run_definition(&mut *conn, &definition).await
-    }
-
-    /// Reads a job's definition as the YAML currently declares it. A job with no config
-    /// is an error rather than an empty run: the caller asked for a job that isn't there.
-    async fn build_job_run_definition_from_config(
-        &self,
-        conn: &mut SqliteConnection,
-        job_id: &str,
-    ) -> anyhow::Result<JobRunDefinition> {
 
         let job = self.select_job(&mut *conn, &SelectJobsData {
             filter: SelectJobsDataFilter {
@@ -75,7 +65,7 @@ impl CRUD {
             offset: None,
         }).await?;
 
-        Ok(JobRunDefinition {
+        let definition = JobRunDefinition {
             job_id: job.job_id,
             job_name: job.name,
             job_description: job.description,
@@ -90,7 +80,9 @@ impl CRUD {
                     retry_delay: task.retry_delay,
                 })
                 .collect(),
-        })
+        };
+
+        self.insert_job_run_definition(&mut *conn, &definition).await
     }
 
     /// Inserts a pending job run and one pending task run per task. This is the only
@@ -146,18 +138,6 @@ impl CRUD {
         job_run_id: i64,
     ) -> anyhow::Result<i64> {
 
-        let definition = self.build_job_run_definition_from_job_run(&mut *conn, job_run_id).await?;
-
-        self.insert_job_run_definition(&mut *conn, &definition).await
-    }
-
-    /// Reads a job's definition back out of the snapshot an earlier run carries.
-    async fn build_job_run_definition_from_job_run(
-        &self,
-        conn: &mut SqliteConnection,
-        job_run_id: i64,
-    ) -> anyhow::Result<JobRunDefinition> {
-
         let job_run = self.select_job_run(
             &mut *conn,
             &SelectJobRunsData {
@@ -190,7 +170,7 @@ impl CRUD {
             }
         ).await?;
 
-        Ok(JobRunDefinition {
+        let definition = JobRunDefinition {
             job_id: job_run.job_id,
             job_name: job_run.job_name,
             job_description: job_run.job_description,
@@ -205,7 +185,9 @@ impl CRUD {
                     retry_delay: task_run.retry_delay,
                 })
                 .collect(),
-        })
+        };
+
+        self.insert_job_run_definition(&mut *conn, &definition).await
     }
 
     /// Whether the job already has as many runs in flight as it allows. Only a running

@@ -8,8 +8,8 @@ use crate::signals::Signals;
 use chrono::Utc;
 
 
-/// Picks up pending task runs and settles each one as skipped, running or still pending
-/// on a dependency. Hands off to TaskRunMonitor through the task run status only.
+/// Picks up pending task runs and settles each one as skipped, still pending on a
+/// dependency or running. Hands off to TaskRunMonitor through the task run status only.
 pub struct TaskRunDispatcher {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
@@ -44,18 +44,18 @@ impl TaskRunDispatcher {
             return Ok(());
         }
 
-        if self.settle_as_running(task_run).await? {
+        if self.settle_as_pending(task_run).await? {
             return Ok(());
         }
 
-        if self.settle_as_pending(task_run).await? {
+        if self.settle_as_running(task_run).await? {
             return Ok(());
         }
 
         anyhow::bail!(
             "Task run {} settled as nothing: its job run was not stopped, no task run it \
-             depends on failed, they have not all succeeded, and none of them is still \
-             running",
+             depends on failed, none of them is still running, and they have not all \
+             succeeded",
             task_run.id,
         )
     }
@@ -65,7 +65,15 @@ impl TaskRunDispatcher {
     async fn settle_as_skipped(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
         let must_skip = self.is_job_run_stopped(task_run).await?
-            || self.did_any_dependent_task_run_finish_but_not_succeed(task_run).await?;
+            || self.get_dependent_task_runs(task_run).await?
+                .iter()
+                .any(|tr| matches!(
+                    tr.status,
+                    TaskRunStatus::Failed
+                        | TaskRunStatus::Skipped
+                        | TaskRunStatus::Aborted
+                        | TaskRunStatus::TimedOut
+                ));
 
         if !must_skip {
             return Ok(false);
@@ -92,8 +100,20 @@ impl TaskRunDispatcher {
         Ok(true)
     }
 
+    /// Leaves the task run pending, writing nothing, while a task run it depends on has yet
+    /// to finish. `settle_as_skipped` has already ruled out every dependency that finished
+    /// without succeeding, so an unfinished one here is still one this run is waiting for.
+    async fn settle_as_pending(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
+
+        self.has_unfinished_dependent_task_run(task_run).await
+    }
+
     /// Sets the task run to running, which is what makes TaskRunMonitor pick it up, once
     /// every task run it depends on has succeeded, and gives it the first attempt to run.
+    ///
+    /// Asking whether they all succeeded, rather than starting whatever `settle_as_pending`
+    /// turned down, is what stops a dependency that failed since that guard ran: the two
+    /// load the dependencies separately.
     ///
     /// The attempt row is inserted **before** the status, for the same reason the attempt
     /// dispatcher hands its child over before writing Running: TaskRunMonitor decides from
@@ -142,14 +162,6 @@ impl TaskRunDispatcher {
         Ok(true)
     }
 
-    /// Leaves the task run pending, writing nothing. `settle_as_skipped` has already ruled
-    /// out every dependency that finished without succeeding, so what is left here is
-    /// exactly the rows `settle_as_running` turned down.
-    async fn settle_as_pending(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
-
-        self.has_unfinished_dependent_task_run(task_run).await
-    }
-
     async fn get_pending_task_runs(&self) -> anyhow::Result<Vec<TaskRun>> {
 
         self.crud.select_task_runs(
@@ -184,22 +196,6 @@ impl TaskRunDispatcher {
         ).await?;
 
         Ok(job_run_stop.is_some())
-
-    }
-
-    async fn did_any_dependent_task_run_finish_but_not_succeed(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
-
-        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
-
-        let any_failed = dependent_task_runs.iter().any(|tr| matches!(
-            tr.status,
-            TaskRunStatus::Failed
-                | TaskRunStatus::Skipped
-                | TaskRunStatus::Aborted
-                | TaskRunStatus::TimedOut
-        ));
-
-        Ok(any_failed)
 
     }
 

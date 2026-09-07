@@ -19,17 +19,17 @@
 `JobRunDispatcher` ([src/orchestrator/job_run_dispatcher.rs](../../../../src/orchestrator/job_run_dispatcher.rs)) polls `Pending` job runs **oldest id first** — on a signal wake-up or its one-second interval, whichever comes first — and settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened:
 
 1. `settle_as_skipped` — **stopped?** (a `job_run_stop` row exists) → the job run goes `Skipped`, and so do all of its task runs in one update. It never runs.
-2. `settle_as_running` — **is its job under `max_parallel_runs`?** (`CRUD::is_job_at_max_parallel_runs`, counting that job's `Running` job runs) → `status = Running`, `started_at = now`.
-3. `settle_as_pending` — at `max_parallel_runs` → the row stays `Pending`, to be reconsidered next pass. **It writes nothing, and exists to say so.**
+2. `settle_as_pending` — **is its job at `max_parallel_runs`?** (`CRUD::is_job_at_max_parallel_runs`, counting that job's `Running` job runs) → the row stays `Pending`, to be reconsidered next pass. **It writes nothing, and exists to say so.**
+3. `settle_as_running` — otherwise → `status = Running`, `started_at = now`.
 4. Past all three → `anyhow::bail!`.
 
-Step 4 is the point of step 3. A pending job run left alone on purpose and one left alone because nobody handled it look identical from the outside — the row just sits there, indistinguishable from a job legitimately queued behind its limit. Naming the deliberate case makes the accidental one an error the `Poller` logs with the row id, instead of a run that never moves and never explains why. It is unreachable today: `settle_as_running` and `settle_as_pending` ask the same question and split its answer, so between them they account for every job run that was not stopped. Tighten a guard without adding an outcome and the bail is what tells you.
+Step 4 is the point of step 2. A pending job run left alone on purpose and one left alone because nobody handled it look identical from the outside — the row just sits there, indistinguishable from a job legitimately queued behind its limit. Naming the deliberate case makes the accidental one an error the `Poller` logs with the row id, instead of a run that never moves and never explains why. It is unreachable today: step 3 starts whatever step 2 declined, unconditionally. Give it a guard of its own without adding an outcome and the bail is what tells you.
 
-That second ask costs a repeated `is_job_at_max_parallel_runs` for a held row. Threading the answer down from `handle_pending_job_run` would save the query but would separate the guard from the outcome it decides, which is the property the whole shape is for.
+**Step 2 has to come before step 3 for that reason**, and it is why the limit is asked once per row rather than twice: the earlier order asked step 3 first, so step 2 had to re-count the job's running runs to claim the rows it turned down. All three dispatchers read skipped, pending, running.
 
 They are named `settle_as_*` rather than `transition_to_*` because one of them deliberately writes no status, and calling a no-op a transition would be a lie. Every one of the six services now settles a row this way; the dispatchers use `settle_as_*` and the monitors `settle_for_*`.
 
-**`settle_as_running` is the only place `max_parallel_runs` is enforced.** Nothing rejects a submission for being over the limit — not `job submit`, not a rerun, not the [scheduler](../../scheduler/SKILL.md) — so an over-limit run is created `Pending` like any other and queues here until a slot frees. Two things follow: the oldest-first sort is what makes the queue fair, and a job that takes longer than its schedule interval accumulates pending runs rather than losing them.
+**`settle_as_pending` is the only place `max_parallel_runs` is enforced.** Nothing rejects a submission for being over the limit — not `job submit`, not a rerun, not the [scheduler](../../scheduler/SKILL.md) — so an over-limit run is created `Pending` like any other and queues here until a slot frees. Two things follow: the oldest-first sort is what makes the queue fair, and a job that takes longer than its schedule interval accumulates pending runs rather than losing them.
 
 Only `Running` runs count against the limit. Counting `Pending` ones too would deadlock the gate, since the row being considered is itself `Pending`.
 

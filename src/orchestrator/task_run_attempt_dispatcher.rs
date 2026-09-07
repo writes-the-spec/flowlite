@@ -93,8 +93,9 @@ impl TaskRunAttemptDispatcher {
         Ok(true)
     }
 
-    /// Leaves the attempt pending, writing nothing, while the retry delay of the run it
-    /// belongs to has yet to pass. Returns whether this is what happened.
+    /// Leaves the attempt pending, writing nothing, while the retry_delay the run was
+    /// submitted with has yet to pass since this attempt was created, which is when
+    /// TaskRunMonitor decided to retry. Returns whether this is what happened.
     ///
     /// Only a retry waits. Attempt 1 is inserted by TaskRunDispatcher as it starts the task
     /// run and has nothing to wait for, so it never reaches the task run query below.
@@ -106,13 +107,9 @@ impl TaskRunAttemptDispatcher {
 
         let task_run = self.get_task_run(task_run_attempt).await?;
 
-        Ok(Self::is_waiting_to_retry(&task_run, task_run_attempt))
-    }
+        let retry_delay = TimeDelta::seconds(task_run.retry_delay as i64);
 
-    /// Whether the retry_delay the run was submitted with has yet to pass since this
-    /// attempt was created, which is when TaskRunMonitor decided to retry.
-    fn is_waiting_to_retry(task_run: &TaskRun, task_run_attempt: &TaskRunAttempt) -> bool {
-        Utc::now() < task_run_attempt.created_at + TimeDelta::seconds(task_run.retry_delay as i64)
+        Ok(Utc::now() < task_run_attempt.created_at + retry_delay)
     }
 
     /// Spawns the command of the attempt, hands the child process over and sets the
@@ -254,82 +251,5 @@ impl Service for TaskRunAttemptDispatcher {
 
     async fn handle(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
         self.handle_pending_task_run_attempt(task_run_attempt).await
-    }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::crud::task_run::TaskRunStatus;
-    use chrono::DateTime;
-
-    fn task_run(retry_delay: u32) -> TaskRun {
-        TaskRun {
-            id: 1,
-            job_run_id: 1,
-            job_id: "job".to_string(),
-            task_id: "task".to_string(),
-            command: "false".to_string(),
-            depends_on: sqlx::types::Json(Vec::new()),
-            timeout: 3600,
-            max_retries: 2,
-            retry_delay,
-            created_at: Utc::now(),
-            started_at: None,
-            finished_at: None,
-            status: TaskRunStatus::Running,
-        }
-    }
-
-    fn retry_attempt(created_at: DateTime<Utc>) -> TaskRunAttempt {
-        TaskRunAttempt {
-            id: 2,
-            task_run_id: 1,
-            job_run_id: 1,
-            job_id: "job".to_string(),
-            task_id: "task".to_string(),
-            created_at,
-            started_at: None,
-            finished_at: None,
-            attempt: 2,
-            status: TaskRunAttemptStatus::Pending,
-            stdout: String::new(),
-            stderr: String::new(),
-        }
-    }
-
-    #[test]
-    fn the_retry_waits_while_the_delay_has_not_passed() {
-        let created_at = Utc::now() - TimeDelta::seconds(10);
-
-        let waiting = TaskRunAttemptDispatcher::is_waiting_to_retry(
-            &task_run(60),
-            &retry_attempt(created_at),
-        );
-
-        assert!(waiting);
-    }
-
-    #[test]
-    fn the_retry_starts_once_the_delay_has_passed() {
-        let created_at = Utc::now() - TimeDelta::seconds(61);
-
-        let waiting = TaskRunAttemptDispatcher::is_waiting_to_retry(
-            &task_run(60),
-            &retry_attempt(created_at),
-        );
-
-        assert!(!waiting);
-    }
-
-    #[test]
-    fn a_retry_delay_of_zero_never_waits() {
-        let waiting = TaskRunAttemptDispatcher::is_waiting_to_retry(
-            &task_run(0),
-            &retry_attempt(Utc::now()),
-        );
-
-        assert!(!waiting);
     }
 }

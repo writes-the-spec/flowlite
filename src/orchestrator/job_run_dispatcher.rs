@@ -8,8 +8,8 @@ use crate::signals::Signals;
 use chrono::Utc;
 
 
-/// Picks up pending job runs, oldest first, and settles each one as skipped, running or
-/// still pending. Hands off to JobRunMonitor through the job run status only.
+/// Picks up pending job runs, oldest first, and settles each one as skipped, still
+/// pending or running. Hands off to JobRunMonitor through the job run status only.
 pub struct JobRunDispatcher {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
@@ -34,13 +34,12 @@ impl JobRunDispatcher {
     /// Settles a pending job run as exactly one outcome. Falling past all three bails
     /// rather than returning quietly: a row nobody handled looks exactly like one
     /// legitimately queued, so silence is the one failure this service cannot spot.
+    ///
+    /// `settle_as_pending` has to precede `settle_as_running`, which starts the run
+    /// unconditionally and would take a slot the job does not have.
     async fn handle_pending_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         if self.settle_as_skipped(job_run).await? {
-            return Ok(());
-        }
-
-        if self.settle_as_running(job_run).await? {
             return Ok(());
         }
 
@@ -48,9 +47,13 @@ impl JobRunDispatcher {
             return Ok(());
         }
 
+        if self.settle_as_running(job_run).await? {
+            return Ok(());
+        }
+
         anyhow::bail!(
-            "Job run {} settled as nothing: it was not stopped, was not started, and is \
-             not waiting on max_parallel_runs",
+            "Job run {} settled as nothing: it was not stopped, is not waiting on \
+             max_parallel_runs, and was not started",
             job_run.id,
         )
     }
@@ -97,17 +100,17 @@ impl JobRunDispatcher {
         Ok(true)
     }
 
-    /// Sets the job run to running, which is what makes JobRunMonitor pick it up.
+    /// Leaves the job run pending, writing nothing, while its job is at max_parallel_runs.
     ///
     /// The only place max_parallel_runs is enforced: submitting never rejects a job, so
     /// every path that creates a job run queues behind this gate without knowing about it.
+    async fn settle_as_pending(&self, job_run: &JobRun) -> anyhow::Result<bool> {
+
+        self.is_job_at_max_parallel_runs(job_run).await
+    }
+
+    /// Sets the job run to running, which is what makes JobRunMonitor pick it up.
     async fn settle_as_running(&self, job_run: &JobRun) -> anyhow::Result<bool> {
-
-        let at_max_parallel_runs = self.is_job_at_max_parallel_runs(job_run).await?;
-
-        if at_max_parallel_runs {
-            return Ok(false);
-        }
 
         self.crud.update_job_runs(
             &*self.conn_pool,
@@ -124,14 +127,6 @@ impl JobRunDispatcher {
         self.signals.publish();
 
         Ok(true)
-    }
-
-    /// Leaves the job run pending, writing nothing. Re-asks the question `settle_as_running`
-    /// just asked, at the cost of a second count, so that it claims the rows that one
-    /// turned down and the two of them together account for every job run not stopped.
-    async fn settle_as_pending(&self, job_run: &JobRun) -> anyhow::Result<bool> {
-
-        self.is_job_at_max_parallel_runs(job_run).await
     }
 
     async fn get_pending_job_runs(&self) -> anyhow::Result<Vec<JobRun>> {

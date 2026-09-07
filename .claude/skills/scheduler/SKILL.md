@@ -11,7 +11,7 @@ It is **not part of the [orchestrator](../orchestrator/SKILL.md)**, but it is dr
 
 `ServeCmd::run` starts the scheduler and the orchestrator side by side, and they share no state: the scheduler's entire output is a `CRUD::submit_job` call, and everything after that — dispatching, executing, retrying, finishing — is the orchestrator's business. Keep it that way: the scheduler must never read a job run's status or touch a task run.
 
-That is why it submits a job **unconditionally**, even one whose earlier run is still going: `max_parallel_runs` is enforced in `JobRunDispatcher::settle_as_running` and nowhere else, so the over-limit run queues there as a `Pending` job run instead of being dropped here. A concurrency check in this loop would have to count job runs by status, which is exactly the coupling the paragraph above rules out.
+That is why it submits a job **unconditionally**, even one whose earlier run is still going: `max_parallel_runs` is enforced in `JobRunDispatcher::settle_as_pending` and nowhere else, so the over-limit run queues there as a `Pending` job run instead of being dropped here. A concurrency check in this loop would have to count job runs by status, which is exactly the coupling the paragraph above rules out.
 
 ## Definition (YAML → in-memory `mem.schedule` + `mem.schedule_job`)
 
