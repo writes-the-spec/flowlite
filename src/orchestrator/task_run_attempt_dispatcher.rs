@@ -126,6 +126,10 @@ impl TaskRunAttemptDispatcher {
             .arg(&task_run.command)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Its own process group, so a timeout or a stop can signal the command's whole
+            // process tree rather than only the sh that flowlite spawned. The group id is
+            // this child's pid; TaskRunAttemptMonitor kills by it.
+            .process_group(0)
             .spawn()?;
 
         let stdout = child.stdout.take()

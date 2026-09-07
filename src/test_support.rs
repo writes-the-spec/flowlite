@@ -62,6 +62,11 @@ impl TestDb {
         }
     }
 
+    /// The temp directory this test owns, for a command that needs somewhere to write.
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
+    }
+
     pub fn job_run_monitor(&self) -> JobRunMonitor {
         JobRunMonitor::new(
             self.crud.clone(),
@@ -121,6 +126,30 @@ impl TestDb {
     /// A running task run with retries left, for the tests that drive the retry loop.
     pub async fn insert_retryable_task_run(&self, job_run_id: i64, max_retries: u32, retry_delay: u32) -> TaskRun {
         self.insert_task_run_with(job_run_id, TaskRunStatus::Running, max_retries, retry_delay).await
+    }
+
+    /// A task run carrying a real command, for the tests that let the dispatcher spawn it.
+    /// `timeout` of 0 puts the attempt past its deadline the moment it starts.
+    pub async fn insert_task_run_for_command(&self, job_run_id: i64, command: &str, timeout: u32) -> TaskRun {
+
+        let id = self.crud.insert_task_run(
+            &*self.conn_pool,
+            &InsertTaskRunData {
+                input: InsertTaskRunDataInput {
+                    job_run_id,
+                    job_id: "job".to_string(),
+                    task_id: format!("task-{}", uuid::Uuid::new_v4()),
+                    command: command.to_string(),
+                    depends_on: Vec::new(),
+                    timeout,
+                    max_retries: 0,
+                    retry_delay: 60,
+                    status: TaskRunStatus::Running,
+                },
+            },
+        ).await.unwrap();
+
+        self.task_run(id).await
     }
 
     async fn insert_task_run_with(
@@ -334,6 +363,39 @@ impl TestDb {
         ).await;
     }
 
+}
+
+
+/// Waits for a command to write a pid where the test asked it to, and reports it.
+pub async fn read_pid_file(path: &std::path::Path) -> i32 {
+
+    for _ in 0..2000 {
+        if let Ok(contents) = std::fs::read_to_string(path)
+            && let Ok(pid) = contents.trim().parse()
+        {
+            return pid;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+
+    panic!("no pid was written to {}", path.display());
+}
+
+/// Whether the process is gone, waiting up to two seconds for it — a killed grandchild is
+/// reparented before it is reaped, so it does not disappear the instant the signal lands.
+pub async fn has_exited(pid: i32) -> bool {
+
+    for _ in 0..2000 {
+        // Signal 0 checks for the process without sending anything.
+        if unsafe { libc::kill(pid, 0) } == -1 {
+            return true;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+
+    false
 }
 
 

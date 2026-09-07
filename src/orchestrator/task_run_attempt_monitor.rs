@@ -147,7 +147,7 @@ impl TaskRunAttemptMonitor {
 
         Self::read_output(task_run_attempt_child).await;
 
-        let _ = task_run_attempt_child.child.kill().await;
+        Self::kill_process_group(task_run_attempt_child).await;
 
         self.finish_task_run_attempt(
             task_run_attempt,
@@ -173,7 +173,7 @@ impl TaskRunAttemptMonitor {
 
         Self::read_output(task_run_attempt_child).await;
 
-        let _ = task_run_attempt_child.child.kill().await;
+        Self::kill_process_group(task_run_attempt_child).await;
 
         self.finish_task_run_attempt(
             task_run_attempt,
@@ -200,6 +200,25 @@ impl TaskRunAttemptMonitor {
         self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
 
         Ok(true)
+    }
+
+    /// Kills the command's whole process group, not just the process flowlite spawned.
+    ///
+    /// `sh -c` forks rather than execs for anything but a single command — so for most real
+    /// commands, signalling the child alone leaves its grandchildren running and a timed-out
+    /// task reports TimedOut while its work carries on. TaskRunAttemptDispatcher puts every
+    /// attempt in its own group, whose id is the pid of the sh it spawned.
+    ///
+    /// The kill that follows reaps the sh itself, which killpg has already signalled.
+    async fn kill_process_group(task_run_attempt_child: &mut TaskRunAttemptChild) {
+
+        if let Some(pid) = task_run_attempt_child.child.id() {
+            // Safe: killpg only delivers a signal, and a group that is already gone reports
+            // ESRCH, which is exactly the state we wanted.
+            unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
+        }
+
+        let _ = task_run_attempt_child.child.kill().await;
     }
 
     fn is_task_run_attempt_timed_out(task_run_attempt_child: &TaskRunAttemptChild) -> bool {
@@ -503,6 +522,90 @@ mod tests {
         assert_eq!(
             db.task_run_attempt(task_run_attempt.id).await.status,
             TaskRunAttemptStatus::TimedOut,
+        );
+    }
+
+    /// A command that makes `sh` fork rather than exec leaves a grandchild, which is most
+    /// real commands: anything with a `;`, a pipe or a background job. Killing only the
+    /// process flowlite spawned reports TimedOut while the actual work carries on.
+    ///
+    /// Spawned through the real dispatcher, not the fixture, so it covers both halves of
+    /// the fix: the process group the dispatcher creates, and the group this monitor kills.
+    #[tokio::test]
+    async fn a_timeout_kills_the_whole_process_group() {
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let pid_file = db.data_dir().join("timeout.pid");
+
+        let task_run = db.insert_task_run_for_command(
+            job_run.id,
+            &format!("sleep 30 & echo $! > {}; wait", pid_file.display()),
+            0,
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            1,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
+
+        let grandchild = crate::test_support::read_pid_file(&pid_file).await;
+
+        let task_run_attempt = db.task_run_attempt(task_run_attempt.id).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::TimedOut,
+        );
+        assert!(
+            crate::test_support::has_exited(grandchild).await,
+            "the grandchild outlived the timeout that reported TimedOut",
+        );
+    }
+
+    /// The same for a stop: making the work stop is the whole point of one. The stop goes
+    /// in after the dispatcher has spawned, since it would otherwise skip the attempt.
+    #[tokio::test]
+    async fn a_stop_kills_the_whole_process_group() {
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let pid_file = db.data_dir().join("stop.pid");
+
+        let task_run = db.insert_task_run_for_command(
+            job_run.id,
+            &format!("sleep 30 & echo $! > {}; wait", pid_file.display()),
+            3600,
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            1,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
+
+        let grandchild = crate::test_support::read_pid_file(&pid_file).await;
+
+        db.insert_job_run_stop(job_run.id).await;
+
+        let task_run_attempt = db.task_run_attempt(task_run_attempt.id).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Aborted,
+        );
+        assert!(
+            crate::test_support::has_exited(grandchild).await,
+            "the grandchild outlived the stop that reported Aborted",
         );
     }
 
