@@ -28,6 +28,8 @@ Step 1 before step 2 is what makes a stop beat a waiting retry: a job run stoppe
 
 **The child goes into the map before the status is written.** In the other order the monitor can see a `Running` attempt whose process isn't in the map yet and abort it.
 
+**Every attempt is spawned into its own process group** (`process_group(0)`), whose id is the pid of its `sh`. `sh -c` execs only for a single command; for anything with a `;`, a pipe or a background job it forks, so signalling the child alone leaves the command's real work running. The group is what makes a kill reach all of it — see the monitor's `kill_process_group` below. Keep the two together: the group is useless unsignalled, and `killpg` would signal a group that never existed.
+
 ## Monitor: Running → finished
 
 `TaskRunAttemptMonitor` ([src/orchestrator/task_run_attempt_monitor.rs](../../../../src/orchestrator/task_run_attempt_monitor.rs)) polls `Running` attempts on the same wake-up-or-interval schedule and takes their child out of `TaskRunAttemptChildren`:
@@ -35,12 +37,17 @@ Step 1 before step 2 is what makes a stop beat a waiting retry: a job run stoppe
 - **No child** → `settle_for_aborted_without_child`: `Aborted`, output left as last persisted. The map holds only processes *this* program spawned, so a `Running` row without one belongs to an earlier run of it. This is the restart path, and it is asked first because every transition below needs a process to act on.
 - **Child present** → each outcome owns its guard, drains the output itself and returns whether it fired, tried in this order:
   1. `settle_for_exit_status` — **exited?** → `Succeeded`/`Failed` from the exit status.
-  2. `settle_for_timed_out` — **past `task_run.timeout`?** → kill it, `TimedOut`. Measured from the in-memory spawn time (`times_out_at`), so neither the wait for dispatch nor the spawn counts against it.
-  3. `settle_for_aborted` — **job run stopped?** → kill it, `Aborted`.
+  2. `settle_for_timed_out` — **past `task_run.timeout`?** → kill its group, `TimedOut`. Measured from the in-memory spawn time (`times_out_at`), so neither the wait for dispatch nor the spawn counts against it.
+  3. `settle_for_aborted` — **job run stopped?** → kill its group, `Aborted`.
   4. `settle_for_running` — persist the output so far and put the child back for the next tick.
   5. Past all four → `anyhow::bail!`, unreachable while step 4 claims everything the others left.
 
 Steps 1–3 borrow the child (`&mut TaskRunAttemptChild`) rather than taking it, so the caller still owns it when none of them fires and can hand it to step 4.
+
+**Both kills go through `kill_process_group`**, which `killpg`s the group before reaping the `sh` — killing only the `sh` reported `TimedOut` or `Aborted` while the command's children carried on. Two consequences worth knowing:
+
+- **A task no longer dies with the terminal.** `sh` used to share flowlite's foreground process group, so Ctrl-C on `flowlite serve` killed running tasks incidentally. It no longer does, and nothing kills the groups on shutdown, so a task outlives flowlite and the next start aborts its attempt through `settle_for_aborted_without_child` while the work continues.
+- **The restart path cannot kill anything.** `settle_for_aborted_without_child` has no child and no group id — the map is memory — so it aborts the row and leaves whatever is still running.
 
 **Order decides precedence here**, on the same rule as [job_run.md](job_run.md): a real outcome outranks a stop, so step 3 is last. A process that already exited reports what it exited with rather than being recorded as killed, and one past its timeout reports the timeout. A process still running when its job run is stopped is still killed on the same pass, because steps 1 and 2 decline and step 3 is reached immediately.
 
