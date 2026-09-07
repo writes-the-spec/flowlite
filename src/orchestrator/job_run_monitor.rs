@@ -227,3 +227,110 @@ impl Service for JobRunMonitor {
 }
 
 
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestDb;
+
+    /// Runs the monitor over a running job run whose task runs have the given statuses,
+    /// and reports the status it settled the job run as.
+    async fn settled_job_run_status(task_run_statuses: &[TaskRunStatus]) -> JobRunStatus {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        for status in task_run_statuses {
+            db.insert_task_run(job_run.id, *status).await;
+        }
+
+        db.job_run_monitor().handle(&job_run).await.unwrap();
+
+        db.job_run(job_run.id).await.status
+    }
+
+    #[tokio::test]
+    async fn every_task_run_succeeding_succeeds_the_job_run() {
+        let status = settled_job_run_status(&[
+            TaskRunStatus::Succeeded,
+            TaskRunStatus::Succeeded,
+        ]).await;
+
+        assert_eq!(status, JobRunStatus::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn a_job_run_with_no_task_runs_succeeds() {
+        let status = settled_job_run_status(&[]).await;
+
+        assert_eq!(status, JobRunStatus::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn an_unfinished_task_run_keeps_the_job_run_running() {
+        let status = settled_job_run_status(&[
+            TaskRunStatus::Succeeded,
+            TaskRunStatus::Running,
+        ]).await;
+
+        assert_eq!(status, JobRunStatus::Running);
+    }
+
+    /// Two mechanisms hold this job run open — `settle_for_running` being asked before the
+    /// failure outcomes, and the `all_finished` each of them re-asks — so removing either
+    /// one alone still passes here. It pins the behaviour, not the redundancy.
+    #[tokio::test]
+    async fn a_failure_does_not_finish_a_job_run_whose_work_is_still_going() {
+        let status = settled_job_run_status(&[
+            TaskRunStatus::Failed,
+            TaskRunStatus::Running,
+        ]).await;
+
+        assert_eq!(status, JobRunStatus::Running);
+    }
+
+    /// A real failure outranks a stop: the failure is the part worth acting on.
+    #[tokio::test]
+    async fn a_failed_task_run_outranks_an_aborted_one() {
+        let status = settled_job_run_status(&[
+            TaskRunStatus::Aborted,
+            TaskRunStatus::Failed,
+        ]).await;
+
+        assert_eq!(status, JobRunStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn a_failed_task_run_outranks_a_timed_out_one() {
+        let status = settled_job_run_status(&[
+            TaskRunStatus::TimedOut,
+            TaskRunStatus::Failed,
+        ]).await;
+
+        assert_eq!(status, JobRunStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_task_run_outranks_an_aborted_one() {
+        let status = settled_job_run_status(&[
+            TaskRunStatus::Aborted,
+            TaskRunStatus::TimedOut,
+        ]).await;
+
+        assert_eq!(status, JobRunStatus::TimedOut);
+    }
+
+    /// A skipped task run reports a stop, and a job run that had started is aborted by one
+    /// rather than skipped — nothing in this monitor writes Skipped.
+    #[tokio::test]
+    async fn a_skipped_task_run_with_no_failure_aborts_the_job_run() {
+        let status = settled_job_run_status(&[
+            TaskRunStatus::Succeeded,
+            TaskRunStatus::Skipped,
+        ]).await;
+
+        assert_eq!(status, JobRunStatus::Aborted);
+    }
+}

@@ -296,3 +296,112 @@ impl Service for TaskRunMonitor {
         self.handle_running_task_run(task_run).await
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crud::job_run::JobRunStatus;
+    use crate::test_support::TestDb;
+
+    /// Runs the monitor over a running task run whose last attempt has the given status,
+    /// and reports what it settled the task run as, with the attempts it left behind.
+    async fn settle(
+        max_retries: u32,
+        attempt: u32,
+        attempt_status: TaskRunAttemptStatus,
+    ) -> (TaskRunStatus, Vec<u32>) {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_retryable_task_run(job_run.id, max_retries, 60).await;
+
+        db.insert_task_run_attempt(&task_run, attempt, attempt_status).await;
+
+        db.task_run_monitor().handle(&task_run).await.unwrap();
+
+        let attempts = db.task_run_attempts(task_run.id).await
+            .iter()
+            .map(|task_run_attempt| task_run_attempt.attempt)
+            .collect();
+
+        (db.task_run(task_run.id).await.status, attempts)
+    }
+
+    #[tokio::test]
+    async fn a_succeeded_attempt_succeeds_the_task_run() {
+        let (status, attempts) = settle(2, 1, TaskRunAttemptStatus::Succeeded).await;
+
+        assert_eq!(status, TaskRunStatus::Succeeded);
+        assert_eq!(attempts, vec![1]);
+    }
+
+    #[tokio::test]
+    async fn an_unfinished_attempt_is_left_to_the_attempt_services() {
+        let (status, attempts) = settle(2, 1, TaskRunAttemptStatus::Running).await;
+
+        assert_eq!(status, TaskRunStatus::Running);
+        assert_eq!(attempts, vec![1]);
+    }
+
+    /// Attempts count from 1, so `max_retries: 2` is three attempts in all.
+    #[tokio::test]
+    async fn a_failed_attempt_with_retries_left_starts_the_next_one() {
+        let (status, attempts) = settle(2, 1, TaskRunAttemptStatus::Failed).await;
+
+        assert_eq!(status, TaskRunStatus::Running);
+        assert_eq!(attempts, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_last_attempt_fails_the_task_run() {
+        let (status, attempts) = settle(2, 3, TaskRunAttemptStatus::Failed).await;
+
+        assert_eq!(status, TaskRunStatus::Failed);
+        assert_eq!(attempts, vec![3]);
+    }
+
+    #[tokio::test]
+    async fn a_task_run_with_no_retries_fails_on_its_first_attempt() {
+        let (status, attempts) = settle(0, 1, TaskRunAttemptStatus::Failed).await;
+
+        assert_eq!(status, TaskRunStatus::Failed);
+        assert_eq!(attempts, vec![1]);
+    }
+
+    /// A timeout is not retried: only a Failed attempt reaches `settle_for_running`.
+    #[tokio::test]
+    async fn a_timed_out_attempt_times_out_the_task_run() {
+        let (status, attempts) = settle(2, 1, TaskRunAttemptStatus::TimedOut).await;
+
+        assert_eq!(status, TaskRunStatus::TimedOut);
+        assert_eq!(attempts, vec![1]);
+    }
+
+    #[tokio::test]
+    async fn an_aborted_attempt_aborts_the_task_run() {
+        let (status, _attempts) = settle(2, 1, TaskRunAttemptStatus::Aborted).await;
+
+        assert_eq!(status, TaskRunStatus::Aborted);
+    }
+
+    /// A skipped attempt aborts the task run rather than skipping it: the task run had
+    /// started and may already have left output, so Skipped would claim nothing ran.
+    #[tokio::test]
+    async fn a_skipped_attempt_aborts_the_task_run_rather_than_skipping_it() {
+        let (status, _attempts) = settle(2, 1, TaskRunAttemptStatus::Skipped).await;
+
+        assert_eq!(status, TaskRunStatus::Aborted);
+    }
+
+    #[tokio::test]
+    async fn a_running_task_run_with_no_attempt_raises() {
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_retryable_task_run(job_run.id, 0, 60).await;
+
+        assert!(db.task_run_monitor().handle(&task_run).await.is_err());
+    }
+}

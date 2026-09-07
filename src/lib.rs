@@ -9,3 +9,6 @@ pub mod orchestrator;
 pub mod scheduler;
 pub mod signals;
 pub mod poller;
+
+#[cfg(test)]
+pub mod test_support;

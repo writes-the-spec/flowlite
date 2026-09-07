@@ -253,3 +253,64 @@ impl Service for TaskRunAttemptDispatcher {
         self.handle_pending_task_run_attempt(task_run_attempt).await
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crud::job_run::JobRunStatus;
+    use crate::test_support::TestDb;
+
+    /// Asks whether the attempt is still waiting out its retry_delay.
+    ///
+    /// Calls `settle_as_pending` rather than the whole chain on purpose: falling through it
+    /// means `settle_as_running` spawns a real process, which is what these tests are about
+    /// avoiding until the delay has passed.
+    async fn is_waiting_to_retry(attempt: u32, retry_delay: u32, created_ago: i64) -> bool {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_retryable_task_run(job_run.id, 2, retry_delay).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            attempt,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        db.backdate_task_run_attempt(
+            task_run_attempt.id,
+            Utc::now() - TimeDelta::seconds(created_ago),
+        ).await;
+
+        let task_run_attempt = db.task_run_attempts(task_run.id).await.pop().unwrap();
+
+        db.task_run_attempt_dispatcher()
+            .settle_as_pending(&task_run_attempt)
+            .await
+            .unwrap()
+    }
+
+    /// Attempt 1 is inserted by TaskRunDispatcher as it starts the task run, so it has no
+    /// failure behind it to wait out however long the retry_delay is.
+    #[tokio::test]
+    async fn the_first_attempt_never_waits() {
+        assert!(!is_waiting_to_retry(1, 60, 0).await);
+    }
+
+    #[tokio::test]
+    async fn the_retry_waits_while_the_delay_has_not_passed() {
+        assert!(is_waiting_to_retry(2, 60, 10).await);
+    }
+
+    #[tokio::test]
+    async fn the_retry_starts_once_the_delay_has_passed() {
+        assert!(!is_waiting_to_retry(2, 60, 61).await);
+    }
+
+    #[tokio::test]
+    async fn a_retry_delay_of_zero_does_not_wait() {
+        assert!(!is_waiting_to_retry(2, 0, 0).await);
+    }
+}
