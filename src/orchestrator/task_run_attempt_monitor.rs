@@ -3,11 +3,19 @@ use std::time::Duration;
 use crate::crud::CRUD;
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus, UpdateTaskRunAttemptsData, UpdateTaskRunAttemptsDataFilter, UpdateTaskRunAttemptsDataInput};
+use crate::crud::task_run_attempt_output::{InsertTaskRunAttemptOutputData, InsertTaskRunAttemptOutputDataInput, TaskRunAttemptOutputStream};
 use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
 use crate::poller::Service;
 use crate::signals::Signals;
 use chrono::Utc;
-use tokio::io::AsyncReadExt;
+
+
+/// How long a terminal pass waits for both readers to reach EOF.
+///
+/// Bounded because EOF is not guaranteed: something that escaped the process group can
+/// hold a pipe open after the kill. Poller::run handles rows in sequence, so an unbounded
+/// wait on one attempt would stop every other attempt from being handled at all.
+const READER_EOF_TIMEOUT: Duration = Duration::from_secs(2);
 
 
 /// Whether the ladder settled the attempt for good or handed it on to the next pass,
@@ -63,6 +71,12 @@ impl TaskRunAttemptMonitor {
     /// past its timeout reports the timeout. A process still running when its job run is
     /// stopped is still killed on this same pass, since the three outcomes above it decline.
     /// `settle_for_running` guards nothing at all, so it has to stay last.
+    ///
+    /// **Within the two rungs that kill, the kill comes before the drain.** The readers
+    /// end at EOF and a pipe closes when the process holding it dies, so killing is what
+    /// produces the EOF that lets `finish_reading` return. The reverse order — which is
+    /// what this did while the pass read the pipes itself — would wait out the whole of
+    /// READER_EOF_TIMEOUT on every timeout and every stop.
     async fn handle_running_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         let mut task_run_attempt_child = self.take_task_run_attempt_child(task_run_attempt).await?;
@@ -161,11 +175,10 @@ impl TaskRunAttemptMonitor {
             return Ok(false);
         }
 
-        Self::read_output(task_run_attempt_child).await;
+        self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
 
         self.finish_task_run_attempt(
             task_run_attempt,
-            task_run_attempt_child,
             TaskRunAttemptStatus::Succeeded,
         ).await?;
 
@@ -188,11 +201,10 @@ impl TaskRunAttemptMonitor {
             return Ok(false);
         }
 
-        Self::read_output(task_run_attempt_child).await;
+        self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
 
         self.finish_task_run_attempt(
             task_run_attempt,
-            task_run_attempt_child,
             TaskRunAttemptStatus::Failed,
         ).await?;
 
@@ -212,13 +224,15 @@ impl TaskRunAttemptMonitor {
             return Ok(false);
         }
 
-        Self::read_output(task_run_attempt_child).await;
-
+        // The kill comes before the drain: killing is what closes the pipes, and a closed
+        // pipe is the EOF that ends a reader. Draining first would wait out the whole of
+        // READER_EOF_TIMEOUT on a process that is still running and still holding them.
         task_run_attempt_child.kill_process_group().await;
+
+        self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
 
         self.finish_task_run_attempt(
             task_run_attempt,
-            task_run_attempt_child,
             TaskRunAttemptStatus::TimedOut,
         ).await?;
 
@@ -238,13 +252,13 @@ impl TaskRunAttemptMonitor {
             return Ok(false);
         }
 
-        Self::read_output(task_run_attempt_child).await;
-
+        // Killed before drained, for the reason `settle_for_timed_out` gives.
         task_run_attempt_child.kill_process_group().await;
+
+        self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
 
         self.finish_task_run_attempt(
             task_run_attempt,
-            task_run_attempt_child,
             TaskRunAttemptStatus::Aborted,
         ).await?;
 
@@ -261,34 +275,106 @@ impl TaskRunAttemptMonitor {
         task_run_attempt_child: &mut TaskRunAttemptChild,
     ) -> anyhow::Result<bool> {
 
-        Self::read_output(task_run_attempt_child).await;
-
-        self.update_task_run_attempt_output(task_run_attempt, task_run_attempt_child).await?;
+        self.record_output(task_run_attempt, task_run_attempt_child).await?;
 
         Ok(true)
     }
 
-    /// Drains whatever the process has written so far without blocking on it.
-    async fn read_output(running_task_run_attempt: &mut TaskRunAttemptChild) {
+    /// Records whatever the readers have delivered so far and returns immediately.
+    ///
+    /// Never waits: the readers run on their own and the next pass is a second away, so a
+    /// running attempt's output reaches the table at most one pass after it was written.
+    async fn record_output(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        task_run_attempt_child: &mut TaskRunAttemptChild,
+    ) -> anyhow::Result<()> {
 
-        let mut buf = [0; 1024];
+        let mut stdout = String::new();
+        let mut stderr = String::new();
 
-        loop {
-            match tokio::time::timeout(Duration::from_millis(10), running_task_run_attempt.stdout.read(&mut buf)).await {
-                Ok(Ok(0)) => break,
-                Ok(Ok(n)) => running_task_run_attempt.stdout_accumulated.extend_from_slice(&buf[..n]),
-                _ => break,
+        while let Ok(chunk) = task_run_attempt_child.chunks.try_recv() {
+            match chunk.stream {
+                TaskRunAttemptOutputStream::Stdout => stdout.push_str(&chunk.content),
+                TaskRunAttemptOutputStream::Stderr => stderr.push_str(&chunk.content),
             }
         }
 
-        loop {
-            match tokio::time::timeout(Duration::from_millis(10), running_task_run_attempt.stderr.read(&mut buf)).await {
-                Ok(Ok(0)) => break,
-                Ok(Ok(n)) => running_task_run_attempt.stderr_accumulated.extend_from_slice(&buf[..n]),
-                _ => break,
+        self.insert_output(task_run_attempt, stdout, stderr).await
+    }
+
+    /// Records everything the readers will ever deliver, by waiting for the channel to
+    /// close — which happens when both of them reach EOF and drop their senders.
+    ///
+    /// Waiting for a real EOF is what makes this final drain complete, unlike the 10ms
+    /// timeout it replaces, which could not tell a momentarily empty pipe from a finished
+    /// one.
+    async fn finish_reading(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        task_run_attempt_child: &mut TaskRunAttemptChild,
+    ) -> anyhow::Result<()> {
+
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+
+        let drained = tokio::time::timeout(READER_EOF_TIMEOUT, async {
+            while let Some(chunk) = task_run_attempt_child.chunks.recv().await {
+                match chunk.stream {
+                    TaskRunAttemptOutputStream::Stdout => stdout.push_str(&chunk.content),
+                    TaskRunAttemptOutputStream::Stderr => stderr.push_str(&chunk.content),
+                }
             }
+        }).await;
+
+        // EOF never came, so a reader is still blocked on a pipe something else holds open
+        // and will not return on its own.
+        if drained.is_err() {
+            task_run_attempt_child.abort_readers();
         }
 
+        self.insert_output(task_run_attempt, stdout, stderr).await
+    }
+
+    /// Appends one row per stream that has new output, and none for a stream that has not.
+    ///
+    /// One row per pass rather than one per read is what makes the write volume
+    /// proportional to the bytes the task produced. The column pair this replaced rewrote
+    /// the whole of a stream's output on every pass, so storing it cost the square of its
+    /// size.
+    async fn insert_output(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        stdout: String,
+        stderr: String,
+    ) -> anyhow::Result<()> {
+
+        let streams = [
+            (TaskRunAttemptOutputStream::Stdout, stdout),
+            (TaskRunAttemptOutputStream::Stderr, stderr),
+        ];
+
+        for (stream, content) in streams {
+
+            if content.is_empty() {
+                continue;
+            }
+
+            self.crud.insert_task_run_attempt_output(
+                &*self.conn_pool,
+                &InsertTaskRunAttemptOutputData {
+                    input: InsertTaskRunAttemptOutputDataInput {
+                        task_run_attempt_id: task_run_attempt.id,
+                        stream,
+                        content,
+                    },
+                },
+            ).await?;
+        }
+
+        // No publish: this runs on every pass for every running attempt and changes no
+        // status, so waking all six pollers here would put the bus back into a loop.
+        Ok(())
     }
 
     async fn get_task_run_attempts(&self, status: TaskRunAttemptStatus) -> anyhow::Result<Vec<TaskRunAttempt>> {
@@ -327,10 +413,15 @@ impl TaskRunAttemptMonitor {
 
     }
 
+    /// Writes the terminal status, and only that: the output already went in.
+    ///
+    /// Every caller drains through `finish_reading` first, which is deliberate — output is
+    /// recorded **before** the status that says the attempt is over, so **an attempt that
+    /// reads as terminal has complete output.** Writing the status first would leave a
+    /// window where the page shows Succeeded above a truncated log.
     async fn finish_task_run_attempt(
         &self,
         task_run_attempt: &TaskRunAttempt,
-        running_task_run_attempt: &TaskRunAttemptChild,
         status: TaskRunAttemptStatus,
     ) -> anyhow::Result<()> {
 
@@ -345,42 +436,14 @@ impl TaskRunAttemptMonitor {
                     status: Some(status),
                     started_at: None,
                     finished_at: Some(Some(Utc::now())),
-                    stdout: Some(String::from_utf8_lossy(&running_task_run_attempt.stdout_accumulated).to_string()),
-                    stderr: Some(String::from_utf8_lossy(&running_task_run_attempt.stderr_accumulated).to_string()),
+                    stdout: None,
+                    stderr: None,
                 },
             },
         ).await?;
 
         self.signals.publish();
 
-        Ok(())
-    }
-
-    async fn update_task_run_attempt_output(
-        &self,
-        task_run_attempt: &TaskRunAttempt,
-        running_task_run_attempt: &TaskRunAttemptChild,
-    ) -> anyhow::Result<()> {
-
-        self.crud.update_task_run_attempts(
-            &*self.conn_pool,
-            &UpdateTaskRunAttemptsData {
-                filter: UpdateTaskRunAttemptsDataFilter {
-                    id: Some(task_run_attempt.id),
-                    task_run_id: None,
-                },
-                input: UpdateTaskRunAttemptsDataInput {
-                    status: None,
-                    started_at: None,
-                    finished_at: None,
-                    stdout: Some(String::from_utf8_lossy(&running_task_run_attempt.stdout_accumulated).to_string()),
-                    stderr: Some(String::from_utf8_lossy(&running_task_run_attempt.stderr_accumulated).to_string()),
-                },
-            },
-        ).await?;
-
-        // No publish: this runs on every pass for every running attempt and changes no
-        // status, so waking all six pollers here would put the bus back into a loop.
         Ok(())
     }
 
@@ -417,6 +480,7 @@ mod tests {
     use super::*;
     use crate::crud::job_run::JobRunStatus;
     use crate::crud::task_run::TaskRunStatus;
+    use crate::crud::task_run_attempt_output::{SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort};
     use crate::test_support::TestDb;
     use chrono::TimeDelta;
 
@@ -707,12 +771,14 @@ mod tests {
             Utc::now() + TimeDelta::seconds(3600),
         ).await;
 
-        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+        // Passes until the reader has delivered, since `record_output` waits for nothing.
+        let stdout = db.poll_until_stdout(&task_run_attempt).await;
 
-        let settled = db.task_run_attempt(task_run_attempt.id).await;
-
-        assert_eq!(settled.status, TaskRunAttemptStatus::Running);
-        assert_eq!(settled.stdout, "hello\n");
+        assert_eq!(stdout, "hello\n");
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Running,
+        );
 
         // The process is handed back for the next pass, so this is the one outcome that
         // leaves one running: take it back and kill it rather than outliving the suite.
@@ -720,5 +786,142 @@ mod tests {
             .expect("settle_for_running must put the process back for the next pass");
 
         handed_back.child.kill().await.unwrap();
+    }
+
+    /// The cap must not stop the reader reading. The pipe is 64 KiB, so a task writing past
+    /// the cap blocks on a full one the moment recording stops, and the attempt then never
+    /// finishes at all. Two megabytes through a one-megabyte cap is the shape of that bug,
+    /// and it fails by hanging rather than by a wrong value.
+    #[tokio::test]
+    async fn a_task_over_the_cap_still_finishes() {
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let task_run = db.insert_task_run_for_command(
+            job_run.id,
+            "exec yes 0123456789012345678901234567890123456789012345678901234567890123 | head -c 2097152",
+            3600,
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            1,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
+
+        let task_run_attempt = db.task_run_attempt(task_run_attempt.id).await;
+
+        // The command has to exit before the ladder can settle it, so keep passing.
+        for _ in 0..600 {
+            db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+            if db.task_run_attempt(task_run_attempt.id).await.status != TaskRunAttemptStatus::Running {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let stdout = db.task_run_attempt_output(task_run_attempt.id).await.stdout;
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Succeeded,
+        );
+        assert!(
+            stdout.ends_with(&format!(
+                "\n[flowlite: output truncated, exceeded {} bytes]\n",
+                crate::orchestrator::task_run_attempt_reader::MAX_STREAM_BYTES,
+            )),
+            "the cap did not report itself",
+        );
+    }
+
+    /// Output written just before a timeout is still recorded, which is the case the
+    /// inverted order exists for: the kill is what closes the pipe and gives the reader the
+    /// EOF that `finish_reading` waits for.
+    #[tokio::test]
+    async fn output_written_before_a_timeout_is_recorded() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        let wrote = db.data_dir().join("wrote.pid");
+
+        db.spawn_running_child(
+            &task_run_attempt,
+            &format!("echo before the deadline; echo $$ > {}; exec sleep 30", wrote.display()),
+            Utc::now() - TimeDelta::seconds(1),
+        ).await;
+
+        // The pass kills before it drains, so the echo has to have already happened or the
+        // test races the shell's startup instead of testing the drain. The drain this
+        // replaced waited out two 10ms timeouts first, which hid that race by accident.
+        crate::test_support::read_pid_file(&wrote).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::TimedOut,
+        );
+        assert_eq!(
+            db.task_run_attempt_output(task_run_attempt.id).await.stdout,
+            "before the deadline\n",
+        );
+    }
+
+    /// One row per stream per pass, not one per read: that is what keeps the total bytes
+    /// written equal to the bytes the task produced instead of the square of them.
+    #[tokio::test]
+    async fn a_pass_writes_at_most_one_row_per_stream() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_exited_child(
+            &task_run_attempt,
+            "echo one; echo two; echo three",
+            Utc::now() + TimeDelta::seconds(3600),
+        ).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        let rows = db.crud.select_task_run_attempt_outputs(
+            &*db.conn_pool,
+            &SelectTaskRunAttemptOutputsData {
+                filter: SelectTaskRunAttemptOutputsDataFilter {
+                    id: None,
+                    task_run_attempt_id: Some(task_run_attempt.id),
+                    task_run_attempt_ids: None,
+                    stream: None,
+                },
+                sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),
+            },
+        ).await.unwrap();
+
+        assert_eq!(rows.len(), 1, "three echos drained on one pass are one stdout row");
+        assert_eq!(rows[0].content, "one\ntwo\nthree\n");
+    }
+
+    /// stderr is recorded apart from stdout, which is the whole reason the two are separate.
+    #[tokio::test]
+    async fn the_two_streams_are_recorded_apart() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_exited_child(
+            &task_run_attempt,
+            "echo out; echo err >&2",
+            Utc::now() + TimeDelta::seconds(3600),
+        ).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        let streams = db.task_run_attempt_output(task_run_attempt.id).await;
+
+        assert_eq!(streams.stdout, "out\n");
+        assert_eq!(streams.stderr, "err\n");
     }
 }

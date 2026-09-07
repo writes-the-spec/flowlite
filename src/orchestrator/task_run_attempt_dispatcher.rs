@@ -4,7 +4,9 @@ use crate::crud::CRUD;
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRun};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus, UpdateTaskRunAttemptsData, UpdateTaskRunAttemptsDataFilter, UpdateTaskRunAttemptsDataInput};
+use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStream;
 use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
+use crate::orchestrator::task_run_attempt_reader::read_task_run_attempt_stream;
 use crate::poller::Service;
 use crate::signals::Signals;
 use chrono::{TimeDelta, Utc};
@@ -140,12 +142,29 @@ impl TaskRunAttemptDispatcher {
         let started_at = Utc::now();
         let times_out_at = started_at + TimeDelta::seconds(task_run.timeout as i64);
 
+        let (chunks_sender, chunks) = tokio::sync::mpsc::unbounded_channel();
+
+        let readers = [
+            tokio::spawn(read_task_run_attempt_stream(
+                stdout,
+                TaskRunAttemptOutputStream::Stdout,
+                chunks_sender.clone(),
+            )),
+            // The original sender moves in here rather than being kept: the channel closes
+            // when the last sender drops, and that close is how TaskRunAttemptMonitor knows
+            // both readers reached EOF. A clone held back here would mean it never closes,
+            // and every terminal pass would wait out its whole EOF timeout.
+            tokio::spawn(read_task_run_attempt_stream(
+                stderr,
+                TaskRunAttemptOutputStream::Stderr,
+                chunks_sender,
+            )),
+        ];
+
         let running_task_run_attempt = TaskRunAttemptChild {
             child,
-            stdout,
-            stderr,
-            stdout_accumulated: Vec::new(),
-            stderr_accumulated: Vec::new(),
+            chunks,
+            readers,
             times_out_at,
         };
 

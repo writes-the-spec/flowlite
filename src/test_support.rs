@@ -8,10 +8,13 @@ use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput}
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRun, TaskRunStatus};
 use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
 use crate::orchestrator::job_run_monitor::JobRunMonitor;
+use crate::crud::task_run_attempt_output::{group_task_run_attempt_output, SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort, TaskRunAttemptOutputStream, TaskRunAttemptOutputStreams};
 use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
+use crate::orchestrator::task_run_attempt_reader::read_task_run_attempt_stream;
 use crate::orchestrator::task_run_attempt_dispatcher::TaskRunAttemptDispatcher;
 use crate::orchestrator::task_run_attempt_monitor::TaskRunAttemptMonitor;
 use crate::orchestrator::task_run_monitor::TaskRunMonitor;
+use crate::poller::Service;
 use crate::signals::Signals;
 use crate::toolkit::Toolkit;
 
@@ -341,6 +344,9 @@ impl TestDb {
             .unwrap()
     }
 
+    /// Hands the child over the way TaskRunAttemptDispatcher does, readers and all — the
+    /// original sender moves into the second one rather than being kept here, or the
+    /// channel would never close and every terminal pass would wait out its EOF timeout.
     async fn hand_over(
         &self,
         task_run_attempt: &TaskRunAttempt,
@@ -350,17 +356,73 @@ impl TestDb {
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
 
+        let (chunks_sender, chunks) = tokio::sync::mpsc::unbounded_channel();
+
+        let readers = [
+            tokio::spawn(read_task_run_attempt_stream(
+                stdout,
+                TaskRunAttemptOutputStream::Stdout,
+                chunks_sender.clone(),
+            )),
+            tokio::spawn(read_task_run_attempt_stream(
+                stderr,
+                TaskRunAttemptOutputStream::Stderr,
+                chunks_sender,
+            )),
+        ];
+
         self.children.insert(
             task_run_attempt.id,
             TaskRunAttemptChild {
                 child,
-                stdout,
-                stderr,
-                stdout_accumulated: Vec::new(),
-                stderr_accumulated: Vec::new(),
+                chunks,
+                readers,
                 times_out_at,
             },
         ).await;
+    }
+
+    /// The output recorded for one attempt, assembled the way the route and the CLI do.
+    pub async fn task_run_attempt_output(&self, task_run_attempt_id: i64) -> TaskRunAttemptOutputStreams {
+
+        let rows = self.crud.select_task_run_attempt_outputs(
+            &*self.conn_pool,
+            &SelectTaskRunAttemptOutputsData {
+                filter: SelectTaskRunAttemptOutputsDataFilter {
+                    id: None,
+                    task_run_attempt_id: Some(task_run_attempt_id),
+                    task_run_attempt_ids: None,
+                    stream: None,
+                },
+                sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),
+            },
+        ).await.unwrap();
+
+        group_task_run_attempt_output(rows)
+            .remove(&task_run_attempt_id)
+            .unwrap_or_default()
+    }
+
+    /// Runs monitor passes until the attempt has recorded some stdout.
+    ///
+    /// A reader delivers on its own schedule and `record_output` never waits for one, so a
+    /// running attempt's first output lands on some later pass rather than on the pass that
+    /// followed the write. Asserting after a single pass is a race.
+    pub async fn poll_until_stdout(&self, task_run_attempt: &TaskRunAttempt) -> String {
+
+        for _ in 0..2000 {
+            self.task_run_attempt_monitor().handle(task_run_attempt).await.unwrap();
+
+            let stdout = self.task_run_attempt_output(task_run_attempt.id).await.stdout;
+
+            if !stdout.is_empty() {
+                return stdout;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+
+        panic!("no stdout was recorded for attempt {}", task_run_attempt.id);
     }
 
 }

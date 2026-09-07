@@ -1,21 +1,40 @@
 use std::collections::HashMap;
 use chrono::{DateTime, Utc};
-use tokio::process::{Child, ChildStderr, ChildStdout};
+use crate::orchestrator::task_run_attempt_reader::TaskRunAttemptOutputChunk;
+use tokio::process::Child;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::task::JoinHandle;
 
 
 /// The child process of one task run attempt, kept alive between polls.
 pub struct TaskRunAttemptChild {
     pub child: Child,
-    pub stdout: ChildStdout,
-    pub stderr: ChildStderr,
-    pub stdout_accumulated: Vec<u8>,
-    pub stderr_accumulated: Vec<u8>,
+    /// Everything the readers have delivered and the monitor has not recorded yet.
+    ///
+    /// `recv` returning None is how the monitor learns both readers reached EOF, so the
+    /// only senders in existence are the two the readers own — TaskRunAttemptDispatcher
+    /// keeps none of its own, or the channel would never close.
+    pub chunks: UnboundedReceiver<TaskRunAttemptOutputChunk>,
+    pub readers: [JoinHandle<()>; 2],
     pub times_out_at: DateTime<Utc>,
 }
 
 
 impl TaskRunAttemptChild {
+
+    /// Stops both readers.
+    ///
+    /// A reader owns its pipe file descriptor and blocks on reading it, so one left behind
+    /// after something else kept the pipe open holds that descriptor for as long as this
+    /// process lives. Aborting is the only way to reclaim it: the reader will not return on
+    /// its own, because the EOF it is waiting for is never coming.
+    pub fn abort_readers(&self) {
+
+        for reader in &self.readers {
+            reader.abort();
+        }
+    }
 
     /// Kills the command's whole process group, not just the process flowlite spawned.
     ///
