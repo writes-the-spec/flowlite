@@ -14,7 +14,7 @@ pub struct CronTrigger {
 }
 
 impl CronTrigger {
-    
+
     pub fn new(
         schedule: CronSchedule,
         timezone: Tz,
@@ -41,7 +41,7 @@ impl CronTrigger {
         }
     }
 
-    
+
     pub fn get_next_run(&self, start_from: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
         self.get_next_run_tz(start_from).map(|dt| dt.with_timezone(&Utc))
     }

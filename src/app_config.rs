@@ -17,7 +17,7 @@ impl AppConfig {
     pub fn load(config_dir: Option<PathBuf>, data_dir: Option<PathBuf>) -> Result<AppConfig> {
 
         let figment = Figment::new();
-        
+
         let config_dir_fin = if let Some(config_dir) = config_dir {
             config_dir
         } else {

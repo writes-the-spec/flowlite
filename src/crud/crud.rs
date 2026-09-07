@@ -175,7 +175,7 @@ impl CRUD {
                                 schedule_path.display(),
                             ))?;
                     }
-                    
+
                 }
             }
         }

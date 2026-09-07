@@ -42,7 +42,7 @@ impl JobListCmd {
         let mut conn = toolkit.get_conn().await?;
 
         let crud = CRUD::new(std::sync::Arc::new(toolkit));
-        
+
         crud.init(&mut conn).await?;
 
         let jobs = crud.select_jobs(&mut conn, &SelectJobsData {
@@ -74,7 +74,7 @@ impl JobSubmitCmd {
 
         let mut conn = toolkit.get_conn().await?;
         let crud = CRUD::new(std::sync::Arc::new(toolkit));
-        
+
         crud.init(&mut conn).await?;
 
         let job = crud.select_job(&mut conn, &SelectJobsData {

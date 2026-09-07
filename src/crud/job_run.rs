@@ -165,7 +165,7 @@ impl CRUD {
             query_builder.push(" OFFSET ");
             query_builder.push_bind(offset);
         }
-        
+
         let runs = query_builder
             .build_query_as::<JobRun>()
             .fetch_all(executor)
@@ -200,9 +200,9 @@ impl CRUD {
             separated.push_bind_unseparated(finished_at);
         }
 
-        if !data.input.status.is_some()
-            && !data.input.started_at.is_some()
-            && !data.input.finished_at.is_some()
+        if data.input.status.is_none()
+            && data.input.started_at.is_none()
+            && data.input.finished_at.is_none()
         {
             return Ok(());
         }
@@ -215,7 +215,7 @@ impl CRUD {
         }
 
         let query = query_builder.build();
-        
+
         query.execute(executor).await?;
 
         Ok(())

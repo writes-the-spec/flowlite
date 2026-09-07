@@ -31,7 +31,7 @@ pub enum SelectJobRunStopsSort {
     CreatedAtDesc,
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
 pub struct JobRunStop {
     pub id: i64,
     pub job_run_id: i64,
@@ -105,5 +105,5 @@ impl CRUD {
 
         Ok(aborts)
     }
-    
+
 }

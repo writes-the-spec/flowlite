@@ -21,7 +21,7 @@ pub struct Toolkit {
 
 
 impl Toolkit {
-    
+
     pub fn new(app_config: AppConfig) -> Self {
         Self { app_config }
     }
@@ -69,7 +69,7 @@ impl Toolkit {
         }
         let db_path = data_dir.join("flowlite.db");
         let connection_string = format!("sqlite:{}?mode=rwc", db_path.to_string_lossy());
-        
+
         Ok(connection_string)
     }
 
