@@ -32,14 +32,17 @@ impl JobRunMonitor {
 
     /// Settles a running job run as exactly one outcome, from its task runs alone.
     ///
-    /// The three failure outcomes each ask for every task run having finished as well as
-    /// for their own status, so none of them can finish a job run whose work is still
-    /// going — finishing is irreversible, since this monitor only visits Running rows.
-    ///
     /// **Order decides precedence**: a real failure outranks a stop, so `settle_for_aborted`
-    /// is last — a job run with one aborted and one failed task run reports the failure,
-    /// which is the part worth acting on. Failed outranks timed out. That ordering is also
-    /// what makes a skipped task run readable as a stop; see `TaskRunStatus::is_stopped`.
+    /// is the last of the finished outcomes — a job run with one aborted and one failed task
+    /// run reports the failure, which is the part worth acting on. Failed outranks timed out.
+    /// That ordering is also what makes a skipped task run readable as a stop; see
+    /// `TaskRunStatus::is_stopped`.
+    ///
+    /// `settle_for_running` is asked last, the succeeded, failed, timed out, aborted, running
+    /// ladder all three monitors read in: it is the outcome that guards nothing of its own,
+    /// so the `all_finished` each failure outcome re-asks is the one thing holding open a job
+    /// run whose work is still going — finishing is irreversible, since this monitor only
+    /// visits Running rows.
     ///
     /// Nothing here writes Skipped: a Running job run has started, so a stop aborts it.
     async fn handle_running_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
@@ -47,10 +50,6 @@ impl JobRunMonitor {
         let task_runs = self.get_task_runs(job_run).await?;
 
         if self.settle_for_succeeded(job_run, &task_runs).await? {
-            return Ok(());
-        }
-
-        if self.settle_for_running(job_run, &task_runs).await? {
             return Ok(());
         }
 
@@ -63,6 +62,10 @@ impl JobRunMonitor {
         }
 
         if self.settle_for_aborted(job_run, &task_runs).await? {
+            return Ok(());
+        }
+
+        if self.settle_for_running(job_run, &task_runs).await? {
             return Ok(());
         }
 
@@ -89,7 +92,8 @@ impl JobRunMonitor {
     }
 
     /// Leaves the job run running, writing nothing, while any task run of it is still
-    /// pending or running.
+    /// pending or running. Asked last, so it claims every job run the outcomes above
+    /// declined; the bail below it means a task run status none of them knows.
     async fn settle_for_running(&self, _job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
         Ok(task_runs.iter().any(|task_run| !task_run.status.is_finished()))
@@ -278,9 +282,9 @@ mod tests {
         assert_eq!(status, JobRunStatus::Running);
     }
 
-    /// Two mechanisms hold this job run open — `settle_for_running` being asked before the
-    /// failure outcomes, and the `all_finished` each of them re-asks — so removing either
-    /// one alone still passes here. It pins the behaviour, not the redundancy.
+    /// The `all_finished` each failure outcome re-asks is what holds this job run open:
+    /// `settle_for_running` is asked after them, so dropping one of those guards finishes
+    /// the job run here instead and fails this test.
     #[tokio::test]
     async fn a_failure_does_not_finish_a_job_run_whose_work_is_still_going() {
         let status = settled_job_run_status(&[

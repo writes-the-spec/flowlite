@@ -72,9 +72,9 @@ impl TaskRunAttemptChildren {
     /// Kills every process still running, for shutdown. Takes them out of the map as it
     /// goes, so nothing polling afterwards finds a process that is already dead.
     ///
-    /// The attempt rows are left Running: the next start settles them through
-    /// `TaskRunAttemptMonitor::settle_for_aborted_without_child`, which is where an attempt
-    /// with no process belongs, and which this makes truthful.
+    /// The attempt rows are left Running, and the next start cannot settle them either:
+    /// its monitor raises on an attempt with no process, so the row stays Running and is
+    /// logged once a second.
     pub async fn kill_all(self: &Self) {
 
         let mut children = self.children.lock().await;

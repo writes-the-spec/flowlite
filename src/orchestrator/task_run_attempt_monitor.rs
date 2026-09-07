@@ -42,24 +42,28 @@ impl TaskRunAttemptMonitor {
         }
     }
 
-    /// Settles a running attempt as exactly one outcome. A missing process is settled
-    /// first, since every outcome below needs one to act on.
+    /// Settles a running attempt as exactly one outcome, from the process
+    /// `take_task_run_attempt_child` hands over — which raises when there is none, as
+    /// TaskRunMonitor's `get_last_task_run_attempt` does for a running task run with no
+    /// attempt: both are rows this program cannot read. Raising settles nothing, so such a
+    /// row keeps its status and strands the task run and job run above it.
     ///
-    /// **Order decides precedence**, on the same rule as JobRunMonitor: a real outcome
-    /// outranks a stop, so `settle_for_aborted` is asked last. A process that has already
+    /// **Order decides precedence**, in the succeeded, failed, timed out, aborted, running
+    /// ladder all three monitors read in: a real outcome outranks a stop, so
+    /// `settle_for_aborted` is the last of the finished ones. A process that has already
     /// exited reports what it exited with rather than being recorded as killed, and one
     /// past its timeout reports the timeout. A process still running when its job run is
-    /// stopped is still killed on this same pass, since the two outcomes above it decline.
+    /// stopped is still killed on this same pass, since the three outcomes above it decline.
+    /// `settle_for_running` guards nothing at all, so it has to stay last.
     async fn handle_running_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
-        let task_run_attempt_child = self.children.remove(task_run_attempt.id).await;
+        let mut task_run_attempt_child = self.take_task_run_attempt_child(task_run_attempt).await?;
 
-        let Some(mut task_run_attempt_child) = task_run_attempt_child else {
-            self.settle_for_aborted_without_child(task_run_attempt).await?;
+        if self.settle_for_succeeded(task_run_attempt, &mut task_run_attempt_child).await? {
             return Ok(());
-        };
+        }
 
-        if self.settle_for_exit_status(task_run_attempt, &mut task_run_attempt_child).await? {
+        if self.settle_for_failed(task_run_attempt, &mut task_run_attempt_child).await? {
             return Ok(());
         }
 
@@ -76,41 +80,40 @@ impl TaskRunAttemptMonitor {
         }
 
         anyhow::bail!(
-            "Task run attempt {} settled as nothing: its job run was not stopped, it was \
-             not past its timeout, its process had not exited, and it was not kept running",
+            "Task run attempt {} settled as nothing: its process had neither succeeded nor \
+             failed, it was not past its timeout, its job run was not stopped, and it was \
+             not kept running",
             task_run_attempt.id,
         )
     }
 
-    /// Aborts an attempt whose process is not in TaskRunAttemptChildren: it was spawned
-    /// by an earlier run of this program, so there is nothing left to wait for and its
-    /// output is whatever was persisted before. This is the restart path.
-    async fn settle_for_aborted_without_child(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
+    /// Takes the attempt's process out of TaskRunAttemptChildren, raising when there is
+    /// none. The map holds only processes *this* program spawned, so a Running row without
+    /// one belongs to an earlier run of it — the restart path — or lost its child to an
+    /// error mid-pass. Neither is something this monitor can settle from: it has no exit
+    /// status, no group to kill, and only whatever output was persisted before.
+    async fn take_task_run_attempt_child(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+    ) -> anyhow::Result<TaskRunAttemptChild> {
 
-        self.crud.update_task_run_attempts(
-            &*self.conn_pool,
-            &UpdateTaskRunAttemptsData {
-                filter: UpdateTaskRunAttemptsDataFilter {
-                    id: Some(task_run_attempt.id),
-                    task_run_id: None,
-                },
-                input: UpdateTaskRunAttemptsDataInput {
-                    status: Some(TaskRunAttemptStatus::Aborted),
-                    started_at: None,
-                    finished_at: Some(Some(Utc::now())),
-                    stdout: None,
-                    stderr: None,
-                },
-            },
-        ).await?;
+        self.children
+            .remove(task_run_attempt.id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!(
+                "Task run attempt {} is running with no process to wait on",
+                task_run_attempt.id,
+            ))
 
-        self.signals.publish();
-
-        Ok(())
     }
 
-    /// Finishes the attempt with the status its process exited with, once it has exited.
-    async fn settle_for_exit_status(
+    /// Succeeds the attempt once its process has exited zero.
+    ///
+    /// Asks `try_wait` for itself, as `settle_for_failed` does rather than the two sharing
+    /// one exit-status call: they are two lines of the ladder every monitor reads in, and
+    /// which of them claimed the attempt should be readable from the chain. `try_wait`
+    /// caches the status it reaped, so asking twice is a repeated question, not a race.
+    async fn settle_for_succeeded(
         &self,
         task_run_attempt: &TaskRunAttempt,
         task_run_attempt_child: &mut TaskRunAttemptChild,
@@ -120,14 +123,44 @@ impl TaskRunAttemptMonitor {
             return Ok(false);
         };
 
+        if !exit_status.success() {
+            return Ok(false);
+        }
+
         Self::read_output(task_run_attempt_child).await;
 
-        let status = match exit_status.success() {
-            true => TaskRunAttemptStatus::Succeeded,
-            false => TaskRunAttemptStatus::Failed,
+        self.finish_task_run_attempt(
+            task_run_attempt,
+            task_run_attempt_child,
+            TaskRunAttemptStatus::Succeeded,
+        ).await?;
+
+        Ok(true)
+    }
+
+    /// Fails the attempt once its process has exited non-zero. Nothing is retried here:
+    /// TaskRunMonitor reads this status and decides whether another attempt goes in.
+    async fn settle_for_failed(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        task_run_attempt_child: &mut TaskRunAttemptChild,
+    ) -> anyhow::Result<bool> {
+
+        let Some(exit_status) = task_run_attempt_child.child.try_wait()? else {
+            return Ok(false);
         };
 
-        self.finish_task_run_attempt(task_run_attempt, task_run_attempt_child, status).await?;
+        if exit_status.success() {
+            return Ok(false);
+        }
+
+        Self::read_output(task_run_attempt_child).await;
+
+        self.finish_task_run_attempt(
+            task_run_attempt,
+            task_run_attempt_child,
+            TaskRunAttemptStatus::Failed,
+        ).await?;
 
         Ok(true)
     }
@@ -139,7 +172,7 @@ impl TaskRunAttemptMonitor {
         task_run_attempt_child: &mut TaskRunAttemptChild,
     ) -> anyhow::Result<bool> {
 
-        let timed_out = Self::is_task_run_attempt_timed_out(task_run_attempt_child);
+        let timed_out = Utc::now() > task_run_attempt_child.times_out_at;
 
         if !timed_out {
             return Ok(false);
@@ -200,10 +233,6 @@ impl TaskRunAttemptMonitor {
         self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
 
         Ok(true)
-    }
-
-    fn is_task_run_attempt_timed_out(task_run_attempt_child: &TaskRunAttemptChild) -> bool {
-        Utc::now() > task_run_attempt_child.times_out_at
     }
 
     /// Drains whatever the process has written so far without blocking on it.
@@ -367,7 +396,7 @@ mod tests {
         db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await
     }
 
-    /// Pins `settle_for_exit_status` ahead of `settle_for_running`. `settle_for_running`
+    /// Pins `settle_for_succeeded` ahead of `settle_for_running`. `settle_for_running`
     /// guards nothing and returns true for every attempt it is asked about, so moving it
     /// up leaves this attempt Running for ever and the task run never finishes.
     #[tokio::test]
@@ -385,6 +414,7 @@ mod tests {
         );
     }
 
+    /// The same for `settle_for_failed`, the other half of the exit status.
     #[tokio::test]
     async fn a_process_that_exited_non_zero_fails_the_attempt() {
         let db = TestDb::new().await;
@@ -461,7 +491,7 @@ mod tests {
         );
     }
 
-    /// Pins `settle_for_exit_status` ahead of `settle_for_timed_out`: a process that got
+    /// Pins `settle_for_succeeded` ahead of `settle_for_timed_out`: a process that got
     /// there on its own before the poll pass noticed the deadline reports what it exited
     /// with, rather than being recorded as killed by a timeout that never killed it.
     #[tokio::test]
@@ -592,17 +622,14 @@ mod tests {
 
     /// The restart path: a running attempt whose process was spawned by an earlier run of
     /// this program is not in TaskRunAttemptChildren, so there is nothing left to wait for.
+    /// Raises, as TaskRunMonitor does for a running task run with no attempt, and leaves
+    /// the row Running: nothing else settles it.
     #[tokio::test]
-    async fn a_running_attempt_with_no_process_is_aborted() {
+    async fn a_running_attempt_with_no_process_raises() {
         let db = TestDb::new().await;
         let task_run_attempt = running_attempt(&db).await;
 
-        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
-
-        assert_eq!(
-            db.task_run_attempt(task_run_attempt.id).await.status,
-            TaskRunAttemptStatus::Aborted,
-        );
+        assert!(db.task_run_attempt_monitor().handle(&task_run_attempt).await.is_err());
     }
 
     #[tokio::test]

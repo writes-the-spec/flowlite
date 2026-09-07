@@ -36,20 +36,19 @@ impl TaskRunMonitor {
     /// Settles a running task run as exactly one outcome, from its last attempt.
     ///
     /// The guards are exclusive — the last attempt has one status, and `settle_for_failed`
-    /// and `settle_for_running` split a failed one on whether an attempt is left — so unlike
-    /// JobRunMonitor the order here carries nothing, and matches that ladder only so the
-    /// two read alike. The bail replaces the exhaustive match this used to be: a new
-    /// TaskRunAttemptStatus no longer fails to compile, it reaches the bail at runtime and
-    /// `Poller::run` logs it with the row id.
+    /// and `settle_for_running` split a failed one on whether an attempt is left — so the
+    /// order here carries nothing, and matches the succeeded, failed, timed out, aborted,
+    /// running ladder only so all three monitors read alike. `settle_for_timed_out` and
+    /// `settle_for_aborted` still re-ask whether the attempt has finished, the guard
+    /// JobRunMonitor's failure outcomes carry: exclusive statuses already imply it, so it
+    /// is redundant on purpose rather than load-bearing. The bail replaces the
+    /// exhaustive match this used to be: a new TaskRunAttemptStatus no longer fails to
+    /// compile, it reaches the bail at runtime and `Poller::run` logs it with the row id.
     async fn handle_running_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         let last_task_run_attempt = self.get_last_task_run_attempt(task_run).await?;
 
         if self.settle_for_succeeded(task_run, &last_task_run_attempt).await? {
-            return Ok(());
-        }
-
-        if self.settle_for_running(task_run, &last_task_run_attempt).await? {
             return Ok(());
         }
 
@@ -62,6 +61,10 @@ impl TaskRunMonitor {
         }
 
         if self.settle_for_aborted(task_run, &last_task_run_attempt).await? {
+            return Ok(());
+        }
+
+        if self.settle_for_running(task_run, &last_task_run_attempt).await? {
             return Ok(());
         }
 
@@ -141,13 +144,21 @@ impl TaskRunMonitor {
         Ok(true)
     }
 
+    /// Re-asks whether the attempt has finished, as `settle_for_aborted` does and as
+    /// JobRunMonitor's failure outcomes do: TimedOut implies finished, so this is a second
+    /// lock on the same door, and it is what keeps `settle_for_running` being asked last
+    /// from being the only thing standing between an in-flight attempt and a finished
+    /// task run.
     async fn settle_for_timed_out(
         &self,
         task_run: &TaskRun,
         last_task_run_attempt: &TaskRunAttempt,
     ) -> anyhow::Result<bool> {
 
-        if last_task_run_attempt.status != TaskRunAttemptStatus::TimedOut {
+        let attempt_finished = last_task_run_attempt.status.is_finished();
+        let timed_out = last_task_run_attempt.status == TaskRunAttemptStatus::TimedOut;
+
+        if !attempt_finished || !timed_out {
             return Ok(false);
         }
 
@@ -168,7 +179,10 @@ impl TaskRunMonitor {
         last_task_run_attempt: &TaskRunAttempt,
     ) -> anyhow::Result<bool> {
 
-        if !last_task_run_attempt.status.is_stopped() {
+        let attempt_finished = last_task_run_attempt.status.is_finished();
+        let stopped = last_task_run_attempt.status.is_stopped();
+
+        if !attempt_finished || !stopped {
             return Ok(false);
         }
 

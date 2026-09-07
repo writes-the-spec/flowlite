@@ -34,23 +34,24 @@ Step 1 before step 2 is what makes a stop beat a waiting retry: a job run stoppe
 
 `TaskRunAttemptMonitor` ([src/orchestrator/task_run_attempt_monitor.rs](../../../../src/orchestrator/task_run_attempt_monitor.rs)) polls `Running` attempts on the same wake-up-or-interval schedule and takes their child out of `TaskRunAttemptChildren`:
 
-- **No child** → `settle_for_aborted_without_child`: `Aborted`, output left as last persisted. The map holds only processes *this* program spawned, so a `Running` row without one belongs to an earlier run of it. This is the restart path, and it is asked first because every transition below needs a process to act on.
+- **No child** → `take_task_run_attempt_child` **raises**, exactly as `TaskRunMonitor::get_last_task_run_attempt` does for a `Running` task run with no attempt: both are rows the program cannot read. The map holds only processes *this* program spawned, so a `Running` row without one belongs to an earlier run of it — the restart path — or lost its child to an error mid-pass. The row is **not settled**: it stays `Running`, `Poller::run` logs it, and the next pass raises again — which strands the task run and job run above it, since a `Running` job run holds one of its job's parallel slots. That is a known gap, not a design; settling such rows needs a status that means "flowlite cannot read this row", which no enum has yet.
 - **Child present** → each outcome owns its guard, drains the output itself and returns whether it fired, tried in this order:
-  1. `settle_for_exit_status` — **exited?** → `Succeeded`/`Failed` from the exit status.
-  2. `settle_for_timed_out` — **past `task_run.timeout`?** → kill its group, `TimedOut`. Measured from the in-memory spawn time (`times_out_at`), so neither the wait for dispatch nor the spawn counts against it.
-  3. `settle_for_aborted` — **job run stopped?** → kill its group, `Aborted`.
-  4. `settle_for_running` — persist the output so far and put the child back for the next tick.
-  5. Past all four → `anyhow::bail!`, unreachable while step 4 claims everything the others left.
+  1. `settle_for_succeeded` — **exited zero?** → `Succeeded`.
+  2. `settle_for_failed` — **exited non-zero?** → `Failed`. Asks `try_wait` for itself rather than sharing step 1's answer, so each status is its own line of the ladder; `try_wait` caches the status it reaped.
+  3. `settle_for_timed_out` — **past `task_run.timeout`?** → kill its group, `TimedOut`. Measured from the in-memory spawn time (`times_out_at`), so neither the wait for dispatch nor the spawn counts against it.
+  4. `settle_for_aborted` — **job run stopped?** → kill its group, `Aborted`.
+  5. `settle_for_running` — persist the output so far and put the child back for the next tick.
+  6. Past all five → `anyhow::bail!`, unreachable while step 5 claims everything the others left.
 
-Steps 1–3 borrow the child (`&mut TaskRunAttemptChild`) rather than taking it, so the caller still owns it when none of them fires and can hand it to step 4.
+Steps 1–4 borrow the child (`&mut TaskRunAttemptChild`) rather than taking it, so the caller still owns it when none of them fires and can hand it to step 5.
 
 **Both kills go through `TaskRunAttemptChild::kill_process_group`**, which `killpg`s the group before reaping the `sh` — killing only the `sh` reported `TimedOut` or `Aborted` while the command's children carried on. There are three callers of it in all, and the third is shutdown:
 
 - **A task no longer dies with the terminal, so `serve` kills it deliberately.** `sh` used to share flowlite's foreground process group, so Ctrl-C killed running tasks incidentally; with its own group it survives one. `serve` therefore serves `with_graceful_shutdown` on Ctrl-C or SIGTERM and then calls `Orchestrator::shutdown` → `TaskRunAttemptChildren::kill_all`, which drains the map and kills each group. That is why the map lives on the `Orchestrator` rather than inside `start`.
-- **Shutdown leaves the attempt rows `Running` on purpose.** The next start settles them through `settle_for_aborted_without_child`, which is where an attempt with no process belongs — and killing the group is what makes that verdict true. Writing statuses during shutdown would race the pollers, which are still running.
-- **The restart path still cannot kill anything.** `settle_for_aborted_without_child` has no child and no group id — the map is memory — so an attempt left by a `SIGKILL`ed or crashed flowlite is aborted on the row while its process tree keeps running. Persisting the group id on the attempt row is what would close it.
+- **Shutdown leaves the attempt rows `Running` on purpose**, and the next start does not settle them either — its monitor raises on them. Writing statuses during shutdown would race the pollers, which are still running, so the row survives the restart with nothing to interpret it.
+- **The restart path cannot kill anything.** The map is memory, so an attempt left by a `SIGKILL`ed or crashed flowlite keeps its process tree while its row keeps saying `Running`. Persisting the group id on the attempt row is what would let a start kill it; giving the row a terminal status is the other half.
 
-**Order decides precedence here**, on the same rule as [job_run.md](job_run.md): a real outcome outranks a stop, so step 3 is last. A process that already exited reports what it exited with rather than being recorded as killed, and one past its timeout reports the timeout. A process still running when its job run is stopped is still killed on the same pass, because steps 1 and 2 decline and step 3 is reached immediately.
+**Order decides precedence here**, on the same rule as [job_run.md](job_run.md): a real outcome outranks a stop, so step 4 is the last of the finished outcomes. A process that already exited reports what it exited with rather than being recorded as killed, and one past its timeout reports the timeout. A process still running when its job run is stopped is still killed on the same pass, because steps 1–3 decline and step 4 is reached immediately. Steps 1 and 2 split the exit status between them and carry nothing in their relative order; step 5 guards nothing at all, so it stays last — the compiler holds it there, since it takes the child by value.
 
 It never reads or writes a task run row: retries and the task run status are `TaskRunMonitor`'s business.
 

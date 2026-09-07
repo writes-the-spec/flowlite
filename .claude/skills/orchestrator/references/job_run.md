@@ -40,23 +40,23 @@ Only `Running` runs count against the limit. Counting `Pending` ones too would d
 `JobRunMonitor` ([src/orchestrator/job_run_monitor.rs](../../../../src/orchestrator/job_run_monitor.rs)) polls `Running` job runs on the same wake-up-or-interval schedule, loads all task runs of each, and settles each row as exactly one outcome:
 
 1. `settle_for_succeeded` — every task run `Succeeded`
-2. `settle_for_running` — any task run not finished → writes nothing
-3. `settle_for_failed` — any `Failed`
-4. `settle_for_timed_out` — any `TimedOut`
-5. `settle_for_aborted` — any task run `is_stopped`, meaning `Aborted` or `Skipped`, the two ways task runs report a stop
+2. `settle_for_failed` — any `Failed`
+3. `settle_for_timed_out` — any `TimedOut`
+4. `settle_for_aborted` — any task run `is_stopped`, meaning `Aborted` or `Skipped`, the two ways task runs report a stop
+5. `settle_for_running` — any task run not finished → writes nothing
 6. Past all five → `anyhow::bail!`
 
-**Steps 3–5 each ask for every task run having finished** as well as for their own status, so none of them can finish a job run whose work is still going — finishing is irreversible, since this monitor only ever visits `Running` rows.
+**Steps 2–4 each ask for every task run having finished** as well as for their own status, so none of them can finish a job run whose work is still going. With step 5 asked last, that guard is the only thing holding such a job run open — and finishing is irreversible, since this monitor only ever visits `Running` rows.
 
-**Order decides precedence.** A real failure outranks a stop, so step 5 is last: a job run with one aborted and one failed task run reports the failure, which is the part worth acting on. Between the two failures, failed outranks timed out.
+**Order decides precedence.** A real failure outranks a stop, so step 4 is the last of the finished outcomes: a job run with one aborted and one failed task run reports the failure, which is the part worth acting on. Between the two failures, failed outranks timed out.
 
-Step 1 is exclusive with everything (it needs *every* task run succeeded) and could sit anywhere.
+Step 1 is exclusive with everything (it needs *every* task run succeeded) and could sit anywhere. Step 5 comes last because it guards nothing of its own, the ladder every monitor reads in — see [SKILL.md](../SKILL.md).
 
-Step 5 folds both stop signals into one outcome, and does not require *all* task runs to be skipped. A skip means a stop or a dependency that didn't succeed, and in the second case that dependency is itself `Failed`/`TimedOut`/`Aborted` or skipped — so once steps 3–4 have not matched, a skip can only mean the run was stopped. Its `Aborted` half needs no such argument: a task run is only aborted by a stop.
+Step 4 folds both stop signals into one outcome, and does not require *all* task runs to be skipped. A skip means a stop or a dependency that didn't succeed, and in the second case that dependency is itself `Failed`/`TimedOut`/`Aborted` or skipped — so once steps 2–3 have not matched, a skip can only mean the run was stopped. Its `Aborted` half needs no such argument: a task run is only aborted by a stop.
 
-The narrow case step 5 exists for is a job run stopped when **nothing was executing** — between two tasks, or before the first one starts. Its task runs end up `Succeeded` + `Skipped`, with nothing failed and nothing aborted, so every other outcome declines. Without this step that job run reaches the bail and never finishes.
+The narrow case step 4 exists for is a job run stopped when **nothing was executing** — between two tasks, or before the first one starts. Its task runs end up `Succeeded` + `Skipped`, with nothing failed and nothing aborted, so every other outcome declines. Without this step that job run reaches the bail and never finishes.
 
-The status comes **entirely from the task runs** — the monitor never reads a stop signal. A stop reaches the job run only as the task run statuses it produced, through step 5.
+The status comes **entirely from the task runs** — the monitor never reads a stop signal. A stop reaches the job run only as the task run statuses it produced, through step 4.
 
 Every guard is an `any(...)`/`all(...)`, so a job run with no task runs settles at step 1 immediately.
 
@@ -64,7 +64,7 @@ Every guard is an `any(...)`/`all(...)`, so a job run with no task runs settles 
 
 - **A job run must stay `Running` until every task run is terminal.** The monitor only visits `Running` rows, so finishing one early is final: its task runs keep executing but their outcome is never read again.
 - **Which statuses count as finished, and which report a stop, live on the enum.** `TaskRunStatus::is_finished` and `is_stopped` ([src/crud/task_run.rs](../../../../src/crud/task_run.rs)) both match exhaustively, so a new status has to declare its side of each or stop compiling. `is_stopped` is only truthful *after* the failure outcomes: a dependency that didn't succeed skips its dependents too, so a skip means a stop only once a failure has been ruled out.
-- **The precedence among steps 3–5 is covered by tests, and is the whole of what the call order carries here.** Steps 1 and 2 are position-independent — step 1 because it is exclusive with everything, step 2 because those three re-ask `all_finished` themselves. Every guard is inlined in its own outcome, so there is no pure function left to reach; the tests in [src/orchestrator/job_run_monitor.rs](../../../../src/orchestrator/job_run_monitor.rs) instead insert task runs, run `handle` and read the settled status back, so reordering steps 3–5 now fails two of them rather than silently changing what a stopped or mixed-outcome run reports. Add a case there when you add an outcome. The one thing they cannot catch is step 2's redundancy: drop `all_finished` from a single failure outcome and `settle_for_running`, asked first, still claims the unfinished row.
+- **The precedence among steps 2–4 is covered by tests, and is the whole of what the call order carries here.** Steps 1 and 5 are position-independent — step 1 because it is exclusive with everything, step 5 because the three above it re-ask `all_finished` themselves, so it claims the same rows wherever it sits below step 1. Every guard is inlined in its own outcome, so there is no pure function left to reach; the tests in [src/orchestrator/job_run_monitor.rs](../../../../src/orchestrator/job_run_monitor.rs) instead insert task runs, run `handle` and read the settled status back, so reordering steps 2–4 fails two of them rather than silently changing what a stopped or mixed-outcome run reports. Add a case there when you add an outcome. Those `all_finished` guards are now the only thing holding an unfinished job run open, which is what makes them testable: dropping one from a single failure outcome fails `a_failure_does_not_finish_a_job_run_whose_work_is_still_going`, where it passed while step 5 was asked first.
 - **This monitor never writes `Skipped`.** It only ever visits `Running` rows, and a job run that reached `Running` has started — its earlier task runs may well have executed — so a stop aborts it. `Skipped` here would claim nothing ran while the logs showed output.
 - **Terminal statuses set `finished_at`**, via `update_job_run_status`.
 - **A new terminal `TaskRunStatus` needs an outcome here**, placed at the right rank. Nothing in the compiler catches the omission, but the bail does at runtime: `settle_for_succeeded` needs *every* task run succeeded, so an unclaimed status no longer slips out as `Succeeded`.

@@ -44,13 +44,13 @@ This transition runs **at most once per task run**: a retry keeps the row `Runni
 | Last attempt | Outcome | Task run |
 |---|---|---|
 | `Succeeded` | `settle_for_succeeded` | `Succeeded` |
-| `Pending`, `Running`, or `Failed` with a retry left | `settle_for_running` | left `Running`; inserts the retry row immediately — `TaskRunAttemptDispatcher` holds it `Pending` until `retry_delay` has passed |
 | `Failed`, no retry left | `settle_for_failed` | `Failed` |
 | `TimedOut` | `settle_for_timed_out` | `TimedOut` |
 | `is_stopped` — `Aborted` or `Skipped` | `settle_for_aborted` | `Aborted` — the task run had started, so a stop aborts it |
+| `Pending`, `Running`, or `Failed` with a retry left | `settle_for_running` | left `Running`; inserts the retry row immediately — `TaskRunAttemptDispatcher` holds it `Pending` until `retry_delay` has passed |
 | past all five | `anyhow::bail!` | — |
 
-These guards are exclusive, since the last attempt has exactly one status, so **the order here carries nothing** and matches [job_run.md](job_run.md)'s ladder only so the two read alike. `TaskRunAttemptStatus::is_stopped` needs no failure ruled out first, unlike its `TaskRunStatus` namesake: `TaskRunAttemptDispatcher` skips an attempt for one reason only.
+These guards are exclusive, since the last attempt has exactly one status, so **the order here carries nothing** and follows the succeeded, failed, timed out, aborted, running ladder only so all three monitors read alike. `TaskRunAttemptStatus::is_stopped` needs no failure ruled out first, unlike its `TaskRunStatus` namesake: `TaskRunAttemptDispatcher` skips an attempt for one reason only.
 
 `Failed` is the only retried status. A retry inserts attempt `last.attempt + 1` and leaves the task run `Running`. Attempts count from 1, so total executions are `1 + max_retries` and `max_retries: 0` means one attempt. Both the count and the delay are read off the `task_run` row, so a run retries on the policy it was submitted with rather than on whatever the YAML says now.
 
