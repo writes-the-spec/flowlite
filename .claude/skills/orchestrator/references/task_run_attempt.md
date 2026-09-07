@@ -16,12 +16,13 @@ Same seven variants as `TaskRunStatus`, because both levels have the same dispat
 
 ## Dispatcher: Pending → Running / Skipped
 
-`TaskRunAttemptDispatcher` ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../../src/orchestrator/task_run_attempt_dispatcher.rs)) polls **all** `Pending` attempts, on a signal wake-up or its one-second interval, whichever comes first. It settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened — and only the first has a guard, since the task run above it already resolved the dependencies:
+`TaskRunAttemptDispatcher` ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../../src/orchestrator/task_run_attempt_dispatcher.rs)) polls **all** `Pending` attempts, on a signal wake-up or its one-second interval, whichever comes first. It settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened:
 
 1. `settle_as_skipped` — **job run stopped?** → `Skipped`, `finished_at` set, `started_at` left NULL: the command never ran.
-2. `settle_as_running` — otherwise, unconditionally: load the attempt's `task_run` row by `task_run_id`, for the `command` and `timeout` the run was submitted with, spawn `sh -c <command>` with piped stdout/stderr, insert the child into `TaskRunAttemptChildren`, then write `Running` and `started_at = now`. This is the one outcome that does work outside the database, so a spawn failure propagates as the row's error and `Poller::run` logs it and moves to the next attempt.
+2. `settle_as_pending` — **a retry whose delay has not passed?** (`attempt > 1` and `now < created_at + task_run.retry_delay`) → writes nothing, the row waits for a later pass. This is where `retry_delay` is enforced, and it has to precede step 3, which spawns unconditionally.
+3. `settle_as_running` — otherwise: load the attempt's `task_run` row by `task_run_id`, for the `command` and `timeout` the run was submitted with, spawn `sh -c <command>` with piped stdout/stderr, insert the child into `TaskRunAttemptChildren`, then write `Running` and `started_at = now`. This is the one outcome that does work outside the database, so a spawn failure propagates as the row's error and `Poller::run` logs it and moves to the next attempt.
 
-There is deliberately **no `settle_as_pending`** here, unlike the two dispatchers above it: an attempt has nothing left to wait for, so step 2 takes every attempt step 1 did not. `handle_pending_task_run_attempt` still bails past the two, which is unreachable today and is there for the day a guard is added to `settle_as_running` — the attempts it started turning down would otherwise sit `Pending` with nobody accountable for them.
+Step 1 before step 2 is what makes a stop beat a waiting retry: a job run stopped mid-delay skips the pending retry rather than spawning it when the delay runs out. Attempt 1 never reaches step 2 — it is inserted by `TaskRunDispatcher` as it starts the task run and has nothing to wait for, so the `attempt > 1` check spares it the task run query as well.
 
 **The child goes into the map before the status is written.** In the other order the monitor can see a `Running` attempt whose process isn't in the map yet and abort it.
 

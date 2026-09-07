@@ -4,7 +4,7 @@ use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, Select
 use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
 use crate::poller::Service;
 use crate::signals::Signals;
-use chrono::{TimeDelta, Utc};
+use chrono::Utc;
 
 
 /// Watches running task runs and drives them through their attempts: it starts the
@@ -36,7 +36,7 @@ impl TaskRunMonitor {
     /// Settles a running task run as exactly one outcome, from its last attempt.
     ///
     /// The guards are exclusive — the last attempt has one status, and `settle_for_failed`
-    /// and `settle_for_running` split a failed one by whether a retry is left — so unlike
+    /// and `settle_for_running` split a failed one on whether an attempt is left — so unlike
     /// JobRunMonitor the order here carries nothing, and matches that ladder only so the
     /// two read alike. The bail replaces the exhaustive match this used to be: a new
     /// TaskRunAttemptStatus no longer fails to compile, it reaches the bail at runtime and
@@ -87,41 +87,41 @@ impl TaskRunMonitor {
         Ok(true)
     }
 
-    /// Keeps the task run running: waits while an attempt is in flight, waits out a retry
-    /// delay, or starts the retry. Writes no task run status — the task run stays Running
-    /// for the whole retry loop.
+    /// Keeps the task run running: waits while an attempt is in flight, or inserts the next
+    /// one. Writes no task run status — the task run stays Running for the whole retry loop.
+    ///
+    /// The retry row goes in immediately; `TaskRunAttemptDispatcher` is what holds it
+    /// pending until `retry_delay` has passed.
     async fn settle_for_running(
         &self,
         task_run: &TaskRun,
         last_task_run_attempt: &TaskRunAttempt,
     ) -> anyhow::Result<bool> {
 
-        match last_task_run_attempt.status {
-
-            // The attempt services still own the attempt.
-            TaskRunAttemptStatus::Pending | TaskRunAttemptStatus::Running => Ok(true),
-
-            TaskRunAttemptStatus::Failed if Self::has_retry_left(task_run, last_task_run_attempt) => {
-
-                // Nothing is written while the delay runs down: the next pass asks the
-                // same question again, until the wait is over.
-                if Self::is_waiting_to_retry(task_run, last_task_run_attempt) {
-                    return Ok(true);
-                }
-
-                self.start_task_run_attempt(
-                    task_run,
-                    last_task_run_attempt.attempt + 1,
-                ).await?;
-
-                Ok(true)
-            }
-
-            _ => Ok(false),
+        // The attempt services still own the attempt.
+        if !last_task_run_attempt.status.is_finished() {
+            return Ok(true);
         }
+
+        if last_task_run_attempt.status != TaskRunAttemptStatus::Failed {
+            return Ok(false);
+        }
+
+        // Attempts count from 1, so the task run gets max_retries + 1 of them.
+        if last_task_run_attempt.attempt >= task_run.max_retries + 1 {
+            return Ok(false);
+        }
+
+        self.start_task_run_attempt(
+            task_run,
+            last_task_run_attempt.attempt + 1,
+        ).await?;
+
+        Ok(true)
     }
 
-    /// Fails the task run once its attempts are used up.
+    /// Fails the task run once its attempts are used up. Attempts count from 1, so the
+    /// task run gets `max_retries + 1` of them.
     async fn settle_for_failed(
         &self,
         task_run: &TaskRun,
@@ -132,7 +132,7 @@ impl TaskRunMonitor {
             return Ok(false);
         }
 
-        if Self::has_retry_left(task_run, last_task_run_attempt) {
+        if last_task_run_attempt.attempt < task_run.max_retries + 1 {
             return Ok(false);
         }
 
@@ -177,32 +177,9 @@ impl TaskRunMonitor {
         Ok(true)
     }
 
-    /// Attempts count from 1, so the task run gets `max_retries + 1` of them.
-    fn has_retry_left(task_run: &TaskRun, last_task_run_attempt: &TaskRunAttempt) -> bool {
-        last_task_run_attempt.attempt < task_run.max_retries + 1
-    }
-
-    /// Whether the retry_delay the run was submitted with has yet to pass since its last
-    /// attempt finished. An attempt with no finish time is not made to wait, since there
-    /// is no moment to count the delay from.
-    fn is_waiting_to_retry(task_run: &TaskRun, last_task_run_attempt: &TaskRunAttempt) -> bool {
-
-        let Some(finished_at) = last_task_run_attempt.finished_at else {
-            return false;
-        };
-
-        Utc::now() < finished_at + TimeDelta::seconds(task_run.retry_delay as i64)
-    }
-
-    /// Aborts the task run, where both stop outcomes land: the attempt was killed
-    /// mid-flight, or skipped before its command started.
-    ///
-    /// A skipped attempt does **not** make the task run Skipped. It only ever sees Running
-    /// task runs, which had started and may already have left output, so Skipped would
-    /// claim nothing ran.
-    /// Inserts the retry TaskRunAttemptDispatcher clears to run. Writes no task run status:
-    /// the task run stays Running for the whole retry loop. Attempt 1 is not inserted here
-    /// — TaskRunDispatcher creates it as it starts the task run.
+    /// Inserts the retry TaskRunAttemptDispatcher clears to run, once its retry_delay has
+    /// passed. Attempt 1 is not inserted here — TaskRunDispatcher creates it as it starts
+    /// the task run.
     async fn start_task_run_attempt(&self, task_run: &TaskRun, attempt: u32) -> anyhow::Result<()> {
 
         self.crud.insert_task_run_attempt(
@@ -316,80 +293,5 @@ impl Service for TaskRunMonitor {
 
     async fn handle(&self, task_run: &TaskRun) -> anyhow::Result<()> {
         self.handle_running_task_run(task_run).await
-    }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::crud::task_run::TaskRunStatus;
-    use crate::crud::task_run_attempt::TaskRunAttemptStatus;
-    use chrono::DateTime;
-
-    fn task_run(retry_delay: u32) -> TaskRun {
-        TaskRun {
-            id: 1,
-            job_run_id: 1,
-            job_id: "job".to_string(),
-            task_id: "task".to_string(),
-            command: "false".to_string(),
-            depends_on: sqlx::types::Json(Vec::new()),
-            timeout: 3600,
-            max_retries: 2,
-            retry_delay,
-            created_at: Utc::now(),
-            started_at: None,
-            finished_at: None,
-            status: TaskRunStatus::Running,
-        }
-    }
-
-    fn failed_attempt(finished_at: Option<DateTime<Utc>>) -> TaskRunAttempt {
-        TaskRunAttempt {
-            id: 1,
-            task_run_id: 1,
-            job_run_id: 1,
-            job_id: "job".to_string(),
-            task_id: "task".to_string(),
-            created_at: Utc::now(),
-            started_at: None,
-            finished_at,
-            attempt: 1,
-            status: TaskRunAttemptStatus::Failed,
-            stdout: String::new(),
-            stderr: String::new(),
-        }
-    }
-
-    #[test]
-    fn an_attempt_that_never_finished_is_not_made_to_wait() {
-        let waiting = TaskRunMonitor::is_waiting_to_retry(&task_run(60), &failed_attempt(None));
-
-        assert!(!waiting);
-    }
-
-    #[test]
-    fn the_retry_waits_while_the_delay_has_not_passed() {
-        let finished_at = Utc::now() - TimeDelta::seconds(10);
-
-        let waiting = TaskRunMonitor::is_waiting_to_retry(
-            &task_run(60),
-            &failed_attempt(Some(finished_at)),
-        );
-
-        assert!(waiting);
-    }
-
-    #[test]
-    fn the_retry_starts_once_the_delay_has_passed() {
-        let finished_at = Utc::now() - TimeDelta::seconds(61);
-
-        let waiting = TaskRunMonitor::is_waiting_to_retry(
-            &task_run(60),
-            &failed_attempt(Some(finished_at)),
-        );
-
-        assert!(!waiting);
     }
 }

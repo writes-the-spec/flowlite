@@ -42,7 +42,7 @@ This transition runs **at most once per task run**: a retry keeps the row `Runni
 | Last attempt | Outcome | Task run |
 |---|---|---|
 | `Succeeded` | `settle_for_succeeded` | `Succeeded` |
-| `Pending`, `Running`, or `Failed` with a retry left | `settle_for_running` | left `Running`; inserts the retry once `task_run.retry_delay` has elapsed |
+| `Pending`, `Running`, or `Failed` with a retry left | `settle_for_running` | left `Running`; inserts the retry row immediately — `TaskRunAttemptDispatcher` holds it `Pending` until `retry_delay` has passed |
 | `Failed`, no retry left | `settle_for_failed` | `Failed` |
 | `TimedOut` | `settle_for_timed_out` | `TimedOut` |
 | `is_stopped` — `Aborted` or `Skipped` | `settle_for_aborted` | `Aborted` — the task run had started, so a stop aborts it |

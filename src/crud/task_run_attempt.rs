@@ -16,6 +16,20 @@ pub enum TaskRunAttemptStatus {
 
 impl TaskRunAttemptStatus {
 
+    /// Whether the attempt has settled and will not change again. Matched exhaustively so
+    /// a new status has to declare which side of this line it falls on.
+    pub fn is_finished(&self) -> bool {
+        match self {
+            TaskRunAttemptStatus::Pending
+            | TaskRunAttemptStatus::Running => false,
+            TaskRunAttemptStatus::Succeeded
+            | TaskRunAttemptStatus::Failed
+            | TaskRunAttemptStatus::Skipped
+            | TaskRunAttemptStatus::Aborted
+            | TaskRunAttemptStatus::TimedOut => true,
+        }
+    }
+
     /// Whether the attempt reports a stop: its process was killed mid-flight, or its
     /// command never started. Matched exhaustively so a new status has to declare its side.
     ///
