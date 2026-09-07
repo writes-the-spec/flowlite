@@ -49,13 +49,21 @@ The one shared piece of memory is `TaskRunAttemptChildren` ([src/orchestrator/ta
 
 Every service settles a row by asking its outcomes in order — `settle_as_*` in the dispatchers, `settle_for_*` in the monitors — each returning whether it is what happened, and bailing past the last one rather than returning quietly. Naming the outcome that writes nothing is the point of the shape: a row left alone on purpose and a row nobody handled are otherwise the same silence.
 
-**Read the call order as part of the logic.** Each guard asks only about its own case, deliberately — a shared guard covering several outcomes reads worse at every call site than the repetition does — so where a call sits is what separates it from the others, and neither the compiler nor the test suite pins it. Three rules recur:
+**Read the call order as part of the logic.** Each guard asks only about its own case, deliberately — a shared guard covering several outcomes reads worse at every call site than the repetition does — so where a call sits is what separates it from the others, and the compiler never pins it. The test suite pins exactly one chain, `JobRunMonitor`'s. Three rules recur:
 
 - **Where the outcome that leaves a row alone belongs depends on how the ones around it are guarded, and it is load-bearing in exactly one of the three monitors.** In `JobRunMonitor`, `settle_for_failed`, `settle_for_timed_out` and `settle_for_aborted` each re-ask `all_finished` for themselves, so none of them can finish a job run whose work is still going; in `TaskRunMonitor` the guards are exclusive on the last attempt's single status. In both, `settle_for_running` claims what it should wherever it is placed — that redundancy is what makes finishing safe, not the position. In `TaskRunAttemptMonitor`, `settle_for_running` guards nothing at all: it drains the output, puts the child back and returns `true` unconditionally, so it **has to be asked last**. Move it up on the strength of a "leave the row alone first" rule and it claims every running attempt before exit status, timeout and abort are asked, and no attempt ever finishes. Read a chain's guards before moving a line in it.
 - **All three dispatchers read skipped, pending, running.** The row that can never run is claimed first, the one that is only waiting next, and starting it comes last — so a dispatcher can start a row unconditionally, the guard that holds it back living in `settle_as_pending` where it is the whole of that outcome. `TaskRunDispatcher::settle_as_running` is the one that still asks a question of its own, because it reloads the dependencies and a failure between the two loads must not be started.
 - **Outcomes that can match at once are ranked deliberately, and both monitors that rank them use one rule: a real outcome outranks a stop, so `settle_for_aborted` is asked last.** In `JobRunMonitor` that makes a job run with one aborted and one failed task run report the failure, the part worth acting on. In `TaskRunAttemptMonitor` it makes a process that had already exited report its exit status, and one past its timeout report the timeout, rather than either being recorded as killed.
 
-Reordering those lines compiles and passes the suite. See [job_run.md](references/job_run.md) for the full ladder.
+Reordering those lines compiles. Whether it also passes the suite depends on the chain, and only one is covered:
+
+- **`JobRunMonitor` is pinned.** Its ladder has chain tests that drive `Service::handle` against a real database and assert the status it settled — swapping `settle_for_aborted` above `settle_for_failed` fails two of them. Build one with `TestDb` ([src/test_support.rs](../../../src/test_support.rs), `cfg(test)` only), which hands each test its own SQLite file in a temp directory so the real CRUD does the reads and writes.
+- **`TaskRunAttemptDispatcher` and `TaskRunAttemptMonitor` are not**, and both have a load-bearing order: `settle_as_pending` before `settle_as_running`, and `settle_for_running` last. The attempt dispatcher's retry-delay tests call `settle_as_pending` directly rather than the chain — going through it would have `settle_as_running` spawn a real process — so they say nothing about where it sits.
+- **`TaskRunMonitor`'s order carries nothing**, so reordering it is harmless by design, and its tests pass either way. That is a property of its exclusive guards, not a gap.
+
+One thing no test can catch on its own: the redundant `all_finished` in `JobRunMonitor`'s three failure outcomes. `settle_for_running` is asked first and claims the unfinished row either way, so only losing both mechanisms is detectable.
+
+See [job_run.md](references/job_run.md) for the full ladder.
 
 ## Stopping a run
 
