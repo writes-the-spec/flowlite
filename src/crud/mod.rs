@@ -8,6 +8,7 @@ pub mod job;
 pub mod task;
 pub mod task_dependent;
 pub mod task_run_attempt;
+pub mod task_run_attempt_output;
 pub mod schedule;
 pub mod schedule_job;
 pub mod multistatements;
