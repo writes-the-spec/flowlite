@@ -4,11 +4,13 @@ use chrono::{DateTime, Utc};
 use crate::app_config::AppConfig;
 use crate::crud::CRUD;
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
+use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRun, TaskRunStatus};
 use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
 use crate::orchestrator::job_run_monitor::JobRunMonitor;
-use crate::orchestrator::task_run_attempt_children::TaskRunAttemptChildren;
+use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
 use crate::orchestrator::task_run_attempt_dispatcher::TaskRunAttemptDispatcher;
+use crate::orchestrator::task_run_attempt_monitor::TaskRunAttemptMonitor;
 use crate::orchestrator::task_run_monitor::TaskRunMonitor;
 use crate::signals::Signals;
 use crate::toolkit::Toolkit;
@@ -29,6 +31,9 @@ pub struct TestDb {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
     pub signals: Arc<Signals>,
+    /// One map for the whole TestDb, the way Orchestrator::start shares it: a test that
+    /// spawns a process through the dispatcher can then have the monitor find it.
+    pub children: Arc<TaskRunAttemptChildren>,
 }
 
 
@@ -53,6 +58,7 @@ impl TestDb {
             crud: Arc::new(CRUD::new(toolkit)),
             conn_pool: Arc::new(conn_pool),
             signals: Arc::new(Signals::new()),
+            children: Arc::new(TaskRunAttemptChildren::new()),
         }
     }
 
@@ -76,7 +82,16 @@ impl TestDb {
         TaskRunAttemptDispatcher::new(
             self.crud.clone(),
             self.conn_pool.clone(),
-            Arc::new(TaskRunAttemptChildren::new()),
+            self.children.clone(),
+            self.signals.clone(),
+        )
+    }
+
+    pub fn task_run_attempt_monitor(&self) -> TaskRunAttemptMonitor {
+        TaskRunAttemptMonitor::new(
+            self.crud.clone(),
+            self.conn_pool.clone(),
+            self.children.clone(),
             self.signals.clone(),
         )
     }
@@ -225,6 +240,98 @@ impl TestDb {
 
     async fn last_task_run_attempt(&self, task_run_id: i64) -> TaskRunAttempt {
         self.task_run_attempts(task_run_id).await.into_iter().last().unwrap()
+    }
+
+    pub async fn task_run_attempt(&self, task_run_attempt_id: i64) -> TaskRunAttempt {
+
+        self.crud.select_task_run_attempts(
+            &*self.conn_pool,
+            &SelectTaskRunAttemptsData {
+                filter: SelectTaskRunAttemptsDataFilter {
+                    task_run_id: None,
+                    job_run_id: None,
+                    task_id: None,
+                    status: None,
+                },
+                sort: Some(SelectTaskRunAttemptsDataSort::Id),
+            },
+        ).await.unwrap()
+            .into_iter()
+            .find(|task_run_attempt| task_run_attempt.id == task_run_attempt_id)
+            .unwrap()
+    }
+
+    pub async fn insert_job_run_stop(&self, job_run_id: i64) {
+
+        self.crud.insert_job_run_stop(
+            &*self.conn_pool,
+            &InsertJobRunStopData {
+                input: InsertJobRunStopDataInput { job_run_id },
+            },
+        ).await.unwrap();
+    }
+
+    /// Hands the monitor a process that has already exited, reaped here so the test does
+    /// not race it: `try_wait` keeps reporting the status once the child has been collected.
+    pub async fn spawn_exited_child(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        command: &str,
+        times_out_at: DateTime<Utc>,
+    ) {
+        let mut child = Self::spawn(command);
+
+        while child.try_wait().unwrap().is_none() {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+
+        self.hand_over(task_run_attempt, child, times_out_at).await;
+    }
+
+    /// Hands the monitor a process that is still running, with the deadline it is judged
+    /// against — in the past for the timeout case.
+    pub async fn spawn_running_child(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        command: &str,
+        times_out_at: DateTime<Utc>,
+    ) {
+        let child = Self::spawn(command);
+
+        self.hand_over(task_run_attempt, child, times_out_at).await;
+    }
+
+    fn spawn(command: &str) -> tokio::process::Child {
+        tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap()
+    }
+
+    async fn hand_over(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        mut child: tokio::process::Child,
+        times_out_at: DateTime<Utc>,
+    ) {
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+
+        self.children.insert(
+            task_run_attempt.id,
+            TaskRunAttemptChild {
+                child,
+                stdout,
+                stderr,
+                stdout_accumulated: Vec::new(),
+                stderr_accumulated: Vec::new(),
+                times_out_at,
+            },
+        ).await;
     }
 
 }

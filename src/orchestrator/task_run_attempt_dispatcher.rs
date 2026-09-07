@@ -313,4 +313,70 @@ mod tests {
     async fn a_retry_delay_of_zero_does_not_wait() {
         assert!(!is_waiting_to_retry(2, 0, 0).await);
     }
+
+    /// Runs the whole chain over a pending attempt and reports what it settled it as.
+    ///
+    /// Unlike `is_waiting_to_retry` this lets `settle_as_running` spawn, which is the
+    /// point: the order of the chain is only observable when the outcome that starts a
+    /// process is actually reachable.
+    async fn settled_attempt_status(
+        attempt: u32,
+        retry_delay: u32,
+        stop_the_job_run: bool,
+    ) -> TaskRunAttemptStatus {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_retryable_task_run(job_run.id, 2, retry_delay).await;
+
+        if stop_the_job_run {
+            db.insert_job_run_stop(job_run.id).await;
+        }
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            attempt,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
+
+        db.task_run_attempt(task_run_attempt.id).await.status
+    }
+
+    /// Pins `settle_as_pending` ahead of `settle_as_running`. Swap them and the retry is
+    /// spawned the moment TaskRunMonitor inserts it, and the retry_delay never applies.
+    #[tokio::test]
+    async fn a_retry_inside_its_delay_is_left_pending_rather_than_started() {
+        let status = settled_attempt_status(2, 60, false).await;
+
+        assert_eq!(status, TaskRunAttemptStatus::Pending);
+    }
+
+    /// Pins `settle_as_skipped` ahead of `settle_as_running`. Swap them and a stopped job
+    /// run still spawns the command it was stopped to prevent.
+    #[tokio::test]
+    async fn a_stopped_job_run_skips_the_attempt_rather_than_starting_it() {
+        let status = settled_attempt_status(1, 0, true).await;
+
+        assert_eq!(status, TaskRunAttemptStatus::Skipped);
+    }
+
+    /// Pins `settle_as_skipped` ahead of `settle_as_pending`. Swap them and a retry still
+    /// inside its delay is held pending by a job run that was stopped, instead of skipped,
+    /// so the stop does not take effect until the delay expires.
+    #[tokio::test]
+    async fn a_stopped_job_run_skips_a_retry_that_is_still_inside_its_delay() {
+        let status = settled_attempt_status(2, 60, true).await;
+
+        assert_eq!(status, TaskRunAttemptStatus::Skipped);
+    }
+
+    #[tokio::test]
+    async fn an_attempt_past_its_delay_is_started() {
+        let status = settled_attempt_status(1, 0, false).await;
+
+        assert_eq!(status, TaskRunAttemptStatus::Running);
+    }
 }

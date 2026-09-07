@@ -348,3 +348,205 @@ impl Service for TaskRunAttemptMonitor {
         self.handle_running_task_run_attempt(task_run_attempt).await
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crud::job_run::JobRunStatus;
+    use crate::crud::task_run::TaskRunStatus;
+    use crate::test_support::TestDb;
+    use chrono::TimeDelta;
+
+    /// A running attempt with a process handed to the monitor, ready for `handle`.
+    async fn running_attempt(db: &TestDb) -> TaskRunAttempt {
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
+
+        db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await
+    }
+
+    /// Pins `settle_for_exit_status` ahead of `settle_for_running`. `settle_for_running`
+    /// guards nothing and returns true for every attempt it is asked about, so moving it
+    /// up leaves this attempt Running for ever and the task run never finishes.
+    #[tokio::test]
+    async fn an_exited_process_reports_the_status_it_exited_with() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_exited_child(&task_run_attempt, "exit 0", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Succeeded,
+        );
+    }
+
+    #[tokio::test]
+    async fn a_process_that_exited_non_zero_fails_the_attempt() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_exited_child(&task_run_attempt, "exit 3", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Failed,
+        );
+    }
+
+    /// Pins `settle_for_timed_out` ahead of `settle_for_running`.
+    #[tokio::test]
+    async fn a_process_past_its_deadline_times_the_attempt_out() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_running_child(
+            &task_run_attempt,
+            "sleep 30",
+            Utc::now() - TimeDelta::seconds(1),
+        ).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::TimedOut,
+        );
+    }
+
+    /// Pins `settle_for_aborted` ahead of `settle_for_running`, and behind the two above
+    /// it: a stop kills a process that is still going, but does not outrank an outcome the
+    /// process reached on its own.
+    #[tokio::test]
+    async fn a_stopped_job_run_aborts_a_process_that_is_still_running() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.insert_job_run_stop(task_run_attempt.job_run_id).await;
+        db.spawn_running_child(
+            &task_run_attempt,
+            "sleep 30",
+            Utc::now() + TimeDelta::seconds(3600),
+        ).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Aborted,
+        );
+    }
+
+    /// A real outcome outranks a stop: a process that had already exited reports its exit
+    /// status rather than being recorded as killed, even though its job run was stopped.
+    #[tokio::test]
+    async fn an_exit_status_outranks_a_stop() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.insert_job_run_stop(task_run_attempt.job_run_id).await;
+        db.spawn_exited_child(&task_run_attempt, "exit 0", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Succeeded,
+        );
+    }
+
+    /// Pins `settle_for_exit_status` ahead of `settle_for_timed_out`: a process that got
+    /// there on its own before the poll pass noticed the deadline reports what it exited
+    /// with, rather than being recorded as killed by a timeout that never killed it.
+    #[tokio::test]
+    async fn an_exit_status_outranks_a_timeout() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_exited_child(
+            &task_run_attempt,
+            "exit 0",
+            Utc::now() - TimeDelta::seconds(1),
+        ).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Succeeded,
+        );
+    }
+
+    /// Pins `settle_for_timed_out` ahead of `settle_for_aborted`, the other half of "a real
+    /// outcome outranks a stop": a process past its deadline reports the timeout even though
+    /// its job run was stopped and it was killed on this same pass.
+    #[tokio::test]
+    async fn a_timeout_outranks_a_stop() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.insert_job_run_stop(task_run_attempt.job_run_id).await;
+        db.spawn_running_child(
+            &task_run_attempt,
+            "sleep 30",
+            Utc::now() - TimeDelta::seconds(1),
+        ).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::TimedOut,
+        );
+    }
+
+    /// The restart path: a running attempt whose process was spawned by an earlier run of
+    /// this program is not in TaskRunAttemptChildren, so there is nothing left to wait for.
+    #[tokio::test]
+    async fn a_running_attempt_with_no_process_is_aborted() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Aborted,
+        );
+    }
+
+    #[tokio::test]
+    async fn a_process_still_running_keeps_the_attempt_running_and_persists_its_output() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_running_child(
+            &task_run_attempt,
+            // `exec` so sh becomes the sleep rather than forking it: kill() reaches the
+            // process it spawned and nothing below it, so a forked grandchild would survive
+            // this test. That is true of a real task's command too.
+            "echo hello; exec sleep 30",
+            Utc::now() + TimeDelta::seconds(3600),
+        ).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        let settled = db.task_run_attempt(task_run_attempt.id).await;
+
+        assert_eq!(settled.status, TaskRunAttemptStatus::Running);
+        assert_eq!(settled.stdout, "hello\n");
+
+        // The process is handed back for the next pass, so this is the one outcome that
+        // leaves one running: take it back and kill it rather than outliving the suite.
+        let mut handed_back = db.children.remove(task_run_attempt.id).await
+            .expect("settle_for_running must put the process back for the next pass");
+
+        handed_back.child.kill().await.unwrap();
+    }
+}
