@@ -22,7 +22,7 @@ Same seven variants as `TaskRunStatus`, because both levels have the same dispat
 
 1. `settle_as_skipped` — **job run stopped?** → `Skipped`, `finished_at` set, `started_at` left NULL: the command never ran.
 2. `settle_as_pending` — **a retry whose delay has not passed?** (`attempt > 1` and `now < created_at + task_run.retry_delay`) → writes nothing, the row waits for a later pass. This is where `retry_delay` is enforced, and it has to precede step 3, which spawns unconditionally.
-3. `settle_as_running` — otherwise: load the attempt's `task_run` row by `task_run_id`, for the `command` and `timeout` the run was submitted with, spawn `sh -c <command>` with piped stdout/stderr, insert the child into `TaskRunAttemptChildren`, then write `Running` and `started_at = now`. This is the one outcome that does work outside the database, so a spawn failure propagates as the row's error and `Poller::run` logs it and moves to the next attempt.
+3. `settle_as_running` — otherwise: load the attempt's `task_run` row by `task_run_id`, for the `command` and `timeout` the run was submitted with, spawn `sh -c <command>` with piped stdout/stderr, **spawn one reader task per stream** over an mpsc, insert the child into `TaskRunAttemptChildren`, then write `Running` and `started_at = now`. This is the one outcome that does work outside the database, so a spawn failure propagates as the row's error and `Poller::run` logs it and moves to the next attempt.
 
 Step 1 before step 2 is what makes a stop beat a waiting retry: a job run stopped mid-delay skips the pending retry rather than spawning it when the delay runs out. Attempt 1 never reaches step 2 — it is inserted by `TaskRunDispatcher` as it starts the task run and has nothing to wait for, so the `attempt > 1` check spares it the task run query as well.
 
@@ -61,7 +61,15 @@ It never reads or writes a task run row: retries and the task run status are `Ta
 
 ## Stdout/stderr
 
-`read_output` drains both pipes with a 10ms timeout so a chatty process can't block the loop. The accumulated bytes are written to `task_run_attempt.stdout`/`stderr` on every poll pass the process is still alive (so logs are visible while it runs) and once more when the attempt ends, after a final drain. This is a data-only write, so it deliberately never publishes — see the [orchestrator skill](../SKILL.md#how-they-coordinate).
+**The pipes are not read on the poll pass.** `TaskRunAttemptDispatcher` spawns two tasks per attempt — see [src/orchestrator/task_run_attempt_reader.rs](../../../../src/orchestrator/task_run_attempt_reader.rs) — which own the pipes, read them with a plain await, validate UTF-8, cap recording at 1 MiB per stream and send `String` chunks down one mpsc. The monitor only drains that channel.
+
+The drain this replaced used a 10ms timeout per stream as its "pipe is empty" signal, which cost every running attempt 20ms of a **serial** one-second loop whether or not it wrote anything — at 50 running attempts a pass spent a full second on timeouts alone and stopped keeping up with its own interval.
+
+Two rungs read differently. `settle_for_running` calls `record_output`, which `try_recv`s and never waits, so a running attempt's output reaches the table at most one pass after it was written. The four terminal rungs call `finish_reading`, which waits for the channel to close — both readers at EOF — under a 2s bound, since a grandchild that escaped the process group can hold a pipe open and `Poller::run` handles rows in sequence.
+
+**The two rungs that kill do so before they drain**, because closing the pipes is what produces that EOF. Draining first would wait out the whole bound on every timeout and every stop.
+
+Either way the write is one row per stream per pass into [`task_run_attempt_output`](../../db-objects/references/task_run_attempt_output.md), and none for a stream with nothing new. It is a data-only write, so it deliberately never publishes — see the [orchestrator skill](../SKILL.md#how-they-coordinate). The terminal insert lands **before** the status, so an attempt that reads as terminal has complete output.
 
 ## Invariants
 

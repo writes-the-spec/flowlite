@@ -436,8 +436,6 @@ impl TaskRunAttemptMonitor {
                     status: Some(status),
                     started_at: None,
                     finished_at: Some(Some(Utc::now())),
-                    stdout: None,
-                    stderr: None,
                 },
             },
         ).await?;

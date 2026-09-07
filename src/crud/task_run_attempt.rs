@@ -104,8 +104,6 @@ pub struct UpdateTaskRunAttemptsDataInput {
     pub status: Option<TaskRunAttemptStatus>,
     pub started_at: Option<Option<DateTime<Utc>>>,
     pub finished_at: Option<Option<DateTime<Utc>>>,
-    pub stdout: Option<String>,
-    pub stderr: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -132,8 +130,6 @@ pub struct TaskRunAttempt {
     pub finished_at: Option<DateTime<Utc>>,
     pub attempt: u32,
     pub status: TaskRunAttemptStatus,
-    pub stdout: String,
-    pub stderr: String,
 }
 
 impl CRUD {
@@ -142,7 +138,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO task_run_attempt (task_run_id, job_run_id, job_id, task_id, created_at, attempt, status, stdout, stderr) VALUES (?, ?, ?, ?, ?, ?, ?, '', '')"
+            "INSERT INTO task_run_attempt (task_run_id, job_run_id, job_id, task_id, created_at, attempt, status) VALUES (?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(data.input.task_run_id)
             .bind(data.input.job_run_id)
@@ -162,7 +158,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, task_run_id, job_run_id, job_id, task_id, created_at, started_at, finished_at, attempt, status, stdout, stderr FROM task_run_attempt WHERE 1=1"
+            "SELECT id, task_run_id, job_run_id, job_id, task_id, created_at, started_at, finished_at, attempt, status FROM task_run_attempt WHERE 1=1"
         );
 
         if let Some(task_run_id) = data.filter.task_run_id {
@@ -227,17 +223,7 @@ impl CRUD {
             separated.push_bind_unseparated(finished_at);
         }
 
-        if let Some(stdout) = &data.input.stdout {
-            separated.push("stdout = ");
-            separated.push_bind_unseparated(stdout);
-        }
-
-        if let Some(stderr) = &data.input.stderr {
-            separated.push("stderr = ");
-            separated.push_bind_unseparated(stderr);
-        }
-
-        if data.input.status.is_none() && data.input.started_at.is_none() && data.input.finished_at.is_none() && data.input.stdout.is_none() && data.input.stderr.is_none() {
+        if data.input.status.is_none() && data.input.started_at.is_none() && data.input.finished_at.is_none() {
             return Ok(());
         }
 

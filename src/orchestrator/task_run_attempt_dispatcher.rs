@@ -84,8 +84,6 @@ impl TaskRunAttemptDispatcher {
                     status: Some(TaskRunAttemptStatus::Skipped),
                     started_at: None,
                     finished_at: Some(Some(Utc::now())),
-                    stdout: None,
-                    stderr: None,
                 },
             },
         ).await?;
@@ -181,8 +179,6 @@ impl TaskRunAttemptDispatcher {
                     status: Some(TaskRunAttemptStatus::Running),
                     started_at: Some(Some(started_at)),
                     finished_at: None,
-                    stdout: None,
-                    stderr: None,
                 },
             },
         ).await?;
