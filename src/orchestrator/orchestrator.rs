@@ -18,6 +18,9 @@ pub struct Orchestrator {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
     pub signals: Arc<Signals>,
+    /// The child processes the two attempt services share: the dispatcher spawns them,
+    /// the monitor waits on them, and `shutdown` kills whatever is left.
+    pub children: Arc<TaskRunAttemptChildren>,
 }
 
 
@@ -32,7 +35,17 @@ impl Orchestrator {
             crud,
             conn_pool,
             signals,
+            children: Arc::new(TaskRunAttemptChildren::new()),
         }
+    }
+
+    /// Kills every task still running. Called once, as `serve` returns.
+    ///
+    /// Each attempt is in its own process group, so nothing kills them for us: before
+    /// they were grouped, Ctrl-C reached them only because they shared this process's
+    /// foreground group.
+    pub async fn shutdown(self: &Self) {
+        self.children.kill_all().await;
     }
 
     /// Spawns every service and returns immediately.
@@ -72,22 +85,17 @@ impl Orchestrator {
             self.signals.clone(),
         );
 
-        // The two attempt services share the child processes: the dispatcher spawns
-        // them, the monitor waits on them.
-        let task_run_attempt_children = TaskRunAttemptChildren::new();
-        let task_run_attempt_children = Arc::new(task_run_attempt_children);
-
         let task_run_attempt_dispatcher = TaskRunAttemptDispatcher::new(
             self.crud.clone(),
             self.conn_pool.clone(),
-            task_run_attempt_children.clone(),
+            self.children.clone(),
             self.signals.clone(),
         );
 
         let task_run_attempt_monitor = TaskRunAttemptMonitor::new(
             self.crud.clone(),
             self.conn_pool.clone(),
-            task_run_attempt_children.clone(),
+            self.children.clone(),
             self.signals.clone(),
         );
 

@@ -75,9 +75,35 @@ impl ServeCmd {
         println!("Listening on http://{}", addr);
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, router).await?;
+        axum::serve(listener, router)
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+
+        println!("Stopping running tasks");
+        orchestrator.shutdown().await;
 
         Ok(())
     }
 
+}
+
+
+/// Resolves on Ctrl-C or SIGTERM, whichever arrives first.
+async fn shutdown_signal() {
+
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.expect("Failed to listen for Ctrl-C");
+    };
+
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to listen for SIGTERM")
+            .recv()
+            .await;
+    };
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
 }

@@ -147,7 +147,7 @@ impl TaskRunAttemptMonitor {
 
         Self::read_output(task_run_attempt_child).await;
 
-        Self::kill_process_group(task_run_attempt_child).await;
+        task_run_attempt_child.kill_process_group().await;
 
         self.finish_task_run_attempt(
             task_run_attempt,
@@ -173,7 +173,7 @@ impl TaskRunAttemptMonitor {
 
         Self::read_output(task_run_attempt_child).await;
 
-        Self::kill_process_group(task_run_attempt_child).await;
+        task_run_attempt_child.kill_process_group().await;
 
         self.finish_task_run_attempt(
             task_run_attempt,
@@ -200,25 +200,6 @@ impl TaskRunAttemptMonitor {
         self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
 
         Ok(true)
-    }
-
-    /// Kills the command's whole process group, not just the process flowlite spawned.
-    ///
-    /// `sh -c` forks rather than execs for anything but a single command — so for most real
-    /// commands, signalling the child alone leaves its grandchildren running and a timed-out
-    /// task reports TimedOut while its work carries on. TaskRunAttemptDispatcher puts every
-    /// attempt in its own group, whose id is the pid of the sh it spawned.
-    ///
-    /// The kill that follows reaps the sh itself, which killpg has already signalled.
-    async fn kill_process_group(task_run_attempt_child: &mut TaskRunAttemptChild) {
-
-        if let Some(pid) = task_run_attempt_child.child.id() {
-            // Safe: killpg only delivers a signal, and a group that is already gone reports
-            // ESRCH, which is exactly the state we wanted.
-            unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
-        }
-
-        let _ = task_run_attempt_child.child.kill().await;
     }
 
     fn is_task_run_attempt_timed_out(task_run_attempt_child: &TaskRunAttemptChild) -> bool {
