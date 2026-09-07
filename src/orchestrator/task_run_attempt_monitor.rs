@@ -10,6 +10,14 @@ use chrono::Utc;
 use tokio::io::AsyncReadExt;
 
 
+/// Whether the ladder settled the attempt for good or handed it on to the next pass,
+/// which is what decides whether the process goes back into TaskRunAttemptChildren.
+enum Settled {
+    Terminal,
+    Running,
+}
+
+
 /// Waits on the child process TaskRunAttemptDispatcher spawned for every running task
 /// run attempt and finishes the attempt once its process exits, runs past its timeout
 /// or gets aborted. Takes the process out of TaskRunAttemptChildren and owns it from
@@ -59,24 +67,50 @@ impl TaskRunAttemptMonitor {
 
         let mut task_run_attempt_child = self.take_task_run_attempt_child(task_run_attempt).await?;
 
-        if self.settle_for_succeeded(task_run_attempt, &mut task_run_attempt_child).await? {
-            return Ok(());
+        match self.settle_task_run_attempt(task_run_attempt, &mut task_run_attempt_child).await {
+            Ok(Settled::Terminal) => Ok(()),
+            Ok(Settled::Running) => {
+                self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
+                Ok(())
+            },
+            // Put the process back rather than dropping it. A dropped Child is not killed,
+            // so it would keep running unowned, whatever it had written would be lost, and
+            // the row would stay Running with `take_task_run_attempt_child` raising on it
+            // every pass from here on.
+            Err(e) => {
+                self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
+                Err(e)
+            },
+        }
+    }
+
+    /// Runs the ladder and reports which side of it claimed the attempt, so the caller
+    /// alone decides whether the process goes back into TaskRunAttemptChildren. Keeping
+    /// that decision in one place is what lets the error path put it back too.
+    async fn settle_task_run_attempt(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        task_run_attempt_child: &mut TaskRunAttemptChild,
+    ) -> anyhow::Result<Settled> {
+
+        if self.settle_for_succeeded(task_run_attempt, task_run_attempt_child).await? {
+            return Ok(Settled::Terminal);
         }
 
-        if self.settle_for_failed(task_run_attempt, &mut task_run_attempt_child).await? {
-            return Ok(());
+        if self.settle_for_failed(task_run_attempt, task_run_attempt_child).await? {
+            return Ok(Settled::Terminal);
         }
 
-        if self.settle_for_timed_out(task_run_attempt, &mut task_run_attempt_child).await? {
-            return Ok(());
+        if self.settle_for_timed_out(task_run_attempt, task_run_attempt_child).await? {
+            return Ok(Settled::Terminal);
         }
 
-        if self.settle_for_aborted(task_run_attempt, &mut task_run_attempt_child).await? {
-            return Ok(());
+        if self.settle_for_aborted(task_run_attempt, task_run_attempt_child).await? {
+            return Ok(Settled::Terminal);
         }
 
         if self.settle_for_running(task_run_attempt, task_run_attempt_child).await? {
-            return Ok(());
+            return Ok(Settled::Running);
         }
 
         anyhow::bail!(
@@ -217,20 +251,19 @@ impl TaskRunAttemptMonitor {
         Ok(true)
     }
 
-    /// Leaves the attempt running: persists what its process has written so far and puts
-    /// the process back for the next pass. Takes every attempt the outcomes above did not,
-    /// so the bail is unreachable until one of them grows a guard.
+    /// Leaves the attempt running: persists what its process has written so far. Takes
+    /// every attempt the outcomes above did not, so the bail is unreachable until one of
+    /// them grows a guard. Putting the process back for the next pass belongs to
+    /// `handle_running_task_run_attempt`, which does it for the error path too.
     async fn settle_for_running(
         &self,
         task_run_attempt: &TaskRunAttempt,
-        mut task_run_attempt_child: TaskRunAttemptChild,
+        task_run_attempt_child: &mut TaskRunAttemptChild,
     ) -> anyhow::Result<bool> {
 
-        Self::read_output(&mut task_run_attempt_child).await;
+        Self::read_output(task_run_attempt_child).await;
 
-        self.update_task_run_attempt_output(task_run_attempt, &task_run_attempt_child).await?;
-
-        self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
+        self.update_task_run_attempt_output(task_run_attempt, task_run_attempt_child).await?;
 
         Ok(true)
     }
@@ -630,6 +663,34 @@ mod tests {
         let task_run_attempt = running_attempt(&db).await;
 
         assert!(db.task_run_attempt_monitor().handle(&task_run_attempt).await.is_err());
+    }
+
+    /// The child is out of TaskRunAttemptChildren for the length of a pass, so an error in
+    /// the middle of the ladder used to drop it: a dropped Child is not killed, so the
+    /// process kept running unowned, its output was lost, and the row stayed Running with
+    /// nothing left able to settle it.
+    #[tokio::test]
+    async fn a_pass_that_errors_puts_the_process_back() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_running_child(
+            &task_run_attempt,
+            "exec sleep 30",
+            Utc::now() + TimeDelta::seconds(3600),
+        ).await;
+
+        // Closing the pool fails the stop lookup in `settle_for_aborted`, which is the
+        // first rung of the ladder that asks the database anything for a process that is
+        // still running and not yet past its deadline.
+        db.conn_pool.close().await;
+
+        assert!(db.task_run_attempt_monitor().handle(&task_run_attempt).await.is_err());
+
+        let mut handed_back = db.children.remove(task_run_attempt.id).await
+            .expect("a pass that errored must put the process back, not orphan it");
+
+        handed_back.child.kill().await.unwrap();
     }
 
     #[tokio::test]
