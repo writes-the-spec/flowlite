@@ -15,6 +15,7 @@ CREATE TABLE task_run_attempt (
     FOREIGN KEY (job_run_id) REFERENCES job_run (id)
 );
 
+CREATE UNIQUE INDEX idx_task_run_attempt_task_run_id_attempt ON task_run_attempt (task_run_id, attempt);
 CREATE INDEX idx_task_run_attempt_task_run_id ON task_run_attempt (task_run_id);
 CREATE INDEX idx_task_run_attempt_job_run_id ON task_run_attempt (job_run_id);
 CREATE INDEX idx_task_run_attempt_job_id ON task_run_attempt (job_id);

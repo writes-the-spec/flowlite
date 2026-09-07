@@ -2,6 +2,8 @@
 
 `TaskRunAttemptStatus` lives in [src/crud/task_run_attempt.rs](../../../../src/crud/task_run_attempt.rs). One `task_run_attempt` row per execution of a task run's command, inserted `Pending` by `TaskRunDispatcher` for attempt 1 and by `TaskRunMonitor` for every retry — this is the only level that runs a process.
 
+Two services insert these rows, but never the same one: the dispatcher only visits `Pending` task runs and the monitor only `Running` ones, and each insert is part of the transition that service already owns — attempt 1 *is* the task run starting, a retry *is* the task run not finishing. Every transition on the row afterwards belongs to the attempt services alone. `attempt` itself is computed (`1`, then `last.attempt + 1`), so a `UNIQUE (task_run_id, attempt)` index is what turns a second process racing the first into a failed insert instead of a task run quietly executed twice.
+
 | Status | Meaning |
 |---|---|
 | `Pending` | Inserted, waiting for the dispatcher. |

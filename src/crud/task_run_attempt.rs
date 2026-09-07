@@ -90,6 +90,7 @@ pub struct SelectTaskRunAttemptsDataFilter {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum SelectTaskRunAttemptsDataSort {
     Id,
+    Attempt,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -188,6 +189,9 @@ impl CRUD {
             match sort {
                 SelectTaskRunAttemptsDataSort::Id => {
                     query_builder.push(" ORDER BY id ASC");
+                }
+                SelectTaskRunAttemptsDataSort::Attempt => {
+                    query_builder.push(" ORDER BY attempt ASC");
                 }
             }
         }

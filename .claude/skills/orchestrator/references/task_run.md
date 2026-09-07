@@ -39,7 +39,7 @@ This transition runs **at most once per task run**: a retry keeps the row `Runni
 
 ## Monitor: Running → finished
 
-`TaskRunMonitor` ([src/orchestrator/task_run_monitor.rs](../../../../src/orchestrator/task_run_monitor.rs)) polls `Running` task runs on the same wake-up-or-interval schedule and looks only at their `task_run_attempt` rows — it never touches a process. The **last** attempt (highest id) picks the outcome; `get_last_task_run_attempt` returns it or raises, since a `Running` task run always has one:
+`TaskRunMonitor` ([src/orchestrator/task_run_monitor.rs](../../../../src/orchestrator/task_run_monitor.rs)) polls `Running` task runs on the same wake-up-or-interval schedule and looks only at their `task_run_attempt` rows — it never touches a process. The **last** attempt (highest `attempt`, which a unique index makes unique per task run) picks the outcome; `get_last_task_run_attempt` returns it or raises, since a `Running` task run always has one:
 
 | Last attempt | Outcome | Task run |
 |---|---|---|

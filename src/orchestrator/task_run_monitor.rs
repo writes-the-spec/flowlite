@@ -219,8 +219,9 @@ impl TaskRunMonitor {
 
     }
 
-    /// The attempt that decides what the task run does next, which is the highest id: the
-    /// earlier ones are the retries already accounted for.
+    /// The attempt that decides what the task run does next, which is the highest attempt
+    /// number: the earlier ones are the retries already accounted for. A task run's attempt
+    /// numbers are unique, so the order is total.
     ///
     /// A Running task run always has one — TaskRunDispatcher inserts attempt 1 before it
     /// writes Running — so none at all is a broken invariant rather than a state to handle,
@@ -236,7 +237,7 @@ impl TaskRunMonitor {
                     task_id: None,
                     status: None,
                 },
-                sort: Some(SelectTaskRunAttemptsDataSort::Id),
+                sort: Some(SelectTaskRunAttemptsDataSort::Attempt),
             }
         ).await?;
 

@@ -105,7 +105,14 @@ impl TaskRunDispatcher {
     /// without succeeding, so an unfinished one here is still one this run is waiting for.
     async fn settle_as_pending(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
-        self.has_unfinished_dependent_task_run(task_run).await
+        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
+
+        let any_unfinished = dependent_task_runs.iter().any(|tr| matches!(
+            tr.status,
+            TaskRunStatus::Pending | TaskRunStatus::Running,
+        ));
+
+        Ok(any_unfinished)
     }
 
     /// Sets the task run to running, which is what makes TaskRunMonitor pick it up, once
@@ -121,9 +128,11 @@ impl TaskRunDispatcher {
     /// Every later attempt is a retry, and those are TaskRunMonitor's.
     async fn settle_as_running(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
-        let all_dependent_task_runs_succeeded = self.have_all_dependent_task_runs_succeeded(task_run).await?;
+        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
 
-        if !all_dependent_task_runs_succeeded {
+        let all_succeeded = dependent_task_runs.iter().all(|tr| tr.status == TaskRunStatus::Succeeded);
+
+        if !all_succeeded {
             return Ok(false);
         }
 
@@ -196,29 +205,6 @@ impl TaskRunDispatcher {
         ).await?;
 
         Ok(job_run_stop.is_some())
-
-    }
-
-    async fn has_unfinished_dependent_task_run(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
-
-        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
-
-        let any_unfinished = dependent_task_runs.iter().any(|tr| matches!(
-            tr.status,
-            TaskRunStatus::Pending | TaskRunStatus::Running,
-        ));
-
-        Ok(any_unfinished)
-
-    }
-
-    async fn have_all_dependent_task_runs_succeeded(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
-
-        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
-
-        let all_succeeded = dependent_task_runs.iter().all(|tr| tr.status == TaskRunStatus::Succeeded);
-
-        Ok(all_succeeded)
 
     }
 
