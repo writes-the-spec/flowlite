@@ -36,10 +36,12 @@ jobs:
 `Scheduler::select` (called by its `Poller` once a second) fetches every schedule with `next_run < now` and `disabled = false`, ordered by `row_id`; `Scheduler::handle` hands each to `handle_due_schedule`, which:
 
 1. selects the schedule's `schedule_job` rows,
-2. calls `CRUD::submit_job` for each — one `job_run` and its `Pending` task runs, exactly as `job submit` does — and publishes, since that insert is what `JobRunDispatcher` is waiting to see,
+2. calls `CRUD::submit_job` for each — one `job_run` and its `Pending` task runs, exactly as `job submit` does — and publishes, since that insert is what `JobRunDispatcher` is waiting to see. **A submit that fails is logged and skipped with `continue`, and step 3 still advances the schedule**, so that job loses this occurrence rather than being retried on the next tick,
 3. advances the schedule: `CronTrigger::from_schedule(schedule).get_next_run(schedule.next_run)`.
 
 Step 3 measures from the schedule's **own** `next_run`, not from now, so a tick that arrives late still advances by one cron step rather than skipping ahead.
+
+**Dropping the failed job is the deliberate choice, and the alternative is worse.** `next_run` advances only after the loop, so bailing out mid-schedule would leave it unchanged: the next tick, one second later, would re-submit every sibling already committed before the failure and hit the same error again — a schedule hot-looping at 1 Hz, duplicating runs, for as long as that one job stays unsubmittable. Losing one occurrence of one job is the cheaper failure. If you ever need the retry instead, it has to come with a way to record which siblings already went out.
 
 A schedule that fails to be handled is logged and left for the next tick; only a failure to select the schedules restarts the loop after 5s. Same rule as the orchestrator services, and for the same reason — it now lives in `Poller::run` ([src/poller.rs](../../../src/poller.rs)) rather than in `Scheduler` itself. See [orchestrator](../orchestrator/SKILL.md).
 

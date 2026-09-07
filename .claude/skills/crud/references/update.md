@@ -34,7 +34,7 @@ For a nullable column, the input field is `Option<Option<T>>`, not `Option<T>`:
 - Outer `Some(None)` → "set this column to `NULL`".
 - Outer `Some(Some(v))` → "set this column to `v`".
 
-This is how `started_at`/`finished_at`/`next_run` are modeled in `job_run`, `task_run`, `task_run_attempt`, and `schedule` — see [src/crud/job_run.rs](../../../../src/crud/job_run.rs) `UpdateJobRunsDataInput`. A non-nullable column (`status`, `num_attempts`, `stdout`, `stderr`) just uses a single `Option<T>` since there's no NULL case to distinguish.
+This is how `started_at`/`finished_at`/`next_run` are modeled in `job_run`, `task_run`, `task_run_attempt`, and `schedule` — see [src/crud/job_run.rs](../../../../src/crud/job_run.rs) `UpdateJobRunsDataInput`. A non-nullable column (`status`, `stdout`, `stderr`) just uses a single `Option<T>` since there's no NULL case to distinguish.
 
 ## Query building
 

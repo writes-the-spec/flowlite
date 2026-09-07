@@ -26,7 +26,9 @@ pub struct Select<Entity>sData {
 
 Every field in `Select<Entity>sDataFilter` is optional and additive — an empty filter returns everything. `sort`, `limit`, and `offset` are top-level optionals on `Select<Entity>sData`, not inside the filter.
 
-`limit`/`offset` are omitted entirely from the struct for tables that are always fetched in full for a given key (e.g. `task_run`, `task_run_attempt`, `task_dependent` — always scoped to one `job_run_id`/`task_run_id`). Only add them when callers actually need pagination.
+`limit`/`offset` are `Option<u32>` on the config tables and `Option<i64>` on the disk ones (`job_run`, `job_run_stop`) — both are live, so match the neighbours of whichever table you are adding rather than picking one. Either way the bind casts to `i64`.
+
+They are omitted entirely from the struct for tables that are always fetched in full for a given key (e.g. `task_run`, `task_run_attempt`, `task_dependent` — always scoped to one `job_run_id`/`task_run_id`). Only add them when callers actually need pagination.
 
 ## Query building
 
@@ -98,7 +100,7 @@ Alias every table when a join is involved, and prefix every column in the `SELEC
 
 ## Singular helper
 
-Every `select_<entity>s` (plural) gets a matching `select_<entity>` (singular) that just takes the first result — never hand-write a second query for the "get one" case:
+Where a caller needs one row, add a `select_<entity>` (singular) beside the plural that just takes the first result — never hand-write a second query for the "get one" case:
 
 ```rust
 pub async fn select_widget<'e, E>(&self, executor: E, data: &SelectWidgetsData) -> anyhow::Result<Option<Widget>>
@@ -111,6 +113,8 @@ where
 ```
 
 Callers pass `limit: Some(1)` if they want the database to stop early, but that's optional — the helper doesn't add it implicitly.
+
+Not every entity has one, and that is fine: `task_dependent` and `task_run_attempt` are only ever read in full for a key, so neither has a singular. One entity is simply misnamed — `schedule_job`'s is `select_schedule_job_internal` ([src/crud/schedule_job.rs](../../../../src/crud/schedule_job.rs)), whose body is exactly the two lines above. Copy the shape, not that name.
 
 ## Row struct
 

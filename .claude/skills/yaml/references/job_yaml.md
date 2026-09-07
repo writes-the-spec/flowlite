@@ -14,6 +14,7 @@ tasks:
     depends_on: [task-a]
     timeout: 600
     max_retries: 2
+    retry_delay: 30
 ```
 
 ## `JobYaml`
@@ -23,6 +24,7 @@ tasks:
 | `id` | yes | — | Primary key of `mem.job`. The id CLI and API lookups filter on — **not** `name`. |
 | `name` | yes | — | Display label only, not unique. |
 | `description` | no | `""` | |
+| `max_parallel_runs` | no | `1` | How many runs of this job may be `Running` at once. **`0` means no limit.** Enforced only in `JobRunDispatcher::settle_as_pending`; submitting is never rejected for exceeding it. |
 | `tasks` | no | `[]` | A job with no tasks is legal; its job runs finish `Succeeded` immediately. |
 
 ## `JobYamlTask`
@@ -34,6 +36,7 @@ tasks:
 | `depends_on` | no | `[]` | Task ids **of the same job**. |
 | `timeout` | no | `3600` | Seconds. Applies per *attempt*, not to the task run as a whole. |
 | `max_retries` | no | `0` | Total executions are `1 + max_retries`; only a `Failed` attempt is retried. |
+| `retry_delay` | no | `60` | Seconds to wait after a failed attempt before the next one starts. Enforced in `TaskRunAttemptDispatcher::settle_as_pending`, measured from the retry row's `created_at`. |
 
 ## What one task becomes
 
