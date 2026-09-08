@@ -1,6 +1,6 @@
 ---
 name: db-schema
-description: How a schema change lands in flowlite - the two migration histories, sqlx checksums, and the call between editing an existing migration and adding a new one. Use this whenever you write, edit or name a migration file, add/drop/rename a column, hit "migration was previously applied but has been modified", need to reset a dev database, or are about to reach for ALTER TABLE. Read it BEFORE writing the migration, not after it fails - the decision of which file to change is the whole point and it is hard to undo. For what each table holds and who reads it, see the entities skill.
+description: How a column is declared and how a schema change lands in flowlite - NOT NULL vs nullable, why no column carries a DEFAULT, the two migration histories, sqlx checksums, and the call between editing an existing migration and adding a new one. Use this whenever you write, edit or name a migration file, add/drop/rename a column, choose a column's nullability or type, wonder whether something should be Option<T>, hit "migration was previously applied but has been modified", need to reset a dev database, or are about to reach for ALTER TABLE. Read it BEFORE writing the migration, not after it fails - which file you change is hard to undo. For what each table holds and who reads it, see the entities skill.
 ---
 
 # Landing a schema change
@@ -44,6 +44,20 @@ Also check the default location, which is where a dev instance lands if nobody p
 - **Unsure** — add a new one. The cost of an unnecessary migration is one extra file; the cost of a broken checksum is somebody's database.
 
 When an edit is the right call and a stale dev database is the only thing in the way, deleting that database is the fix (it holds runs, not config — config comes back from YAML). Say so out loud rather than doing it silently: it is somebody's run history.
+
+## What a column may say
+
+Two rules constrain every column this repo declares. They are DDL rules, so they belong here — but they are also why the entity structs in `src/crud/` look the way they do, and, as the next section shows, why `ALTER TABLE` gets you less far in this repo than it would elsewhere.
+
+**`NOT NULL` whenever there is a logical null value.** If a column's type has a natural empty value — `''` for text, `0` for a counter, `'[]'` for a JSON list — *that value is the null*: declare `NOT NULL` and write the empty value explicitly on insert. A nullable column is only right when "no value" is a real, distinct state no ordinary value can express, which in this schema means timestamps that have not happened yet (`started_at`, `finished_at`, `next_run`) and genuinely open-ended bounds (`start_date`, `end_date`).
+
+The rule keeps two spellings of "nothing" from coexisting. Once a text column is nullable, `NULL` and `''` both mean "no output" and no query can be written without an `OR ... IS NULL`. It pays off in Rust too: a `NOT NULL` column is a plain `String`/`u32` rather than an `Option<...>`, so no call site has to invent a meaning for `None`.
+
+**No `DEFAULT` clauses.** Every insert supplies every column it owns, and every value is bound from Rust — there is currently no constant left in any `INSERT` literal in `src/crud/`. An empty value is bound as the empty value (`job_description: String::new()` for a job with no description; `depends_on: Vec::new()`, which `sqlx::types::Json` writes as `'[]'`), and every timestamp binds `self.toolkit.get_current_ts()`, never `CURRENT_TIMESTAMP` — so `Toolkit` stays the single source of "now" and every timestamp in the schema shares one format, RFC3339 with subseconds, directly comparable in SQL.
+
+Two reasons for it. The value a row gets should be readable from the insert rather than from DDL written migrations ago; and `DEFAULT` combined with `NOT NULL` makes a forgotten column succeed quietly instead of failing, which is the one outcome you cannot debug from the row afterwards.
+
+**Together they are what makes `ADD COLUMN` awkward here**, which the next section works through. The awkwardness is doing its job: it means a new column on a populated table forces a decision about what the existing rows should say, instead of letting `DEFAULT ''` answer that question silently for you.
 
 ## Why this repo edits more often than most
 

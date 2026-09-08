@@ -1,6 +1,6 @@
 ---
 name: entities
-description: Map of every entity in flowlite's two SQLite databases - what each table holds, which database it lives in, who writes it and who reads it - plus the column conventions every entity obeys. Use when working out what writes or reads a table, deciding whether data belongs in the in-memory or the persisted database, choosing a column's nullability or key style, or adding an entity. For the mechanics of landing a schema change - migration files, sqlx checksums, ALTER limits - see the db-schema skill.
+description: Map of every entity in flowlite's two SQLite databases - what each table holds, which database it lives in, who writes it and who reads it, how it is keyed and whether it is ever updated. Use when working out what writes or reads a table, tracing which service owns a column, deciding whether data belongs in the in-memory or the persisted database, or adding an entity. For declaring a column - nullability, defaults - and for landing the schema change itself, see the db-schema skill.
 ---
 
 # Entities
@@ -33,15 +33,13 @@ The disk tables mirror the `mem` ones, but they are not views onto them: **a run
 - `Toolkit::get_memory_conn` connects to `mem` *without* the disk file, for standalone memory-schema setup only.
 - Two independent migration histories: `Toolkit::update_disk_schema` runs `db/schemas/disk/migrations`, `update_memory_schema` runs `db/schemas/memory/migrations`.
 
-**Migrations are checksummed by `sqlx::migrate!`, so editing an applied migration file breaks startup** against an existing `flowlite.db` — *"migration ... was previously applied but has been modified"*. Pre-release the fix is to delete the dev database; after that, a column change needs a new migration file.
+Each history is a separate `sqlx::migrate!` with its own checksums, which is why **whether an existing migration may be edited depends on what has already applied it** — the [db-schema skill](../db-schema/SKILL.md) has that call and the rest of the mechanics.
 
 ## Conventions every object obeys
 
 **Keys split by database.** A `mem` table carries a caller-assigned `row_id INTEGER NOT NULL` with `UNIQUE (row_id)`, whose only job is to preserve YAML declaration order, alongside a natural primary key from the config (`job_id`, `(task_id, job_id)`, `schedule_id`) — or, for `task_dependent` and `schedule_job`, no primary key at all. A disk table has `id INTEGER PRIMARY KEY AUTOINCREMENT`, returned via `last_insert_rowid()`.
 
-**`NOT NULL` whenever there is a logical null value.** If a column's type has a natural empty value — `''` for text, `0` for a counter, `'[]'` for a JSON list — *that value is the null*: declare `NOT NULL` and write the empty value explicitly on insert. A nullable column is only right when "no value" is a real, distinct state no ordinary value can express, which in this schema means timestamps that have not happened yet (`started_at`, `finished_at`, `next_run`) and genuinely open-ended bounds (`start_date`, `end_date`). The rule keeps two spellings of "nothing" from coexisting — once a text column is nullable, `NULL` and `''` both mean "no output" and no query can be written without an `OR ... IS NULL`. It pays off in Rust: a `NOT NULL` column is a plain `String`/`u32` instead of an `Option<...>`, so no call site invents a meaning for `None`.
-
-**No `DEFAULT` clauses.** Every insert supplies every column it owns. A constant default goes in the SQL literal (`..., stdout, stderr) VALUES (..., '', '')`); a computed one is bound from Rust, and every timestamp binds `self.toolkit.get_current_ts()` — never `CURRENT_TIMESTAMP`, so `Toolkit` stays the single source of "now" and every timestamp in the schema shares one format, RFC3339 with subseconds, directly comparable in SQL. Two reasons: the value a row gets should be readable from the insert rather than from DDL written migrations ago, and `DEFAULT` plus `NOT NULL` quietly hides a forgotten column instead of failing.
+**Nullability and defaults are the [db-schema skill](../db-schema/SKILL.md)'s.** Two rules shape every column and every entity struct here, so read them there before adding either: a column is `NOT NULL` whenever its type has a natural empty value, and no column carries a `DEFAULT`. The reference files below lean on the first constantly — "an attempt that printed nothing has empty output, not unknown output" is that rule talking.
 
 **Updated after insert?** Disk tables are; that is what `update_*` methods are for. `mem` tables are re-seeded fresh every startup and are mostly insert-only — **except `schedule.next_run`**, which the [Scheduler](../scheduler/SKILL.md) advances on every fire. It is the one config column that carries live state.
 
@@ -50,8 +48,8 @@ The disk tables mirror the `mem` ones, but they are not views onto them: **a run
 ## Adding a new table
 
 1. Decide the database with the restart question above.
-2. Add the migration — see the [db-schema skill](../db-schema/SKILL.md) for where it goes, how it is named and when it may be edited rather than added to. No schema prefix in the migration itself; each runs against its own database, and the `mem.` prefix is only needed later, in the SQL your CRUD methods write.
-3. Declare each column `NOT NULL` unless "no value" is a state no ordinary value can express, and leave `DEFAULT` out entirely.
+2. Write the migration and declare its columns per the [db-schema skill](../db-schema/SKILL.md) — where the file goes, how it is named, when an existing one may be edited instead, and how each column's nullability is decided. One thing worth repeating here: no schema prefix inside the migration, since each runs against its own database. The `mem.` prefix appears only later, in the SQL your CRUD methods write.
+3. Key it per "Keys split by database" above — which of the two databases it is in decides this, not preference.
 4. If it is YAML-seeded, wire the insert into `CRUD::init`, incrementing the shared `row_id` counter, inside the existing transaction.
 5. Build the CRUD file per the [crud skill](../crud/SKILL.md), which also owns how a method takes its database handle.
 6. Add a reference file here.
