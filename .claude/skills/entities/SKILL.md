@@ -37,11 +37,9 @@ Each history is a separate `sqlx::migrate!` with its own checksums, which is why
 
 ## Conventions every entity obeys
 
-**How a table is declared is the [db-schema skill](../db-schema/SKILL.md)'s.** Three rules shape every column and every entity struct here — how the table is keyed, when a column is `NOT NULL`, and that no column carries a `DEFAULT` — and all three follow from which of the two databases the table is in, which is the question this skill answers. Read them there before declaring anything. The reference files below lean on the nullability one constantly: "an attempt that printed nothing has empty output, not unknown output" is that rule talking.
+**How a table is declared is the [db-schema skill](../db-schema/SKILL.md)'s.** Four rules shape every column and every entity struct here — how the table is keyed, when a column is `NOT NULL`, that no column carries a `DEFAULT`, and where a foreign key can and cannot reach — and they follow from which of the two databases the table is in, which is the question this skill answers. Read [declaring-a-table.md](../db-schema/references/declaring-a-table.md) before declaring anything. One of them shows up all over the reference files below: "an attempt that printed nothing has empty output, not unknown output" is the nullability rule talking.
 
 **Updated after insert?** Disk tables are; that is what `update_*` methods are for. `mem` tables are re-seeded fresh every startup and are mostly insert-only — **except `schedule.next_run`**, which the [Scheduler](../scheduler/SKILL.md) advances on every fire. It is the one config column that carries live state.
-
-**Foreign keys are enforced.** sqlx turns `PRAGMA foreign_keys` on by default, so a bad reference in config aborts `CRUD::init`'s transaction and the process exits — see [schedule_job.md](references/schedule_job.md). A disk table cannot have a foreign key to a config table, since the config lives in the attached database; `job_run.job_id` and `task_run.task_id` are therefore unconstrained, and the code checks instead.
 
 ## Adding a new table
 
