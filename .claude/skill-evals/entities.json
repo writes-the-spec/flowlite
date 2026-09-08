@@ -5,11 +5,11 @@
   },
   {
     "query": "write the migration for a job_run_note table. what columns, and do i give created_at a DEFAULT?",
-    "should_trigger": true
+    "should_trigger": false
   },
   {
     "query": "i need a new `priority` column on schedule. which migrations dir does it go in and should it be NOT NULL",
-    "should_trigger": true
+    "should_trigger": false
   },
   {
     "query": "why is mem.job empty when i query it from a second connection in my new background task?",
@@ -17,11 +17,11 @@
   },
   {
     "query": "should schedule_job.parameters be nullable or NOT NULL with a default of '{}'?",
-    "should_trigger": true
+    "should_trigger": false
   },
   {
     "query": "i want an index for the pending task run query the dispatcher runs every second. where do index statements go",
-    "should_trigger": true
+    "should_trigger": false
   },
   {
     "query": "does the mem schema survive a restart? im storing next_run there and it keeps resetting to the next occurrence",
@@ -36,7 +36,7 @@
     "should_trigger": true
   },
   {
-    "query": "that ATTACH DATABASE line \u2014 do i need to run it on my new connection or does Toolkit already handle it",
+    "query": "that ATTACH DATABASE line — do i need to run it on my new connection or does Toolkit already handle it",
     "should_trigger": true
   },
   {
@@ -60,23 +60,23 @@
     "should_trigger": false
   },
   {
-    "query": "clean up this nested match statement, its unreadable",
-    "should_trigger": false
-  },
-  {
-    "query": "whats the conceptual difference between a Job and a JobRun in this system",
-    "should_trigger": false
-  },
-  {
-    "query": "is the cron dialect here six fields with seconds first, or normal five field crontab?",
-    "should_trigger": false
-  },
-  {
-    "query": "add a --dry-run flag to job submit so it prints what it would insert",
-    "should_trigger": false
-  },
-  {
     "query": "job run finished as Aborted but nobody stopped it, where does Aborted come from",
     "should_trigger": false
+  },
+  {
+    "query": "which service reads job_run_stop, and why do the two remaining monitors never look at it",
+    "should_trigger": true
+  },
+  {
+    "query": "what is task_dependent actually for? nothing seems to select from it and i want to know before i touch it",
+    "should_trigger": true
+  },
+  {
+    "query": "is schedule.next_run written once at startup or updated as it fires? trying to understand what carries live state in mem",
+    "should_trigger": true
+  },
+  {
+    "query": "where does an attempt's stdout live now - i see no stdout column on task_run_attempt but the page renders output",
+    "should_trigger": true
   }
 ]

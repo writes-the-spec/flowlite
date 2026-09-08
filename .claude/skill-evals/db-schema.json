@@ -1,0 +1,82 @@
+[
+  {
+    "query": "i need to add a `notes` column to task_run. its text and every existing row should just have empty string. do i write the ALTER or a whole new migration file",
+    "should_trigger": true
+  },
+  {
+    "query": "flowlite wont boot anymore, says migration 20260908120000 was previously applied but has been modified. i did tweak that file this morning. how bad is this",
+    "should_trigger": true
+  },
+  {
+    "query": "adding priority INTEGER NOT NULL to schedule and sqlite is throwing \"Cannot add a NOT NULL column with default value NULL\". can i just give it DEFAULT 0",
+    "should_trigger": true
+  },
+  {
+    "query": "should finished_at on my new api_token table be Option<DateTime<Utc>> or just DateTime? trying to work out if nullable is right here",
+    "should_trigger": true
+  },
+  {
+    "query": "new table for storing resolved dag edges, seeded from the job yaml on startup. what do i use as the primary key - autoincrement id or something else",
+    "should_trigger": true
+  },
+  {
+    "query": "can task_run_attempt_output have a foreign key to mem.task? i want the db to enforce that the task still exists",
+    "should_trigger": true
+  },
+  {
+    "query": "i want to rename job_run.job_name to job_run.name. is that a rename column or do i have to rebuild the table",
+    "should_trigger": true
+  },
+  {
+    "query": "i wrote the create migration for job_run_note ten minutes ago and havent run serve yet. i realised i forgot two columns - can i just edit the file",
+    "should_trigger": true
+  },
+  {
+    "query": "need to back out a column i added yesterday. can i delete the migration file that added it or does that break something",
+    "should_trigger": true
+  },
+  {
+    "query": "writing the migration for a new task_run_label table. where does the file go, whats the filename format, and does it need the mem. prefix inside",
+    "should_trigger": true
+  },
+  {
+    "query": "adding a task_run_log table for structured logs. does that belong in the mem schema or on disk?",
+    "should_trigger": false
+  },
+  {
+    "query": "who actually writes task_run_attempt.status? im trying to work out which service owns that transition",
+    "should_trigger": false
+  },
+  {
+    "query": "write the insert and select module under src/crud/ for the job_run_note table, with a filter on job_run_id and a sort by created_at",
+    "should_trigger": false
+  },
+  {
+    "query": "why is mem.job empty when i query it from a second connection inside my new background task? the pool one sees the rows fine",
+    "should_trigger": false
+  },
+  {
+    "query": "my insert into task_run_attempt_output is failing at runtime with NOT NULL constraint failed: task_run_attempt_output.task_id. i think i forgot to bind it in the crud method",
+    "should_trigger": false
+  },
+  {
+    "query": "the pending task run select does a full scan every second and its showing up in profiling. how would you speed that query up",
+    "should_trigger": false
+  },
+  {
+    "query": "add a --dry-run flag to job submit that prints the task runs it would insert instead of inserting them",
+    "should_trigger": false
+  },
+  {
+    "query": "my schedule yml has a timezone key thats being silently ignored and i cant work out why",
+    "should_trigger": false
+  },
+  {
+    "query": "whats the conceptual difference between a Job and a JobRun here, and why does a run snapshot the config instead of reading it live",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i bind a Vec<String> column in an insert? copying what task.depends_on does with sqlx Json but my select side panics on decode",
+    "should_trigger": false
+  }
+]
