@@ -61,15 +61,6 @@
 
 <div class="section">
     <div class="section__head">
-        <h2 class="section__title">Command</h2>
-        <span class="section__note">run as <code>sh -c</code>, so shell syntax works</span>
-    </div>
-
-    <code class="cmd">{{ task.command }}</code>
-</div>
-
-<div class="section">
-    <div class="section__head">
         <h2 class="section__title">Environment</h2>
         <span class="section__note">declared on this task, over the job's <code>env:</code> and the environment flowlite inherited</span>
     </div>
@@ -89,6 +80,15 @@
         {% endfor %}
     </div>
     {% endif %}
+</div>
+
+<div class="section">
+    <div class="section__head">
+        <h2 class="section__title">Command</h2>
+        <span class="section__note">run as <code>sh -c</code>, so shell syntax works</span>
+    </div>
+
+    <code class="cmd">{{ task.command }}</code>
 </div>
 
 {% endblock %}
