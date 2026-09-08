@@ -52,6 +52,13 @@
         </div>
 
         <div class="meta__item">
+            <div class="meta__label">Scheduled for</div>
+            <div class="meta__value">
+                {% if let Some(scheduled_at) = job_run.scheduled_at %}{{ scheduled_at }}{% else %}<span class="none">submitted manually</span>{% endif %}
+            </div>
+        </div>
+
+        <div class="meta__item">
             <div class="meta__label">Started</div>
             <div class="meta__value">
                 {% if let Some(started_at) = job_run.started_at %}{{ started_at }}{% else %}<span class="none">not yet</span>{% endif %}
@@ -72,6 +79,24 @@
             </div>
         </div>
     </div>
+
+    {% if !job_run.parameters.is_empty() %}
+    <div class="section">
+        <div class="section__head">
+            <h2 class="section__title">Parameters</h2>
+            <span class="section__note">what this run was submitted with, reaching each command as FLOWLITE_PARAM_*</span>
+        </div>
+
+        <div class="meta">
+            {% for (name, value) in job_run.parameters %}
+            <div class="meta__item">
+                <div class="meta__label">{{ name }}</div>
+                <div class="meta__value meta__value--mono">{% if value.is_empty() %}<span class="none">empty</span>{% else %}{{ value }}{% endif %}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
 
     <div class="section">
         <div class="section__head">

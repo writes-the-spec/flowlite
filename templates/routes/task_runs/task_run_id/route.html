@@ -62,7 +62,32 @@
                 {% if let Some(duration) = task_run.duration %}{{ duration }}{% else %}<span class="none">—</span>{% endif %}
             </div>
         </div>
+
+        <div class="meta__item">
+            <div class="meta__label">Working directory</div>
+            <div class="meta__value meta__value--mono">
+                {% if task_run.working_dir.is_empty() %}<span class="none">the server's</span>{% else %}{{ task_run.working_dir }}{% endif %}
+            </div>
+        </div>
     </div>
+
+    {% if !task_run.env.is_empty() %}
+    <div class="section">
+        <div class="section__head">
+            <h2 class="section__title">Environment</h2>
+            <span class="section__note">declared on the task, over the environment flowlite inherited</span>
+        </div>
+
+        <div class="meta">
+            {% for (name, value) in task_run.env %}
+            <div class="meta__item">
+                <div class="meta__label">{{ name }}</div>
+                <div class="meta__value meta__value--mono">{% if value.is_empty() %}<span class="none">empty</span>{% else %}{{ value }}{% endif %}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
 
     <div class="section">
         <div class="section__head">
