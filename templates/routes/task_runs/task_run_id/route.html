@@ -10,7 +10,8 @@
     id="task-run"
     {% if polling %}
     hx-get="/task-runs/{{ task_run.id }}"
-    hx-trigger="every 3s"
+    {# A poll swaps out the region the dialogs live in, closing an open one under whoever is reading it. #}
+    hx-trigger="every 3s [!document.querySelector('dialog[open]')]"
     hx-select="#task-run"
     hx-target="#task-run"
     hx-swap="outerHTML"
@@ -26,6 +27,15 @@
         <div class="controls">
             <span class="mark mark--{{ task_run.status }}"></span>
             <span class="state state--{{ task_run.status }}">{{ task_run.status_word }}</span>
+
+            {% if !task_run.env.is_empty() %}
+            <button
+                class="btn btn--icon"
+                title="Environment"
+                aria-label="Environment"
+                onclick="document.getElementById('task_env').showModal()"
+            ><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5"/><path d="m4.75 6.5 2 2-2 2"/><path d="M8.75 10.5h3"/></svg></button>
+            {% endif %}
         </div>
     </div>
 
@@ -70,24 +80,6 @@
             </div>
         </div>
     </div>
-
-    {% if !task_run.env.is_empty() %}
-    <div class="section">
-        <div class="section__head">
-            <h2 class="section__title">Environment</h2>
-            <span class="section__note">declared on the task, over the environment flowlite inherited</span>
-        </div>
-
-        <div class="meta">
-            {% for (name, value) in task_run.env %}
-            <div class="meta__item">
-                <div class="meta__label">{{ name }}</div>
-                <div class="meta__value meta__value--mono">{% if value.is_empty() %}<span class="none">empty</span>{% else %}{{ value }}{% endif %}</div>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-    {% endif %}
 
     <div class="section">
         <div class="section__head">
@@ -137,6 +129,30 @@
         {% endfor %}
         {% endif %}
     </div>
+
+    {% if !task_run.env.is_empty() %}
+    <dialog id="task_env" class="dialog--data">
+        <h2 class="dialog__title">Environment</h2>
+        <p class="dialog__body">The environment this task run was submitted with, over the environment flowlite inherited.</p>
+
+        <div class="dialog__scroll">
+            <div class="meta">
+                {% for (name, value) in task_run.env %}
+                <div class="meta__item">
+                    <div class="meta__label">{{ name }}</div>
+                    <div class="meta__value meta__value--mono">{% if value.is_empty() %}<span class="none">empty</span>{% else %}{{ value }}{% endif %}</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="dialog__actions">
+            <form method="dialog">
+                <button class="btn btn--quiet">Close</button>
+            </form>
+        </div>
+    </dialog>
+    {% endif %}
 
 </div>
 

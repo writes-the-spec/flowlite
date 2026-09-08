@@ -10,7 +10,8 @@
     id="run"
     {% if polling %}
     hx-get="/job-runs/{{ job_run.id }}"
-    hx-trigger="every 3s"
+    {# A poll swaps out the region the dialogs live in, closing an open one under whoever is reading it. #}
+    hx-trigger="every 3s [!document.querySelector('dialog[open]')]"
     hx-select="#run"
     hx-target="#run"
     hx-swap="outerHTML"
@@ -80,13 +81,17 @@
         </div>
     </div>
 
-    {% if !job_run.parameters.is_empty() %}
     <div class="section">
         <div class="section__head">
             <h2 class="section__title">Parameters</h2>
             <span class="section__note">what this run was submitted with, reaching each command as FLOWLITE_PARAM_*</span>
         </div>
 
+        {% if job_run.parameters.is_empty() %}
+        <div class="empty">
+            <p>The job declares no parameters, so this run carries none.</p>
+        </div>
+        {% else %}
         <div class="meta">
             {% for (name, value) in job_run.parameters %}
             <div class="meta__item">
@@ -95,8 +100,8 @@
             </div>
             {% endfor %}
         </div>
+        {% endif %}
     </div>
-    {% endif %}
 
     <div class="section">
         <div class="section__head">
@@ -119,6 +124,7 @@
                     {% endfor %}
                 </div>
                 <div></div>
+                <div></div>
             </div>
 
             {% for lane in lanes %}
@@ -138,10 +144,52 @@
 
                 <div class="lane__dur">{{ lane.duration }}</div>
 
+                <div class="lane__env">
+                    {% if !lane.env.is_empty() || !lane.working_dir.is_empty() %}
+                    <button
+                        class="btn btn--icon"
+                        title="Environment"
+                        aria-label="Environment for {{ lane.task_id }}"
+                        onclick="document.getElementById('lane_env_{{ lane.task_run_id }}').showModal()"
+                    ><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5"/><path d="m4.75 6.5 2 2-2 2"/><path d="M8.75 10.5h3"/></svg></button>
+                    {% endif %}
+                </div>
+
                 {% if let Some(depends_on) = lane.depends_on %}
                 <div class="lane__deps" title="{{ depends_on }}">after {{ depends_on }}</div>
                 {% endif %}
             </div>
+
+            {% if !lane.env.is_empty() || !lane.working_dir.is_empty() %}
+            <dialog id="lane_env_{{ lane.task_run_id }}" class="dialog--data">
+                <h2 class="dialog__title">{{ lane.task_id }}</h2>
+                <p class="dialog__body">The environment this task run was submitted with, over the environment flowlite inherited.</p>
+
+                <div class="dialog__scroll">
+                    <div class="meta">
+                        <div class="meta__item">
+                            <div class="meta__label">Working directory</div>
+                            <div class="meta__value meta__value--mono">
+                                {% if lane.working_dir.is_empty() %}<span class="none">the server's</span>{% else %}{{ lane.working_dir }}{% endif %}
+                            </div>
+                        </div>
+
+                        {% for (name, value) in lane.env %}
+                        <div class="meta__item">
+                            <div class="meta__label">{{ name }}</div>
+                            <div class="meta__value meta__value--mono">{% if value.is_empty() %}<span class="none">empty</span>{% else %}{{ value }}{% endif %}</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="dialog__actions">
+                    <form method="dialog">
+                        <button class="btn btn--quiet">Close</button>
+                    </form>
+                </div>
+            </dialog>
+            {% endif %}
             {% endfor %}
         </div>
         {% endif %}

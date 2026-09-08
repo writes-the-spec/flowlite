@@ -32,7 +32,7 @@ tasks:
 Start the server (runs the scheduler and the UI):
 
 ```bash
-flowlite serve --config-dir .config
+flowlite --config-dir .config serve
 ```
 
 Submit the job:
@@ -235,7 +235,7 @@ flowlite job submit hello-world
 A read-only, pure HTML dashboard is served directly from the binary:
 
 ```bash
-flowlite serve --config-dir .config
+flowlite --config-dir .config serve
 ```
 
 Visit `http://localhost:8000` to see the job list, run history, DAG status, and the
