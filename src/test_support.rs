@@ -510,6 +510,24 @@ pub async fn read_pid_file(path: &std::path::Path) -> i32 {
     panic!("no pid was written to {}", path.display());
 }
 
+/// Waits for a command to write a file where the test asked it to, and reports its
+/// contents — for the tests that ask a command what it saw rather than reading it back
+/// through the monitor.
+pub async fn read_command_file(path: &std::path::Path) -> String {
+
+    for _ in 0..2000 {
+        if let Ok(contents) = std::fs::read_to_string(path)
+            && !contents.is_empty()
+        {
+            return contents.trim().to_string();
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+
+    panic!("nothing was written to {}", path.display());
+}
+
 /// Whether the process is gone, waiting up to two seconds for it — a killed grandchild is
 /// reparented before it is reaped, so it does not disappear the instant the signal lands.
 pub async fn has_exited(pid: i32) -> bool {

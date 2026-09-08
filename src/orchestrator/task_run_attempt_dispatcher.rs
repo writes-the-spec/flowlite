@@ -1,11 +1,13 @@
 use std::process::Stdio;
 use std::sync::Arc;
 use crate::crud::CRUD;
+use crate::crud::job_run::{JobRun, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRun};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus, UpdateTaskRunAttemptsData, UpdateTaskRunAttemptsDataFilter, UpdateTaskRunAttemptsDataInput};
 use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStream;
 use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
+use crate::orchestrator::task_run_attempt_env::build_task_run_attempt_env;
 use crate::orchestrator::task_run_attempt_reader::read_task_run_attempt_stream;
 use crate::poller::Service;
 use crate::signals::Signals;
@@ -120,17 +122,29 @@ impl TaskRunAttemptDispatcher {
     async fn settle_as_running(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
 
         let task_run = self.get_task_run(task_run_attempt).await?;
+        let job_run = self.get_job_run(task_run_attempt).await?;
 
-        let mut child = tokio::process::Command::new("sh")
+        let env = build_task_run_attempt_env(&task_run, &job_run, task_run_attempt);
+
+        let mut command = tokio::process::Command::new("sh");
+
+        command
             .arg("-c")
             .arg(&task_run.command)
+            .envs(&env)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             // Its own process group, so a timeout or a stop can signal the command's whole
             // process tree rather than only the sh that flowlite spawned. The group id is
             // this child's pid; TaskRunAttemptMonitor kills by it.
-            .process_group(0)
-            .spawn()?;
+            .process_group(0);
+
+        // Empty means inherit the server's, which is what Command does when nothing is set.
+        if !task_run.working_dir.is_empty() {
+            command.current_dir(&task_run.working_dir);
+        }
+
+        let mut child = command.spawn()?;
 
         let stdout = child.stdout.take()
             .ok_or_else(|| anyhow::anyhow!("Failed to get stdout of task: {}", task_run_attempt.task_id))?;
@@ -227,6 +241,28 @@ impl TaskRunAttemptDispatcher {
             .ok_or_else(|| anyhow::anyhow!("Task run not found: {}", task_run_attempt.task_run_id))
     }
 
+    /// Loads the job run the attempt belongs to, for the parameters and the scheduled
+    /// instant the run was submitted with. Read off the run rather than out of config, so
+    /// an attempt receives what its run was submitted with however the YAML has moved.
+    async fn get_job_run(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<JobRun> {
+
+        self.crud.select_job_run(
+            &*self.conn_pool,
+            &SelectJobRunsData {
+                filter: SelectJobRunsDataFilter {
+                    id: Some(task_run_attempt.job_run_id),
+                    job_id: None,
+                    status: None,
+                },
+                sort: None,
+                limit: Some(1),
+                offset: None,
+            }
+        )
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Job run not found: {}", task_run_attempt.job_run_id))
+    }
+
     async fn is_job_run_stopped(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
 
         let job_run_stop = self.crud.select_job_run_stop(
@@ -279,6 +315,7 @@ mod tests {
     use super::*;
     use crate::crud::job_run::JobRunStatus;
     use crate::test_support::TestDb;
+    use crate::test_support::read_command_file;
 
     /// Asks whether the attempt is still waiting out its retry_delay.
     ///
@@ -397,5 +434,84 @@ mod tests {
         let status = settled_attempt_status(1, 0, false).await;
 
         assert_eq!(status, TaskRunAttemptStatus::Running);
+    }
+
+    /// Follows a parameter, a task env value and an injected id all the way into the
+    /// process, through a real spawn. The pure tests pin the composition; this pins that
+    /// the composed map actually reaches the command.
+    #[tokio::test]
+    async fn the_composed_environment_reaches_the_command() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run_with_parameters(
+            JobRunStatus::Running,
+            [("region".to_string(), "us".to_string())].into_iter().collect(),
+            None,
+        ).await;
+
+        let seen_path = db.data_dir().join("seen.txt");
+
+        let task_run = db.insert_task_run_for_command_with_env(
+            job_run.id,
+            &format!(
+                "printf '%s' \"$FLOWLITE_PARAM_REGION $PYTHONUNBUFFERED $FLOWLITE_JOB_RUN_ID\" > {}",
+                seen_path.display(),
+            ),
+            [("PYTHONUNBUFFERED".to_string(), "1".to_string())].into_iter().collect(),
+            "",
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            1,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        db.task_run_attempt_dispatcher()
+            .handle(&task_run_attempt)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            read_command_file(&seen_path).await,
+            format!("us 1 {}", job_run.id),
+        );
+    }
+
+    /// working_dir is where the command runs, not a prefix on it.
+    #[tokio::test]
+    async fn the_working_dir_is_where_the_command_runs() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let working_dir = db.data_dir().to_string_lossy().into_owned();
+        let seen_path = db.data_dir().join("pwd.txt");
+
+        let task_run = db.insert_task_run_for_command_with_env(
+            job_run.id,
+            &format!("pwd > {}", seen_path.display()),
+            std::collections::BTreeMap::new(),
+            &working_dir,
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            1,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        db.task_run_attempt_dispatcher()
+            .handle(&task_run_attempt)
+            .await
+            .unwrap();
+
+        // macOS resolves the temp dir through a symlink, so compare the resolved paths.
+        assert_eq!(
+            std::fs::canonicalize(read_command_file(&seen_path).await).unwrap(),
+            std::fs::canonicalize(&working_dir).unwrap(),
+        );
     }
 }

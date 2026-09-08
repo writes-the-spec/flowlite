@@ -1,0 +1,212 @@
+use std::collections::BTreeMap;
+use chrono::{DateTime, Utc};
+use crate::crud::job_run::JobRun;
+use crate::crud::task_run::TaskRun;
+use crate::crud::task_run_attempt::TaskRunAttempt;
+
+
+/// The environment variables one attempt's command runs with, over the environment
+/// flowlite itself inherited - `Command::envs` adds to that rather than replacing it, so
+/// this map is an overlay and never the whole environment.
+///
+/// The three layers are applied in the order the design fixes: the task's own env:, then
+/// the run's parameters, then the run metadata. Metadata is last so nothing a user writes
+/// can make a command lie about which run it belongs to.
+pub fn build_task_run_attempt_env(
+    task_run: &TaskRun,
+    job_run: &JobRun,
+    task_run_attempt: &TaskRunAttempt,
+) -> BTreeMap<String, String> {
+
+    let mut env = task_run.env.0.clone();
+
+    for (name, value) in job_run.parameters.0.iter() {
+        env.insert(parameter_env_name(name), value.clone());
+    }
+
+    env.insert("FLOWLITE_JOB_ID".to_string(), job_run.job_id.clone());
+    env.insert("FLOWLITE_JOB_RUN_ID".to_string(), job_run.id.to_string());
+    env.insert("FLOWLITE_TASK_ID".to_string(), task_run.task_id.clone());
+    env.insert("FLOWLITE_TASK_RUN_ID".to_string(), task_run.id.to_string());
+    env.insert("FLOWLITE_TASK_RUN_ATTEMPT_ID".to_string(), task_run_attempt.id.to_string());
+    env.insert("FLOWLITE_ATTEMPT".to_string(), task_run_attempt.attempt.to_string());
+
+    if let Some(scheduled_at) = job_run.scheduled_at {
+        env.insert("FLOWLITE_SCHEDULED_AT".to_string(), scheduled_at.to_rfc3339());
+    }
+
+    env
+}
+
+fn parameter_env_name(name: &str) -> String {
+    format!("FLOWLITE_PARAM_{}", name.to_uppercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crud::job_run::JobRunStatus;
+    use crate::crud::task_run::TaskRunStatus;
+    use crate::crud::task_run_attempt::TaskRunAttemptStatus;
+
+    fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    }
+
+    fn job_run(parameters: BTreeMap<String, String>, scheduled_at: Option<DateTime<Utc>>) -> JobRun {
+        JobRun {
+            id: 7,
+            job_id: "daily-etl".to_string(),
+            job_name: "Daily ETL".to_string(),
+            job_description: String::new(),
+            parameters: sqlx::types::Json(parameters),
+            created_at: Utc::now(),
+            scheduled_at,
+            started_at: None,
+            finished_at: None,
+            status: JobRunStatus::Running,
+        }
+    }
+
+    fn task_run(env: BTreeMap<String, String>) -> TaskRun {
+        TaskRun {
+            id: 11,
+            job_run_id: 7,
+            job_id: "daily-etl".to_string(),
+            task_id: "extract".to_string(),
+            command: "true".to_string(),
+            depends_on: sqlx::types::Json(Vec::new()),
+            timeout: 3600,
+            max_retries: 0,
+            retry_delay: 60,
+            env: sqlx::types::Json(env),
+            working_dir: String::new(),
+            created_at: Utc::now(),
+            started_at: None,
+            finished_at: None,
+            status: TaskRunStatus::Running,
+        }
+    }
+
+    fn task_run_attempt() -> TaskRunAttempt {
+        TaskRunAttempt {
+            id: 13,
+            task_run_id: 11,
+            job_run_id: 7,
+            job_id: "daily-etl".to_string(),
+            task_id: "extract".to_string(),
+            attempt: 2,
+            created_at: Utc::now(),
+            started_at: None,
+            finished_at: None,
+            status: TaskRunAttemptStatus::Pending,
+        }
+    }
+
+    #[test]
+    fn a_task_env_value_is_carried() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[("PYTHONUNBUFFERED", "1")])),
+            &job_run(map(&[]), None),
+            &task_run_attempt(),
+        );
+
+        assert_eq!(env.get("PYTHONUNBUFFERED").unwrap(), "1");
+    }
+
+    #[test]
+    fn a_parameter_is_prefixed_and_upcased() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[])),
+            &job_run(map(&[("region", "us")]), None),
+            &task_run_attempt(),
+        );
+
+        assert_eq!(env.get("FLOWLITE_PARAM_REGION").unwrap(), "us");
+    }
+
+    /// The precedence the design fixes: a parameter is applied after the task's env:,
+    /// so the two layers are ordered rather than racing.
+    #[test]
+    fn a_parameter_wins_over_a_colliding_task_env_value() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[("FLOWLITE_PARAM_REGION", "eu")])),
+            &job_run(map(&[("region", "us")]), None),
+            &task_run_attempt(),
+        );
+
+        assert_eq!(env.get("FLOWLITE_PARAM_REGION").unwrap(), "us");
+    }
+
+    /// Metadata is applied last so nothing a user writes can make a command lie about
+    /// which run it belongs to.
+    #[test]
+    fn injected_metadata_wins_over_a_task_env_value() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[("FLOWLITE_JOB_RUN_ID", "999")])),
+            &job_run(map(&[]), None),
+            &task_run_attempt(),
+        );
+
+        assert_eq!(env.get("FLOWLITE_JOB_RUN_ID").unwrap(), "7");
+    }
+
+    #[test]
+    fn injected_metadata_wins_over_a_parameter() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[])),
+            &job_run(map(&[("job_run_id", "999")]), None),
+            &task_run_attempt(),
+        );
+
+        assert_eq!(env.get("FLOWLITE_PARAM_JOB_RUN_ID").unwrap(), "999");
+        assert_eq!(env.get("FLOWLITE_JOB_RUN_ID").unwrap(), "7");
+    }
+
+    #[test]
+    fn every_id_and_the_attempt_are_injected() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[])),
+            &job_run(map(&[]), None),
+            &task_run_attempt(),
+        );
+
+        assert_eq!(env.get("FLOWLITE_JOB_ID").unwrap(), "daily-etl");
+        assert_eq!(env.get("FLOWLITE_JOB_RUN_ID").unwrap(), "7");
+        assert_eq!(env.get("FLOWLITE_TASK_ID").unwrap(), "extract");
+        assert_eq!(env.get("FLOWLITE_TASK_RUN_ID").unwrap(), "11");
+        assert_eq!(env.get("FLOWLITE_TASK_RUN_ATTEMPT_ID").unwrap(), "13");
+        assert_eq!(env.get("FLOWLITE_ATTEMPT").unwrap(), "2");
+    }
+
+    #[test]
+    fn a_scheduled_run_carries_the_instant_it_fired_for() {
+        let scheduled_at = DateTime::parse_from_rfc3339("2026-09-08T03:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[])),
+            &job_run(map(&[]), Some(scheduled_at)),
+            &task_run_attempt(),
+        );
+
+        assert!(env.get("FLOWLITE_SCHEDULED_AT").unwrap().starts_with("2026-09-08T03:00:00"));
+    }
+
+    /// Absent, not empty: a manual run has no scheduled instant, and a command that needs
+    /// one should fail on an unset variable rather than process the wrong day.
+    #[test]
+    fn a_manual_run_carries_no_scheduled_at_at_all() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[])),
+            &job_run(map(&[]), None),
+            &task_run_attempt(),
+        );
+
+        assert!(!env.contains_key("FLOWLITE_SCHEDULED_AT"));
+    }
+}
