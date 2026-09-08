@@ -2,6 +2,7 @@ CREATE TABLE task (
     row_id INTEGER NOT NULL,
     task_id TEXT NOT NULL,
     job_id TEXT NOT NULL,
+    description TEXT NOT NULL,
     command TEXT NOT NULL,
     depends_on TEXT NOT NULL,
     timeout INTEGER NOT NULL,

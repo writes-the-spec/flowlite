@@ -13,7 +13,7 @@ flowlite runs against **two SQLite databases per connection**, and every table b
 | Object | Database | Holds |
 |---|---|---|
 | [`job`](references/job.md) | `mem` | one row per job YAML file — the definition |
-| [`task`](references/task.md) | `mem` | one row per task of a job — command, dependencies, retry policy |
+| [`task`](references/task.md) | `mem` | one row per task of a job — description, command, dependencies, retry policy |
 | [`task_dependent`](references/task_dependent.md) | `mem` | the dependency edges, normalized — **read by nothing** |
 | [`schedule`](references/schedule.md) | `mem` | one row per schedule YAML file, plus its live `next_run` |
 | [`schedule_job`](references/schedule_job.md) | `mem` | which jobs a schedule submits |

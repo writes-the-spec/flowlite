@@ -9,6 +9,8 @@ use crate::yaml_models::string_map::deserialize_string_map;
 #[derive(Deserialize, Validate, Debug)]
 pub struct JobYamlTask {
     pub id: String,
+    #[serde(default)]
+    pub description: String,
     pub command: String,
     #[serde(default)]
     pub depends_on: Vec<String>,

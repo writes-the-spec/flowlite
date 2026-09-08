@@ -82,6 +82,7 @@ impl CRUD {
                                 row_id,
                                 task_id: task_yaml.id.clone(),
                                 job_id: job_yaml.id.clone(),
+                                description: task_yaml.description,
                                 command: task_yaml.command,
                                 depends_on: task_yaml.depends_on.clone(),
                                 timeout: task_yaml.timeout,

@@ -8,6 +8,7 @@ name: My Job
 description: what it does
 tasks:
   - id: task-a
+    description: what this task does
     command: echo hello
   - id: task-b
     command: ./run.sh
@@ -34,12 +35,13 @@ tasks:
 | Field | Required | Default | Notes |
 |---|---|---|---|
 | `id` | yes | — | Unique within the job — `mem.task`'s key is `(task_id, job_id)`. |
+| `description` | no | `""` | What the task does, in words. The job page's task table shows this rather than the command. |
 | `command` | yes | — | Run as `sh -c <command>`, so shell syntax works. |
 | `depends_on` | no | `[]` | Task ids **of the same job**. |
 | `timeout` | no | `3600` | Seconds. Applies per *attempt*, not to the task run as a whole. |
 | `max_retries` | no | `0` | Total executions are `1 + max_retries`; only a `Failed` attempt is retried. |
 | `retry_delay` | no | `60` | Seconds to wait after a failed attempt before the next one starts. Enforced in `TaskRunAttemptDispatcher::settle_as_pending`, measured from the retry row's `created_at`. |
-| `env` | no | `{}` | Environment variables for this task, layered over the job's `env:` and then over whatever flowlite itself inherited. A name set here beats the same name on the job. Shown in the UI on purpose — see the gotcha below. |
+| `env` | no | `{}` | Environment variables for this task, layered over the job's `env:` and then over whatever flowlite itself inherited. A name set here beats the same name on the job. Shown on the task page, `/jobs/{job_id}/tasks/{task_id}` — the job's own `env:` is not shown anywhere in the UI. |
 | `working_dir` | no | `""` | The command's working directory. Empty means inherit the server's own. |
 
 ## Which `env:` wins

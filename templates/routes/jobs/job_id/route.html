@@ -18,15 +18,6 @@
             <div class="meta__label">Run it</div>
             <code class="cmd">flowlite job submit {{ job.job_id }}</code>
         </div>
-
-        {% if !job.env.is_empty() %}
-        <button
-            class="btn btn--icon"
-            title="Environment"
-            aria-label="Environment"
-            onclick="document.getElementById('job_env').showModal()"
-        ><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5"/><path d="m4.75 6.5 2 2-2 2"/><path d="M8.75 10.5h3"/></svg></button>
-        {% endif %}
     </div>
 </div>
 
@@ -52,30 +43,6 @@
     </div>
     {% endif %}
 </div>
-
-{% if !job.env.is_empty() %}
-<dialog id="job_env" class="dialog--data">
-    <h2 class="dialog__title">Environment</h2>
-    <p class="dialog__body">Given to every task of this job, over the environment flowlite inherited. A task's own <code>env:</code> wins the names both of them set.</p>
-
-    <div class="dialog__scroll">
-        <div class="meta">
-            {% for (name, value) in job.env.0 %}
-            <div class="meta__item">
-                <div class="meta__label">{{ name }}</div>
-                <div class="meta__value meta__value--mono">{% if value.is_empty() %}<span class="none">empty</span>{% else %}{{ value }}{% endif %}</div>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-
-    <div class="dialog__actions">
-        <form method="dialog">
-            <button class="btn btn--quiet">Close</button>
-        </form>
-    </div>
-</dialog>
-{% endif %}
 
 {% if has_dependencies %}
 <div class="section">
@@ -134,20 +101,20 @@
         <thead>
             <tr>
                 <th>task</th>
-                <th>command</th>
+                <th>description</th>
                 <th>depends on</th>
                 <th>timeout</th>
                 <th>retries</th>
-                <th class="deftable__env"></th>
+                <th class="deftable__go"></th>
             </tr>
         </thead>
 
         <tbody>
             {% for task in tasks %}
             <tr>
-                <td class="deftable__id">{{ task.task_id }}</td>
+                <td class="deftable__id"><a href="/jobs/{{ job.job_id }}/tasks/{{ task.task_id }}">{{ task.task_id }}</a></td>
 
-                <td><code class="cmd">{{ task.command }}</code></td>
+                <td>{% if task.description.is_empty() %}<span class="none">—</span>{% else %}{{ task.description }}{% endif %}</td>
 
                 <td>
                     {% if task.depends_on.0.is_empty() %}
@@ -165,56 +132,19 @@
 
                 <td>{{ task.max_retries }}</td>
 
-                <td class="deftable__env">
-                    {% if task.env.is_empty() && task.working_dir.is_empty() %}
-                    <span class="none">—</span>
-                    {% else %}
-                    <button
+                <td class="deftable__go">
+                    <a
                         class="btn btn--icon"
-                        title="Environment"
-                        aria-label="Environment for {{ task.task_id }}"
-                        onclick="document.getElementById('task_env_{{ loop.index0 }}').showModal()"
-                    ><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5"/><path d="m4.75 6.5 2 2-2 2"/><path d="M8.75 10.5h3"/></svg></button>
-                    {% endif %}
+                        href="/jobs/{{ job.job_id }}/tasks/{{ task.task_id }}"
+                        title="Task details"
+                        aria-label="Details for {{ task.task_id }}"
+                    ><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg></a>
                 </td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
 </div>
-
-    {% for task in tasks %}
-    {% if !task.env.is_empty() || !task.working_dir.is_empty() %}
-    <dialog id="task_env_{{ loop.index0 }}" class="dialog--data">
-        <h2 class="dialog__title">{{ task.task_id }}</h2>
-        <p class="dialog__body">Declared on the task, over the job's <code>env:</code> and the environment flowlite inherited.</p>
-
-        <div class="dialog__scroll">
-            <div class="meta">
-                <div class="meta__item">
-                    <div class="meta__label">Working directory</div>
-                    <div class="meta__value meta__value--mono">
-                        {% if task.working_dir.is_empty() %}<span class="none">the server's</span>{% else %}{{ task.working_dir }}{% endif %}
-                    </div>
-                </div>
-
-                {% for (name, value) in task.env.0 %}
-                <div class="meta__item">
-                    <div class="meta__label">{{ name }}</div>
-                    <div class="meta__value meta__value--mono">{% if value.is_empty() %}<span class="none">empty</span>{% else %}{{ value }}{% endif %}</div>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-
-        <div class="dialog__actions">
-            <form method="dialog">
-                <button class="btn btn--quiet">Close</button>
-            </form>
-        </div>
-    </dialog>
-    {% endif %}
-    {% endfor %}
     {% endif %}
 </div>
 

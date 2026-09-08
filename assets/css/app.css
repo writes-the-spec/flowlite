@@ -317,6 +317,8 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
     font-variant-numeric: tabular-nums;
 }
 
+.runs__go { width: 2.25rem; text-align: right; }
+
 .runs__job { font-weight: 500; }
 .runs__job a { text-decoration: none; }
 .runs__job a:hover { text-decoration: underline; text-decoration-color: var(--text-2); }
@@ -496,7 +498,11 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
     white-space: nowrap;
 }
 
-.lane__env { padding-left: 0.5rem; }
+.lane__acts {
+    display: flex;
+    gap: 0.25rem;
+    padding-left: 0.5rem;
+}
 
 .lane__dur {
     text-align: right;
@@ -560,7 +566,7 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
 
 .deftable__id { font-family: var(--mono); font-size: 0.8125rem; white-space: nowrap; }
 
-.deftable__env { width: 1%; text-align: right; white-space: nowrap; }
+.deftable__go { width: 1%; text-align: right; white-space: nowrap; }
 
 .cmd {
     font-family: var(--mono);

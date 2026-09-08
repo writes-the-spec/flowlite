@@ -26,6 +26,7 @@ id: hello-world
 name: Hello World Job
 tasks:
   - id: say-hello
+    description: Says hello
     command: echo "hello from flowlite"
 ```
 
@@ -56,13 +57,16 @@ id: build-and-test
 name: Build and Test Pipeline
 tasks:
   - id: build
+    description: Compiles the binary
     command: make build
 
   - id: test
+    description: Runs the test suite against the build
     depends_on: [build]
     command: make test
 
   - id: deploy
+    description: Ships the tested build
     depends_on: [test]
     command: make deploy
 ```
@@ -96,6 +100,7 @@ env:
   TZ: UTC
 tasks:
   - id: extract
+    description: Pulls yesterday's rows out of the source database
     command: ./extract.sh
     env:
       # Overrides the job's TZ; PYTHONUNBUFFERED still comes from the job.

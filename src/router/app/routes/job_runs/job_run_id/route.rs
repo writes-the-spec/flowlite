@@ -35,9 +35,6 @@ pub struct Lane {
     pub task_id: String,
     pub status: TaskRunStatus,
     pub depends_on: Option<String>,
-    /// Name and value, sorted, for a table rather than a debug-formatted map.
-    pub env: Vec<(String, String)>,
-    pub working_dir: String,
     pub started: bool,
     pub start_pct: i64,
     pub span_pct: i64,
@@ -89,16 +86,12 @@ fn build_lane(
     window_end: DateTime<Utc>,
     window_ms: i64,
 ) -> Lane {
-    let env = task_run.env.0.into_iter().collect::<Vec<_>>();
-
     let Some(started_at) = task_run.started_at else {
         return Lane {
             task_run_id: task_run.id,
             task_id: task_run.task_id,
             status: task_run.status,
             depends_on,
-            env,
-            working_dir: task_run.working_dir,
             started: false,
             start_pct: 0,
             span_pct: 0,
@@ -120,8 +113,6 @@ fn build_lane(
         task_id: task_run.task_id,
         status: task_run.status,
         depends_on,
-        env,
-        working_dir: task_run.working_dir,
         started: true,
         start_pct,
         span_pct,

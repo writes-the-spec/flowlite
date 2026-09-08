@@ -1,0 +1,94 @@
+{% extends "routes/root.html" %}
+
+{% block title %}{{ task.task_id }} · {{ job_name }} · flowlite{% endblock %}
+
+{% block content %}
+
+<a href="/jobs/{{ task.job_id }}" class="back">← {{ job_name }}</a>
+
+<div class="view-head">
+    <div>
+        <span class="eyebrow">task of {{ task.job_id }}</span>
+        <h1 class="view-title">{{ task.task_id }}</h1>
+        <p class="view-sub">
+            {% if task.description.is_empty() %}<span class="none">no description</span>{% else %}{{ task.description }}{% endif %}
+        </p>
+    </div>
+</div>
+
+<hr class="rule">
+
+<div class="meta">
+    <div class="meta__item">
+        <div class="meta__label">Job</div>
+        <div class="meta__value meta__value--mono"><a href="/jobs/{{ task.job_id }}">{{ task.job_id }}</a></div>
+    </div>
+
+    <div class="meta__item">
+        <div class="meta__label">Timeout</div>
+        <div class="meta__value">{{ task.timeout }}s per attempt</div>
+    </div>
+
+    <div class="meta__item">
+        <div class="meta__label">Retries</div>
+        <div class="meta__value">
+            {% if task.max_retries == 0 %}<span class="none">none</span>{% else %}{{ task.max_retries }} after the first attempt, {{ task.retry_delay }}s apart{% endif %}
+        </div>
+    </div>
+
+    <div class="meta__item">
+        <div class="meta__label">Working directory</div>
+        <div class="meta__value meta__value--mono">
+            {% if task.working_dir.is_empty() %}<span class="none">the server's</span>{% else %}{{ task.working_dir }}{% endif %}
+        </div>
+    </div>
+
+    <div class="meta__item">
+        <div class="meta__label">Depends on</div>
+        <div class="meta__value">
+            {% if task.depends_on.is_empty() %}
+            <span class="none">nothing</span>
+            {% else %}
+            <div class="deps">
+                {% for dependency in task.depends_on %}
+                <a class="dep" href="/jobs/{{ task.job_id }}/tasks/{{ dependency }}">{{ dependency }}</a>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="section">
+    <div class="section__head">
+        <h2 class="section__title">Command</h2>
+        <span class="section__note">run as <code>sh -c</code>, so shell syntax works</span>
+    </div>
+
+    <code class="cmd">{{ task.command }}</code>
+</div>
+
+<div class="section">
+    <div class="section__head">
+        <h2 class="section__title">Environment</h2>
+        <span class="section__note">declared on this task, over the job's <code>env:</code> and the environment flowlite inherited</span>
+    </div>
+
+    {% if task.env.is_empty() %}
+    <div class="empty">
+        <p>This task declares no environment.</p>
+        <p class="empty__do">Add them under <span class="empty__cmd">env:</span> on the task in the job's YAML file.</p>
+    </div>
+    {% else %}
+    <div class="meta">
+        {% for (name, value) in task.env %}
+        <div class="meta__item">
+            <div class="meta__label">{{ name }}</div>
+            <div class="meta__value meta__value--mono">{% if value.is_empty() %}<span class="none">empty</span>{% else %}{{ value }}{% endif %}</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+{% endblock %}

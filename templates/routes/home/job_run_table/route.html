@@ -9,6 +9,7 @@
             <th class="runs__when">created</th>
             <th class="runs__bar">duration</th>
             <th class="runs__dur"></th>
+            <th class="runs__go"></th>
         </tr>
     </thead>
 
@@ -34,10 +35,20 @@
             </td>
 
             <td class="runs__dur">{{ run.duration }}</td>
+
+            {# The id is a link too, but a row this wide is easy to miss the target of. #}
+            <td class="runs__go">
+                <a
+                    class="btn btn--icon"
+                    href="/job-runs/{{ run.id }}"
+                    title="Run details"
+                    aria-label="Details for run {{ run.id }}"
+                ><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg></a>
+            </td>
         </tr>
         {% else %}
         <tr>
-            <td colspan="7">
+            <td colspan="8">
                 <div class="empty">
                     {% if pagination.filter_job_id.is_some() || pagination.filter_status.is_some() %}
                     <p>No runs match this filter.</p>
