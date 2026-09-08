@@ -40,7 +40,7 @@ where
 }
 ```
 
-Pick whichever matches the table's primary key column in its migration — don't invent a third convention.
+Pick whichever matches the table's primary key column in its migration — don't invent a third convention. Which one a table gets is not a choice made here: it follows from which database the table is in, and the [db-schema skill](../../db-schema/SKILL.md) has the rule and the reason.
 
 ## Binding values
 

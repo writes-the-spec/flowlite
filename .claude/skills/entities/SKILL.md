@@ -1,6 +1,6 @@
 ---
 name: entities
-description: Map of every entity in flowlite's two SQLite databases - what each table holds, which database it lives in, who writes it and who reads it, how it is keyed and whether it is ever updated. Use when working out what writes or reads a table, tracing which service owns a column, deciding whether data belongs in the in-memory or the persisted database, or adding an entity. For declaring a column - nullability, defaults - and for landing the schema change itself, see the db-schema skill.
+description: Map of every entity in flowlite's two SQLite databases - what each table holds, which database it lives in, who writes it, who reads it and whether it is ever updated after insert. Use when working out what writes or reads a table, tracing which service owns a column, deciding whether data belongs in the in-memory or the persisted database, or adding an entity. For declaring the table itself - keys, nullability, defaults - and for landing the schema change, see the db-schema skill.
 ---
 
 # Entities
@@ -35,11 +35,9 @@ The disk tables mirror the `mem` ones, but they are not views onto them: **a run
 
 Each history is a separate `sqlx::migrate!` with its own checksums, which is why **whether an existing migration may be edited depends on what has already applied it** — the [db-schema skill](../db-schema/SKILL.md) has that call and the rest of the mechanics.
 
-## Conventions every object obeys
+## Conventions every entity obeys
 
-**Keys split by database.** A `mem` table carries a caller-assigned `row_id INTEGER NOT NULL` with `UNIQUE (row_id)`, whose only job is to preserve YAML declaration order, alongside a natural primary key from the config (`job_id`, `(task_id, job_id)`, `schedule_id`) — or, for `task_dependent` and `schedule_job`, no primary key at all. A disk table has `id INTEGER PRIMARY KEY AUTOINCREMENT`, returned via `last_insert_rowid()`.
-
-**Nullability and defaults are the [db-schema skill](../db-schema/SKILL.md)'s.** Two rules shape every column and every entity struct here, so read them there before adding either: a column is `NOT NULL` whenever its type has a natural empty value, and no column carries a `DEFAULT`. The reference files below lean on the first constantly — "an attempt that printed nothing has empty output, not unknown output" is that rule talking.
+**How a table is declared is the [db-schema skill](../db-schema/SKILL.md)'s.** Three rules shape every column and every entity struct here — how the table is keyed, when a column is `NOT NULL`, and that no column carries a `DEFAULT` — and all three follow from which of the two databases the table is in, which is the question this skill answers. Read them there before declaring anything. The reference files below lean on the nullability one constantly: "an attempt that printed nothing has empty output, not unknown output" is that rule talking.
 
 **Updated after insert?** Disk tables are; that is what `update_*` methods are for. `mem` tables are re-seeded fresh every startup and are mostly insert-only — **except `schedule.next_run`**, which the [Scheduler](../scheduler/SKILL.md) advances on every fire. It is the one config column that carries live state.
 
@@ -48,8 +46,7 @@ Each history is a separate `sqlx::migrate!` with its own checksums, which is why
 ## Adding a new table
 
 1. Decide the database with the restart question above.
-2. Write the migration and declare its columns per the [db-schema skill](../db-schema/SKILL.md) — where the file goes, how it is named, when an existing one may be edited instead, and how each column's nullability is decided. One thing worth repeating here: no schema prefix inside the migration, since each runs against its own database. The `mem.` prefix appears only later, in the SQL your CRUD methods write.
-3. Key it per "Keys split by database" above — which of the two databases it is in decides this, not preference.
-4. If it is YAML-seeded, wire the insert into `CRUD::init`, incrementing the shared `row_id` counter, inside the existing transaction.
-5. Build the CRUD file per the [crud skill](../crud/SKILL.md), which also owns how a method takes its database handle.
-6. Add a reference file here.
+2. Write the migration per the [db-schema skill](../db-schema/SKILL.md) — where the file goes, how it is named, whether an existing one may be edited instead, and how the table is keyed and its columns declared. Step 1's answer decides the keys and most of the nullability, so it is not a matter of preference. One thing worth repeating here: no schema prefix inside the migration, since each runs against its own database. The `mem.` prefix appears only later, in the SQL your CRUD methods write.
+3. If it is YAML-seeded, wire the insert into `CRUD::init`, incrementing the shared `row_id` counter, inside the existing transaction.
+4. Build the CRUD file per the [crud skill](../crud/SKILL.md), which also owns how a method takes its database handle.
+5. Add a reference file here.

@@ -1,6 +1,6 @@
 ---
 name: db-schema
-description: How a column is declared and how a schema change lands in flowlite - NOT NULL vs nullable, why no column carries a DEFAULT, the two migration histories, sqlx checksums, and the call between editing an existing migration and adding a new one. Use this whenever you write, edit or name a migration file, add/drop/rename a column, choose a column's nullability or type, wonder whether something should be Option<T>, hit "migration was previously applied but has been modified", need to reset a dev database, or are about to reach for ALTER TABLE. Read it BEFORE writing the migration, not after it fails - which file you change is hard to undo. For what each table holds and who reads it, see the entities skill.
+description: How a table is declared and how a schema change lands in flowlite - how it is keyed, NOT NULL vs nullable, why no column carries a DEFAULT, the two migration histories, sqlx checksums, and the call between editing an existing migration and adding a new one. Use this whenever you write, edit or name a migration file, add/drop/rename a column, choose a primary key, choose a column's nullability or type, wonder whether something should be Option<T>, hit "migration was previously applied but has been modified", need to reset a dev database, or are about to reach for ALTER TABLE. Read it BEFORE writing the migration, not after it fails - which file you change is hard to undo. For what each table holds and who reads it, see the entities skill.
 ---
 
 # Landing a schema change
@@ -45,9 +45,15 @@ Also check the default location, which is where a dev instance lands if nobody p
 
 When an edit is the right call and a stale dev database is the only thing in the way, deleting that database is the fix (it holds runs, not config — config comes back from YAML). Say so out loud rather than doing it silently: it is somebody's run history.
 
-## What a column may say
+## Declaring a table
 
-Two rules constrain every column this repo declares. They are DDL rules, so they belong here — but they are also why the entity structs in `src/crud/` look the way they do, and, as the next section shows, why `ALTER TABLE` gets you less far in this repo than it would elsewhere.
+Three rules constrain what this repo's DDL may say. They are also why the entity structs in `src/crud/` look the way they do, and — for the last two — why `ALTER TABLE` gets you less far here than it would elsewhere.
+
+**Which database the table is in decides all three**, so answer that first, with the restart question from the [entities skill](../entities/SKILL.md): *if the process restarts, should this row still exist?*
+
+**Keys split by database.** A `mem` table carries a caller-assigned `row_id INTEGER NOT NULL` with `UNIQUE (row_id)`, whose only job is to preserve YAML declaration order, alongside a natural primary key from the config (`job_id`, `(task_id, job_id)`, `schedule_id`) — or, for `task_dependent` and `schedule_job`, no primary key at all. A disk table has `id INTEGER PRIMARY KEY AUTOINCREMENT`, returned via `last_insert_rowid()`.
+
+The split follows from where the rows come from. Config is re-seeded from YAML on every startup, so a generated id would differ run to run and could not be referenced by anything — the natural key from the config is the only stable one, and `row_id` exists purely so a later `RowId` sort can replay declaration order. A disk row is created once by something that then needs to refer to it, so it wants an id the database hands back. This is also what decides an insert's return type — `()` for a caller-assigned `row_id`, `i64` for an autoincrement id; see the [crud skill](../crud/SKILL.md).
 
 **`NOT NULL` whenever there is a logical null value.** If a column's type has a natural empty value — `''` for text, `0` for a counter, `'[]'` for a JSON list — *that value is the null*: declare `NOT NULL` and write the empty value explicitly on insert. A nullable column is only right when "no value" is a real, distinct state no ordinary value can express, which in this schema means timestamps that have not happened yet (`started_at`, `finished_at`, `next_run`) and genuinely open-ended bounds (`start_date`, `end_date`).
 
@@ -57,7 +63,7 @@ The rule keeps two spellings of "nothing" from coexisting. Once a text column is
 
 Two reasons for it. The value a row gets should be readable from the insert rather than from DDL written migrations ago; and `DEFAULT` combined with `NOT NULL` makes a forgotten column succeed quietly instead of failing, which is the one outcome you cannot debug from the row afterwards.
 
-**Together they are what makes `ADD COLUMN` awkward here**, which the next section works through. The awkwardness is doing its job: it means a new column on a populated table forces a decision about what the existing rows should say, instead of letting `DEFAULT ''` answer that question silently for you.
+**The latter two are what makes `ADD COLUMN` awkward here**, which the next section works through. The awkwardness is doing its job: it means a new column on a populated table forces a decision about what the existing rows should say, instead of letting `DEFAULT ''` answer that question silently for you.
 
 ## Why this repo edits more often than most
 
