@@ -91,7 +91,12 @@ impl JobSubmitCmd {
             anyhow::bail!("Job {} not found", self.job_name);
         };
 
-        let job_run_id = crud.submit_job(&mut conn, &job.job_id).await?;
+        let job_run_id = crud.submit_job(
+            &mut conn,
+            &job.job_id,
+            &std::collections::BTreeMap::new(),
+            None,
+        ).await?;
 
         println!("Job {} submitted successfully. Job Run ID: {}", self.job_name, job_run_id);
 

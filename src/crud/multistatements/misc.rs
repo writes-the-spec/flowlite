@@ -32,6 +32,45 @@ struct JobRunTaskDefinition {
     working_dir: String,
 }
 
+/// The parameters one run will carry: the job's declared defaults, with the caller's
+/// overrides applied.
+///
+/// An override the job does not declare raises rather than being passed through. A
+/// schedule or a --param naming a parameter that isn't there is a typo, and a typo that
+/// delivers an unset variable to a command is the one outcome you cannot debug from the
+/// row afterwards.
+pub fn resolve_job_parameters(
+    job_id: &str,
+    declared: &BTreeMap<String, String>,
+    overrides: &BTreeMap<String, String>,
+) -> anyhow::Result<BTreeMap<String, String>> {
+
+    let mut parameters = declared.clone();
+
+    for (name, value) in overrides {
+
+        if !declared.contains_key(name) {
+
+            let declared_names = if declared.is_empty() {
+                "none".to_string()
+            } else {
+                declared.keys().cloned().collect::<Vec<String>>().join(", ")
+            };
+
+            anyhow::bail!(
+                "Job '{}' does not declare a parameter '{}'. Declared: {}",
+                job_id,
+                name,
+                declared_names,
+            );
+        }
+
+        parameters.insert(name.clone(), value.clone());
+    }
+
+    Ok(parameters)
+}
+
 /// Operations that span more than one entity, and so belong to no single entity file.
 impl CRUD {
 
@@ -39,12 +78,19 @@ impl CRUD {
     /// the run's own rows, so what the run executes can no longer change under it -
     /// not when the YAML is edited, and not when the process restarts mid-run.
     ///
+    /// `overrides` are the caller's parameter values, checked against what the job
+    /// declares. `scheduled_at` is the instant a schedule fired for, and None for a
+    /// manual submission - a manual run has no scheduled instant, and the spawned command
+    /// gets no FLOWLITE_SCHEDULED_AT rather than a misleading copy of created_at.
+    ///
     /// A job with no config is an error rather than an empty run: the caller asked for a
     /// job that isn't there.
     pub async fn submit_job(
         &self,
         conn: &mut SqliteConnection,
         job_id: &str,
+        overrides: &BTreeMap<String, String>,
+        scheduled_at: Option<DateTime<Utc>>,
     ) -> anyhow::Result<i64> {
 
         let job = self.select_job(&mut *conn, &SelectJobsData {
@@ -61,6 +107,8 @@ impl CRUD {
             anyhow::bail!("Job '{}' not found", job_id);
         };
 
+        let parameters = resolve_job_parameters(job_id, &job.parameters.0, overrides)?;
+
         let tasks = self.select_tasks(&mut *conn, &SelectTasksData {
             filter: SelectTasksDataFilter {
                 task_id: None,
@@ -75,8 +123,8 @@ impl CRUD {
             job_id: job.job_id,
             job_name: job.name,
             job_description: job.description,
-            parameters: BTreeMap::new(),
-            scheduled_at: None,
+            parameters,
+            scheduled_at,
             tasks: tasks
                 .into_iter()
                 .map(|task| JobRunTaskDefinition {
@@ -249,4 +297,140 @@ impl CRUD {
         Ok(running_job_runs.len() >= job.max_parallel_runs as usize)
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_declared_default_is_carried_when_nothing_overrides_it() {
+        let resolved = resolve_job_parameters(
+            "job",
+            &map(&[("region", "eu")]),
+            &map(&[]),
+        ).unwrap();
+
+        assert_eq!(resolved.get("region").unwrap(), "eu");
+    }
+
+    #[test]
+    fn an_override_replaces_the_default() {
+        let resolved = resolve_job_parameters(
+            "job",
+            &map(&[("region", "eu")]),
+            &map(&[("region", "us")]),
+        ).unwrap();
+
+        assert_eq!(resolved.get("region").unwrap(), "us");
+    }
+
+    #[test]
+    fn the_parameters_the_override_does_not_mention_keep_their_defaults() {
+        let resolved = resolve_job_parameters(
+            "job",
+            &map(&[("region", "eu"), ("slice", "")]),
+            &map(&[("region", "us")]),
+        ).unwrap();
+
+        assert_eq!(resolved.get("slice").unwrap(), "");
+        assert_eq!(resolved.len(), 2);
+    }
+
+    /// The whole reason declaration is worth having: a typo in a schedule is reported
+    /// rather than silently delivering nothing to the command.
+    #[test]
+    fn an_undeclared_override_raises_naming_the_job_the_key_and_the_declared_names() {
+        let error = resolve_job_parameters(
+            "daily-etl",
+            &map(&[("region", "eu"), ("slice", "")]),
+            &map(&[("regoin", "us")]),
+        ).unwrap_err().to_string();
+
+        assert!(error.contains("daily-etl"), "{error}");
+        assert!(error.contains("regoin"), "{error}");
+        assert!(error.contains("region"), "{error}");
+        assert!(error.contains("slice"), "{error}");
+    }
+
+    #[test]
+    fn an_override_of_a_job_declaring_nothing_says_so() {
+        let error = resolve_job_parameters(
+            "job",
+            &map(&[]),
+            &map(&[("region", "us")]),
+        ).unwrap_err().to_string();
+
+        assert!(error.contains("none"), "{error}");
+    }
+
+    #[test]
+    fn a_job_declaring_nothing_resolves_to_nothing() {
+        assert!(resolve_job_parameters("job", &map(&[]), &map(&[])).unwrap().is_empty());
+    }
+
+    use crate::crud::job_run::JobRunStatus;
+    use crate::crud::task_run::TaskRunStatus;
+    use crate::test_support::TestDb;
+
+    /// A rerun replays the run's own inputs. Nothing here reads config, so the rerun of a
+    /// scheduled run stays a run for the same slice and the same instant - rerunning
+    /// yesterday's failed daily job reruns it for yesterday.
+    #[tokio::test]
+    async fn a_rerun_replays_the_original_parameters_env_and_scheduled_at() {
+
+        let db = TestDb::new().await;
+
+        let scheduled_at = chrono::Utc::now() - chrono::TimeDelta::days(1);
+
+        let job_run = db.insert_job_run_with_parameters(
+            JobRunStatus::Failed,
+            map(&[("region", "us")]),
+            Some(scheduled_at),
+        ).await;
+
+        db.insert_task_run_for_command_with_env(
+            job_run.id,
+            "echo hi",
+            map(&[("PYTHONUNBUFFERED", "1")]),
+            "/tmp",
+        ).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id).await.unwrap();
+
+        let rerun = db.job_run(rerun_id).await;
+
+        assert_eq!(rerun.parameters.0.get("region").unwrap(), "us");
+        assert_eq!(
+            rerun.scheduled_at.unwrap().timestamp_millis(),
+            scheduled_at.timestamp_millis(),
+        );
+
+        let task_runs = db.crud.select_task_runs(
+            &*db.conn_pool,
+            &crate::crud::task_run::SelectTaskRunsData {
+                filter: crate::crud::task_run::SelectTaskRunsDataFilter {
+                    id: None,
+                    job_run_id: Some(rerun_id),
+                    job_id: None,
+                    task_id: None,
+                    status: None,
+                },
+                sort: None,
+            },
+        ).await.unwrap();
+
+        assert_eq!(task_runs.len(), 1);
+        assert_eq!(task_runs[0].env.0.get("PYTHONUNBUFFERED").unwrap(), "1");
+        assert_eq!(task_runs[0].working_dir, "/tmp");
+        assert_eq!(task_runs[0].status, TaskRunStatus::Pending);
+    }
 }

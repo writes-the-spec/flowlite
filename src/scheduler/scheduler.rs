@@ -78,7 +78,12 @@ impl Scheduler {
             // next_run is advanced only after this loop, so bailing here would re-submit
             // the siblings already committed above on the next tick, and hot-loop the
             // schedule at 1 Hz for as long as this one job stays unsubmittable.
-            if let Err(e) = self.crud.submit_job(&mut conn, &schedule_job.job_id).await {
+            if let Err(e) = self.crud.submit_job(
+                &mut conn,
+                &schedule_job.job_id,
+                &schedule_job.parameters.0,
+                schedule.next_run,
+            ).await {
                 eprintln!(
                     "Scheduler could not submit job {} of schedule {}: {e:?}",
                     schedule_job.job_id,
