@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
@@ -113,6 +114,33 @@ impl TestDb {
                     job_id: "job".to_string(),
                     job_name: "Job".to_string(),
                     job_description: String::new(),
+                    parameters: BTreeMap::new(),
+                    scheduled_at: None,
+                    status,
+                },
+            },
+        ).await.unwrap();
+
+        self.job_run(id).await
+    }
+
+    /// A job run carrying parameters, for the tests that follow one to a spawned command.
+    pub async fn insert_job_run_with_parameters(
+        &self,
+        status: JobRunStatus,
+        parameters: BTreeMap<String, String>,
+        scheduled_at: Option<DateTime<Utc>>,
+    ) -> JobRun {
+
+        let id = self.crud.insert_job_run(
+            &*self.conn_pool,
+            &InsertJobRunData {
+                input: InsertJobRunDataInput {
+                    job_id: "job".to_string(),
+                    job_name: "Job".to_string(),
+                    job_description: String::new(),
+                    parameters,
+                    scheduled_at,
                     status,
                 },
             },
@@ -147,6 +175,39 @@ impl TestDb {
                     timeout,
                     max_retries: 0,
                     retry_delay: 60,
+                    env: BTreeMap::new(),
+                    working_dir: String::new(),
+                    status: TaskRunStatus::Running,
+                },
+            },
+        ).await.unwrap();
+
+        self.task_run(id).await
+    }
+
+    /// A task run carrying a command plus the environment and cwd it should run with.
+    pub async fn insert_task_run_for_command_with_env(
+        &self,
+        job_run_id: i64,
+        command: &str,
+        env: BTreeMap<String, String>,
+        working_dir: &str,
+    ) -> TaskRun {
+
+        let id = self.crud.insert_task_run(
+            &*self.conn_pool,
+            &InsertTaskRunData {
+                input: InsertTaskRunDataInput {
+                    job_run_id,
+                    job_id: "job".to_string(),
+                    task_id: format!("task-{}", uuid::Uuid::new_v4()),
+                    command: command.to_string(),
+                    depends_on: Vec::new(),
+                    timeout: 3600,
+                    max_retries: 0,
+                    retry_delay: 60,
+                    env,
+                    working_dir: working_dir.to_string(),
                     status: TaskRunStatus::Running,
                 },
             },
@@ -175,6 +236,8 @@ impl TestDb {
                     timeout: 3600,
                     max_retries,
                     retry_delay,
+                    env: BTreeMap::new(),
+                    working_dir: String::new(),
                     status,
                 },
             },

@@ -3,7 +3,9 @@ CREATE TABLE job_run (
     job_id TEXT NOT NULL,
     job_name TEXT NOT NULL,
     job_description TEXT NOT NULL,
+    parameters TEXT NOT NULL,
     created_at DATETIME NOT NULL,
+    scheduled_at DATETIME,
     started_at DATETIME,
     finished_at DATETIME,
     status TEXT NOT NULL

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use crate::crud::CRUD;
@@ -34,6 +35,8 @@ pub struct InsertJobRunDataInput {
     pub job_id: String,
     pub job_name: String,
     pub job_description: String,
+    pub parameters: BTreeMap<String, String>,
+    pub scheduled_at: Option<DateTime<Utc>>,
     pub status: JobRunStatus,
 }
 
@@ -89,7 +92,9 @@ pub struct JobRun {
     pub job_id: String,
     pub job_name: String,
     pub job_description: String,
+    pub parameters: sqlx::types::Json<BTreeMap<String, String>>,
     pub created_at: DateTime<Utc>,
+    pub scheduled_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub status: JobRunStatus,
@@ -101,12 +106,14 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO job_run (job_id, job_name, job_description, created_at, status) VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO job_run (job_id, job_name, job_description, parameters, created_at, scheduled_at, status) VALUES (?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(&data.input.job_id)
             .bind(&data.input.job_name)
             .bind(&data.input.job_description)
+            .bind(sqlx::types::Json(&data.input.parameters))
             .bind(self.toolkit.get_current_ts())
+            .bind(&data.input.scheduled_at)
             .bind(&data.input.status)
             .execute(executor)
             .await?;
@@ -127,7 +134,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, job_id, job_name, job_description, created_at, started_at, finished_at, status FROM job_run WHERE 1=1"
+            "SELECT id, job_id, job_name, job_description, parameters, created_at, scheduled_at, started_at, finished_at, status FROM job_run WHERE 1=1"
         );
 
         if let Some(job_id) = &data.filter.job_id {

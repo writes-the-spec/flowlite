@@ -8,6 +8,8 @@ CREATE TABLE task_run (
     timeout INTEGER NOT NULL,
     max_retries INTEGER NOT NULL,
     retry_delay INTEGER NOT NULL,
+    env TEXT NOT NULL,
+    working_dir TEXT NOT NULL,
     created_at DATETIME NOT NULL,
     started_at DATETIME,
     finished_at DATETIME,

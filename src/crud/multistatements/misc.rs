@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use chrono::{DateTime, Utc};
 use sqlx::SqliteConnection;
 
 use crate::crud::CRUD;
@@ -14,6 +16,8 @@ struct JobRunDefinition {
     job_id: String,
     job_name: String,
     job_description: String,
+    parameters: BTreeMap<String, String>,
+    scheduled_at: Option<DateTime<Utc>>,
     tasks: Vec<JobRunTaskDefinition>,
 }
 
@@ -24,6 +28,8 @@ struct JobRunTaskDefinition {
     timeout: u32,
     max_retries: u32,
     retry_delay: u32,
+    env: BTreeMap<String, String>,
+    working_dir: String,
 }
 
 /// Operations that span more than one entity, and so belong to no single entity file.
@@ -69,6 +75,8 @@ impl CRUD {
             job_id: job.job_id,
             job_name: job.name,
             job_description: job.description,
+            parameters: BTreeMap::new(),
+            scheduled_at: None,
             tasks: tasks
                 .into_iter()
                 .map(|task| JobRunTaskDefinition {
@@ -78,6 +86,8 @@ impl CRUD {
                     timeout: task.timeout,
                     max_retries: task.max_retries,
                     retry_delay: task.retry_delay,
+                    env: task.env.0.clone(),
+                    working_dir: task.working_dir.clone(),
                 })
                 .collect(),
         };
@@ -100,6 +110,8 @@ impl CRUD {
                     job_id: definition.job_id.clone(),
                     job_name: definition.job_name.clone(),
                     job_description: definition.job_description.clone(),
+                    parameters: definition.parameters.clone(),
+                    scheduled_at: definition.scheduled_at,
                     status: JobRunStatus::Pending,
                 }
             }
@@ -118,6 +130,8 @@ impl CRUD {
                         timeout: task.timeout,
                         max_retries: task.max_retries,
                         retry_delay: task.retry_delay,
+                        env: task.env.clone(),
+                        working_dir: task.working_dir.clone(),
                         status: TaskRunStatus::Pending,
                     }
                 }
@@ -174,6 +188,8 @@ impl CRUD {
             job_id: job_run.job_id,
             job_name: job_run.job_name,
             job_description: job_run.job_description,
+            parameters: job_run.parameters.0.clone(),
+            scheduled_at: job_run.scheduled_at,
             tasks: task_runs
                 .into_iter()
                 .map(|task_run| JobRunTaskDefinition {
@@ -183,6 +199,8 @@ impl CRUD {
                     timeout: task_run.timeout,
                     max_retries: task_run.max_retries,
                     retry_delay: task_run.retry_delay,
+                    env: task_run.env.0.clone(),
+                    working_dir: task_run.working_dir.clone(),
                 })
                 .collect(),
         };
