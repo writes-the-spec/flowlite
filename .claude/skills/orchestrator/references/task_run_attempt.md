@@ -69,7 +69,7 @@ Two rungs read differently. `settle_for_running` calls `record_output`, which `t
 
 **The two rungs that kill do so before they drain**, because closing the pipes is what produces that EOF. Draining first would wait out the whole bound on every timeout and every stop.
 
-Either way the write is one row per stream per pass into [`task_run_attempt_output`](../../db-objects/references/task_run_attempt_output.md), and none for a stream with nothing new. It is a data-only write, so it deliberately never publishes — see the [orchestrator skill](../SKILL.md#how-they-coordinate). The terminal insert lands **before** the status, so an attempt that reads as terminal has complete output.
+Either way the write is one row per stream per pass into [`task_run_attempt_output`](../../entities/references/task_run_attempt_output.md), and none for a stream with nothing new. It is a data-only write, so it deliberately never publishes — see the [orchestrator skill](../SKILL.md#how-they-coordinate). The terminal insert lands **before** the status, so an attempt that reads as terminal has complete output.
 
 ## Invariants
 

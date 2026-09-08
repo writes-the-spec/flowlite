@@ -5,7 +5,7 @@ description: General code style rules for this repo - simplicity, readability, f
 
 # Code style
 
-These rules apply to every file in this repo, on top of (not instead of) any entity-specific skill (`crud`, `cli`, `db-objects`).
+These rules apply to every file in this repo, on top of (not instead of) any entity-specific skill (`crud`, `cli`, `entities`).
 
 ## Simple and human-readable over clever
 

@@ -80,4 +80,4 @@ A stop is an insert-only `job_run_stop` row, never a status update. `JobRunDispa
 - **[task_run.md](references/task_run.md)** — `TaskRunDispatcher` / `TaskRunMonitor`, dependency gating and the retry loop.
 - **[task_run_attempt.md](references/task_run_attempt.md)** — `TaskRunAttemptDispatcher` / `TaskRunAttemptMonitor`, process spawning, output, timeout and kill.
 
-For the tables themselves — every column, who writes it and who reads it — see the [db-objects skill](../db-objects/SKILL.md).
+For the tables themselves — every column, who writes it and who reads it — see the [entities skill](../entities/SKILL.md).

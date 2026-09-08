@@ -1,9 +1,9 @@
 ---
-name: db-objects
-description: Map of every table in flowlite's two SQLite databases - what each one holds, which database it lives in, who writes it and who reads it - plus the conventions a new table follows. Use when adding a table, adding a migration, adding or changing a column, deciding whether data belongs in the in-memory or the persisted database, or working out what writes and reads an existing table.
+name: entities
+description: Map of every entity in flowlite's two SQLite databases - what each table holds, which database it lives in, who writes it and who reads it - plus the column conventions every entity obeys. Use when working out what writes or reads a table, deciding whether data belongs in the in-memory or the persisted database, choosing a column's nullability or key style, or adding an entity. For the mechanics of landing a schema change - migration files, sqlx checksums, ALTER limits - see the db-schema skill.
 ---
 
-# Database objects
+# Entities
 
 flowlite runs against **two SQLite databases per connection**, and every table belongs to exactly one of them. Which one is decided by a single question: **if the process restarts, should this row still exist?**
 
@@ -50,7 +50,7 @@ The disk tables mirror the `mem` ones, but they are not views onto them: **a run
 ## Adding a new table
 
 1. Decide the database with the restart question above.
-2. Add the migration under `db/schemas/memory/migrations/` or `db/schemas/disk/migrations/`, named `YYYYMMDDHHMMSS_create_<table>_table.sql`. No schema prefix in the migration itself — each runs against its own database. The `mem.` prefix is only needed later, in the SQL your CRUD methods write.
+2. Add the migration — see the [db-schema skill](../db-schema/SKILL.md) for where it goes, how it is named and when it may be edited rather than added to. No schema prefix in the migration itself; each runs against its own database, and the `mem.` prefix is only needed later, in the SQL your CRUD methods write.
 3. Declare each column `NOT NULL` unless "no value" is a state no ordinary value can express, and leave `DEFAULT` out entirely.
 4. If it is YAML-seeded, wire the insert into `CRUD::init`, incrementing the shared `row_id` counter, inside the existing transaction.
 5. Build the CRUD file per the [crud skill](../crud/SKILL.md), which also owns how a method takes its database handle.
