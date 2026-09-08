@@ -2,6 +2,8 @@ use serde::Deserialize;
 use crate::yaml_models::defaults::default_u32;
 use anyhow::Context;
 use validator::Validate;
+use std::collections::BTreeMap;
+use crate::yaml_models::string_map::deserialize_string_map;
 
 
 #[derive(Deserialize, Validate, Debug)]
@@ -17,6 +19,12 @@ pub struct JobYamlTask {
     /// Seconds to wait after a failed attempt before the next one starts.
     #[serde(default = "default_u32::<60>")]
     pub retry_delay: u32,
+    /// Environment variables for the command, over the environment flowlite inherited.
+    #[serde(default, deserialize_with = "deserialize_string_map")]
+    pub env: BTreeMap<String, String>,
+    /// The command's working directory, empty to inherit the server's.
+    #[serde(default)]
+    pub working_dir: String,
 }
 
 #[derive(Deserialize, Validate, Debug)]
@@ -28,6 +36,10 @@ pub struct JobYaml {
     /// How many runs of this job may run in parallel, 0 for no limit.
     #[serde(default = "default_u32::<1>")]
     pub max_parallel_runs: u32,
+    /// The parameters this job accepts, name to default value. A schedule or the CLI may
+    /// override a declared name; an undeclared one is a submit error.
+    #[serde(default, deserialize_with = "deserialize_string_map")]
+    pub parameters: BTreeMap<String, String>,
     #[serde(default)]
     pub tasks: Vec<JobYamlTask>,
 }

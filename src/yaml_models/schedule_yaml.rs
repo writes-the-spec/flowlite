@@ -3,7 +3,8 @@ use cron::Schedule;
 use serde::Deserialize;
 use validator::Validate;
 use crate::yaml_models::defaults::default_tz;
-
+use std::collections::BTreeMap;
+use crate::yaml_models::string_map::deserialize_string_map;
 
 use std::path::Path;
 use anyhow::Context;
@@ -43,5 +44,6 @@ impl ScheduleYaml {
 #[derive(Deserialize, Validate, Debug)]
 pub struct ScheduleYamlJob {
     pub id: String,
-    pub parameters: Option<serde_json::Value>,
+    #[serde(default, deserialize_with = "deserialize_string_map")]
+    pub parameters: BTreeMap<String, String>,
 }
