@@ -82,6 +82,64 @@ dags:
   - id: hello-world
 ```
 
+## Command inputs
+
+A command can be given configuration three ways: parameters declared on the job, environment variables set on a task, and a working directory — plus a handful of variables flowlite injects itself. All of them arrive as environment variables, since `sh -c <command>` inherits its environment like any process:
+
+```yaml
+id: daily-etl
+name: Daily ETL
+parameters:
+  region: us-east-1
+tasks:
+  - id: extract
+    command: ./extract.sh
+    env:
+      PYTHONUNBUFFERED: "1"
+    working_dir: /srv/etl
+```
+
+A declared parameter reaches the command **prefixed and upper-cased**: `region` becomes `FLOWLITE_PARAM_REGION`. The prefix is what stops a parameter named `path` or `home` from shadowing something the command actually needed.
+
+Override a parameter at submit time:
+
+```bash
+flowlite job submit daily-etl --param region=eu-west-1
+```
+
+`--param name=value` can be repeated for more than one parameter; splitting happens on the first `=`, so a value may contain one, and a later repeat of the same name wins. Naming a parameter the job doesn't declare is refused, naming the job, the bad key and the declared names — a typo should fail loudly rather than deliver nothing to the command. `working_dir` left empty, the default, means the command inherits flowlite's own working directory.
+
+### Precedence
+
+Where a name collides, later wins, applied in this order:
+
+1. The environment flowlite itself inherited.
+2. The task's `env:`.
+3. `FLOWLITE_PARAM_*`.
+4. The variables below, injected by flowlite.
+
+Injected metadata is applied last so nothing a user writes in `env:` or a parameter can make a command lie about which run it belongs to.
+
+### Injected variables
+
+| Variable | Value |
+|---|---|
+| `FLOWLITE_JOB_ID` | The job this run is of. |
+| `FLOWLITE_JOB_RUN_ID` | This run's id. |
+| `FLOWLITE_TASK_ID` | This task. |
+| `FLOWLITE_TASK_RUN_ID` | This task's run. |
+| `FLOWLITE_TASK_RUN_ATTEMPT_ID` | This attempt. |
+| `FLOWLITE_ATTEMPT` | Which attempt this is, starting at 1. |
+| `FLOWLITE_SCHEDULED_AT` | The instant a schedule fired for, as RFC3339. Set only for a scheduled run — a manual `job submit` gets no such variable at all, not an empty one. |
+
+**Parameters answer "which caller is this run for," not "which run is this."** A schedule declaring `slice: "2026-09-08"` as a parameter default is wrong on every occurrence after today, because a parameter is a fixed value carried unchanged from submit through every rerun — it is not re-evaluated per run. `FLOWLITE_SCHEDULED_AT` is what tells a recurring job which occurrence it is running; reach for it, not a parameter, whenever the question is "which day/hour/slice is this."
+
+A rerun replays the original run's parameters and `FLOWLITE_SCHEDULED_AT` unchanged, not the job's current defaults — see [Reruns](#reruns).
+
+### `env:` is visible in the dashboard, on purpose
+
+A task's `env:` values are shown as written on the run and task pages. The YAML they came from is already plaintext on disk, so rendering it leaks nothing a reader of the config directory couldn't already see, and hiding it would make a wrong `env:` value undebuggable from the run that used it. A secret belongs in the environment flowlite's own process runs in — the command inherits that like any environment, and flowlite neither stores nor displays it.
+
 ## Retries
 
 A task that exits non-zero can be retried. `max_retries` is how many times it is tried
@@ -149,10 +207,11 @@ flowlite job-run rerun 42
 
 A rerun replays **the definition the original run executed, not the current YAML.** Every
 run carries its own snapshot of the job and its tasks — the commands, the `depends_on`
-edges, the timeouts and the retry settings — taken when the run was submitted. So
-rerunning an old run reruns its old config, and a run whose job YAML has since been
-edited or deleted is still rerunnable. To run the job as it is defined now, submit it
-instead:
+edges, the timeouts and the retry settings, the resolved `parameters` and the `env` and
+`working_dir` of every task — taken when the run was submitted, plus the `FLOWLITE_SCHEDULED_AT`
+it fired for. So rerunning an old run reruns its old config for the same occurrence, and
+a run whose job YAML has since been edited or deleted is still rerunnable. To run the job
+as it is defined now, submit it instead:
 
 ```bash
 flowlite job submit hello-world

@@ -7,7 +7,7 @@ One [`task`](task.md) within one [`job_run`](job_run.md) — and **the config th
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`. |
 | `job_run_id` | Foreign key to [`job_run`](job_run.md). |
 | `job_id`, `task_id` | Which task this is a run of. No foreign key — the task is in `mem`. |
-| `command`, `depends_on`, `timeout`, `max_retries`, `retry_delay` | **The snapshot.** Copied off `mem.task` by `submit_job`; see below. |
+| `command`, `depends_on`, `timeout`, `max_retries`, `retry_delay`, `env`, `working_dir` | **The snapshot.** Copied off `mem.task` by `submit_job`; see below. |
 | `created_at` | Bound from `Toolkit`. |
 | `started_at` | Nullable. Written once, when the task run starts — it means "when the task run started", covering every attempt, not "when the current attempt started". |
 | `finished_at` | Nullable. Written with every terminal status. |
@@ -28,4 +28,4 @@ The one deliberate exception in the whole orchestrator is `mem.job.max_parallel_
 
 ## Read by
 
-`TaskRunDispatcher` (its own rows and its dependencies'), `TaskRunMonitor`, `JobRunMonitor` (all task runs of a job run, to settle it), `TaskRunAttemptDispatcher` (for `command`, `timeout` and `retry_delay`), and the job-run and task-run web routes.
+`TaskRunDispatcher` (its own rows and its dependencies'), `TaskRunMonitor`, `JobRunMonitor` (all task runs of a job run, to settle it), `TaskRunAttemptDispatcher` (for `command`, `timeout` and `retry_delay` to spawn with, and `env`/`working_dir` to pass to `build_task_run_attempt_env`), and the job-run and task-run web routes — the latter renders `env` on the task-run page, deliberately: it is plaintext on disk already, and hiding it would make a wrong `env:` undebuggable from the run.

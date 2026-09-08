@@ -36,12 +36,12 @@ jobs:
 | Field | Required | Default | Notes |
 |---|---|---|---|
 | `id` | yes | — | A job id. A foreign key on `mem.schedule_job` checks it exists — see below. |
-| `parameters` | no | `None` | Arbitrary JSON, stored as text in `mem.schedule_job` and **never read**. |
+| `parameters` | no | `{}` | Overrides of the job's declared `parameters`, by name, through the same scalar-coercion rule as [`JobYamlTask.env`](job_yaml.md#parameters-and-env-what-a-scalar-becomes). |
 
 ## Gotchas
 
 - **`cron` takes six fields, seconds first** (`sec min hour dom month dow`), the `cron` crate's dialect. A five-field crontab expression means something else here — `"*/15 * * * * *"` is every 15 *seconds*.
-- **`parameters` is inert.** `CRUD::submit_job` takes only a job id, so nothing declared per job on a schedule reaches the job run. `.config/schedules/example_schedule.yml` uses a `variables:` key that isn't even a field — unknown keys are dropped silently.
+- **`parameters` is no longer inert, but an unknown name is caught at submit time, not at startup like the job-id foreign key below.** `Scheduler::handle_due_schedule` passes it straight to `CRUD::submit_job`, which raises if a name here isn't declared on the job; the scheduler `eprintln!`s the error and moves on to the schedule's next job rather than crashing, so a typo here fails that job on every occurrence of the schedule until the file is fixed, rather than stopping the server from starting. `.config/schedules/example_schedule.yml` uses a `variables:` key that isn't even a field — unknown keys are dropped silently.
 - **An unknown job id stops the server from starting.** `mem.schedule_job.job_id` is a foreign key to `mem.job` and `PRAGMA foreign_keys` is on (sqlx enables it by default), so `CRUD::init` — which inserts every job before any `schedule_job` — aborts the config transaction with `(code: 787) FOREIGN KEY constraint failed` and the process exits. There is no half-loaded config and no stuck job run: a typo in one schedule file stops `serve`, `job list` and `job submit` until it is fixed.
 
 ## What the scheduler does with it

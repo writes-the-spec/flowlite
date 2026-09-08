@@ -7,7 +7,7 @@ Which jobs a [`schedule`](schedule.md) submits — one row per job listed under 
 | `row_id` | YAML declaration order. `UNIQUE`. |
 | `schedule_id` | Foreign key to [`schedule`](schedule.md). |
 | `job_id` | Foreign key to [`job`](job.md). |
-| `parameters` | Nullable `TEXT`. **Stored and never used** — `CRUD::submit_job` takes only a `job_id`, so anything declared here is inert until submission learns to carry it. |
+| `parameters` | `NOT NULL` (`'{}'` when the schedule declares none). Overrides of the job's declared `parameters`, read by `Scheduler::handle_due_schedule` and passed to `CRUD::submit_job`, where a name this job does not declare raises via `resolve_job_parameters`. |
 
 ## Written by
 
@@ -15,7 +15,7 @@ Which jobs a [`schedule`](schedule.md) submits — one row per job listed under 
 
 ## Read by
 
-`Scheduler::handle_due_schedule`, which selects a due schedule's rows and calls `CRUD::submit_job` for each, and the schedule-detail web route.
+`Scheduler::handle_due_schedule`, which selects a due schedule's rows and calls `CRUD::submit_job` for each, passing `parameters` as that call's overrides, and the schedule-detail web route, which renders `parameters` in its jobs table.
 
 ## The foreign key is load-bearing
 

@@ -7,6 +7,8 @@ One execution of a [`job`](job.md). Created `Pending`, driven to a terminal stat
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`. Also the dispatcher's oldest-first order. |
 | `job_id` | The job this run is of. **No foreign key** — the job lives in the attached `mem` database, so one is impossible. |
 | `job_name`, `job_description` | **Snapshot copies** of `job.name`/`job.description` at submit time, so a finished run still displays as it was submitted however the YAML has moved. |
+| `parameters` | `NOT NULL`. The **resolved** set — `job.parameters`' defaults with the caller's overrides applied by `resolve_job_parameters` — not the declaration itself. |
+| `scheduled_at` | Nullable `DATETIME`. The instant a schedule fired for, `NULL` for a manual `job submit`. Injected onto the command as `FLOWLITE_SCHEDULED_AT` — omitted entirely, not empty, when it is `NULL` — by [`build_task_run_attempt_env`](../../../../src/orchestrator/task_run_attempt_env.rs). |
 | `created_at` | Bound from `Toolkit::get_current_ts()`, like every timestamp here. |
 | `started_at` | Nullable. Written exactly once, by `JobRunDispatcher::settle_as_running`. Task run retries never touch it. |
 | `finished_at` | Nullable. Written with every terminal status. |
@@ -14,7 +16,7 @@ One execution of a [`job`](job.md). Created `Pending`, driven to a terminal stat
 
 ## Written by
 
-- **Inserted** by `CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/misc.rs](../../../../src/crud/multistatements/misc.rs)), always `Pending`, together with one [`task_run`](task_run.md) per task in the same call. `rerun_job` reads an existing run and its task runs and reproduces the snapshot rather than re-reading the YAML, so a rerun executes what the original did.
+- **Inserted** by `CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/misc.rs](../../../../src/crud/multistatements/misc.rs)), always `Pending`, together with one [`task_run`](task_run.md) per task in the same call. `rerun_job` reads an existing run and its task runs and reproduces the snapshot rather than re-reading the YAML, so a rerun executes what the original did — including copying `parameters` and `scheduled_at` verbatim, not the job's current defaults or a fresh `NULL`. A rerun of a scheduled run therefore still runs for the day it was originally scheduled for.
 - **Updated** by `JobRunDispatcher` (`Pending` → `Running`/`Skipped`) and `JobRunMonitor` (`Running` → terminal), and by nothing else. No request handler and no CLI command writes a run status.
 
 ## Read by

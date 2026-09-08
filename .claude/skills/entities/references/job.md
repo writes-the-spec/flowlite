@@ -11,6 +11,7 @@ In-memory config, re-seeded on every startup, so nothing here survives a restart
 | `name` | Display label. Deliberately **not** unique and **not** a key. |
 | `description` | `NOT NULL`; the YAML `#[serde(default)]`s it to `""`, so the empty string arrives as a value. |
 | `max_parallel_runs` | How many of this job's runs may be `Running` at once. Defaults to 1; **`0` means no limit** and short-circuits the count entirely. |
+| `parameters` | `NOT NULL`. Declared name to default value, `'{}'` when the job declares none. This table only holds the declaration — resolving it against a caller's overrides happens in `submit_job`, not here. |
 
 ## Written by
 
@@ -18,7 +19,7 @@ In-memory config, re-seeded on every startup, so nothing here survives a restart
 
 ## Read by
 
-- `CRUD::submit_job` ([src/crud/multistatements/misc.rs](../../../../src/crud/multistatements/misc.rs)) — copies `name` and `description` onto the `job_run` it inserts as `job_name`/`job_description`, and bails with `Job '<id>' not found` if the row is missing.
+- `CRUD::submit_job` ([src/crud/multistatements/misc.rs](../../../../src/crud/multistatements/misc.rs)) — copies `name` and `description` onto the `job_run` it inserts as `job_name`/`job_description`, and bails with `Job '<id>' not found` if the row is missing. It also passes `parameters` to `resolve_job_parameters`, which raises if a caller's override names a parameter this row does not declare.
 - `CRUD::is_job_at_max_parallel_runs` — reads `max_parallel_runs`. **This is the single definition field the orchestrator reads live**, everywhere else it reads the run's snapshot. Deliberate: "may I start another run?" is a question about the job now, so it is not frozen onto `job_run`. See [task_run.md](task_run.md).
 - `job list` / `job submit` ([src/cli/commands/job.rs](../../../../src/cli/commands/job.rs)) and the home, jobs and job-detail web routes.
 
