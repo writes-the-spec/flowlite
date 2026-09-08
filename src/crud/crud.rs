@@ -64,6 +64,7 @@ impl CRUD {
                             name: job_yaml.name,
                             description: job_yaml.description,
                             max_parallel_runs: job_yaml.max_parallel_runs,
+                            parameters: job_yaml.parameters.clone(),
                         }
                     })
                         .await
@@ -85,6 +86,8 @@ impl CRUD {
                                 timeout: task_yaml.timeout,
                                 max_retries: task_yaml.max_retries,
                                 retry_delay: task_yaml.retry_delay,
+                                env: task_yaml.env.clone(),
+                                working_dir: task_yaml.working_dir.clone(),
                             }
                         })
                             .await
@@ -164,7 +167,7 @@ impl CRUD {
                                 row_id,
                                 schedule_id: schedule_yaml.id.clone(),
                                 job_id: schedule_job_yaml.id.clone(),
-                                parameters: schedule_job_yaml.parameters.map(|p| p.to_string()),
+                                parameters: schedule_job_yaml.parameters,
                             }
                         })
                             .await

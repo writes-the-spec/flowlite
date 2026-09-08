@@ -1,4 +1,5 @@
 
+use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use crate::crud::CRUD;
 
@@ -9,6 +10,7 @@ pub struct InsertJobDataInput {
     pub name: String,
     pub description: String,
     pub max_parallel_runs: u32,
+    pub parameters: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -42,6 +44,7 @@ pub struct Job {
     pub name: String,
     pub description: String,
     pub max_parallel_runs: u32,
+    pub parameters: sqlx::types::Json<BTreeMap<String, String>>,
 }
 
 
@@ -51,13 +54,14 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         sqlx::query(
-            "INSERT INTO mem.job (row_id, job_id, name, description, max_parallel_runs) VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO mem.job (row_id, job_id, name, description, max_parallel_runs, parameters) VALUES (?, ?, ?, ?, ?, ?)"
         )
         .bind(data.input.row_id as i64)
         .bind(&data.input.job_id)
         .bind(&data.input.name)
         .bind(&data.input.description)
         .bind(data.input.max_parallel_runs)
+        .bind(sqlx::types::Json(&data.input.parameters))
         .execute(executor)
         .await?;
 
@@ -68,7 +72,7 @@ impl CRUD {
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
-        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT job_id, name, description, max_parallel_runs FROM mem.job WHERE 1=1");
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT job_id, name, description, max_parallel_runs, parameters FROM mem.job WHERE 1=1");
 
         if let Some(job_id) = &data.filter.job_id {
             query_builder.push(" AND job_id = ");

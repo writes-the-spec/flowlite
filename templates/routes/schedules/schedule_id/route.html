@@ -84,10 +84,14 @@
                 <td class="deftable__id"><a href="/jobs/{{ schedule_job.job_id }}">{{ schedule_job.job_id }}</a></td>
 
                 <td>
-                    {% if let Some(parameters) = schedule_job.parameters %}
-                    <code class="cmd">{{ parameters }}</code>
-                    {% else %}
+                    {% if schedule_job.parameters.0.is_empty() %}
                     <span class="none">none</span>
+                    {% else %}
+                    <div class="deps">
+                        {% for (key, value) in schedule_job.parameters.0 %}
+                        <span class="dep">{{ key }}={{ value }}</span>
+                        {% endfor %}
+                    </div>
                     {% endif %}
                 </td>
             </tr>

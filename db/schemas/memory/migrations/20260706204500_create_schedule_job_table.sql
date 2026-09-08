@@ -2,7 +2,7 @@ CREATE TABLE schedule_job (
     row_id INTEGER NOT NULL,
     schedule_id TEXT NOT NULL,
     job_id TEXT NOT NULL,
-    parameters TEXT,
+    parameters TEXT NOT NULL,
     FOREIGN KEY (schedule_id) REFERENCES schedule (schedule_id),
     FOREIGN KEY (job_id) REFERENCES job (job_id),
     UNIQUE (row_id)

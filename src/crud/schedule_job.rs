@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use crate::crud::CRUD;
 
@@ -6,7 +7,7 @@ pub struct InsertScheduleJobDataInput {
     pub row_id: u64,
     pub schedule_id: String,
     pub job_id: String,
-    pub parameters: Option<String>,
+    pub parameters: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,7 +38,7 @@ pub struct SelectScheduleJobsData {
 pub struct ScheduleJob {
     pub schedule_id: String,
     pub job_id: String,
-    pub parameters: Option<String>,
+    pub parameters: sqlx::types::Json<BTreeMap<String, String>>,
 }
 
 
@@ -52,7 +53,7 @@ impl CRUD {
         .bind(data.input.row_id as i64)
         .bind(&data.input.schedule_id)
         .bind(&data.input.job_id)
-        .bind(&data.input.parameters)
+        .bind(sqlx::types::Json(&data.input.parameters))
         .execute(executor)
         .await?;
 
