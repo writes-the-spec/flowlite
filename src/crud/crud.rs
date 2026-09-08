@@ -65,6 +65,7 @@ impl CRUD {
                             description: job_yaml.description,
                             max_parallel_runs: job_yaml.max_parallel_runs,
                             parameters: job_yaml.parameters.clone(),
+                            env: job_yaml.env.clone(),
                         }
                     })
                         .await

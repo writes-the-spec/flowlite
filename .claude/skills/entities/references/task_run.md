@@ -7,7 +7,7 @@ One [`task`](task.md) within one [`job_run`](job_run.md) — and **the config th
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`. |
 | `job_run_id` | Foreign key to [`job_run`](job_run.md). |
 | `job_id`, `task_id` | Which task this is a run of. No foreign key — the task is in `mem`. |
-| `command`, `depends_on`, `timeout`, `max_retries`, `retry_delay`, `env`, `working_dir` | **The snapshot.** Copied off `mem.task` by `submit_job`; see below. |
+| `command`, `depends_on`, `timeout`, `max_retries`, `retry_delay`, `env`, `working_dir` | **The snapshot.** Copied off `mem.task` by `submit_job`; see below. `env` is the exception to "copied": it is `mem.job.env` with `mem.task.env` layered over it, so the row holds the merged environment rather than either declaration. |
 | `created_at` | Bound from `Toolkit`. |
 | `started_at` | Nullable. Written once, when the task run starts — it means "when the task run started", covering every attempt, not "when the current attempt started". |
 | `finished_at` | Nullable. Written with every terminal status. |

@@ -5,6 +5,7 @@ CREATE TABLE job (
     description TEXT NOT NULL,
     max_parallel_runs INTEGER NOT NULL,
     parameters TEXT NOT NULL,
+    env TEXT NOT NULL,
 
     PRIMARY KEY (job_id),
     UNIQUE (row_id)

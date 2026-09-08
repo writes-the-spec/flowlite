@@ -104,6 +104,28 @@ pub fn resolve_job_parameters(
     Ok(parameters)
 }
 
+/// The environment one task run is submitted with: the job's `env:`, with the task's own
+/// layered over it.
+///
+/// Merged here rather than at spawn so the run snapshots what it will actually run with,
+/// and so the ordering between the two declarations is decided once, in the place that
+/// builds the definition, instead of becoming a fourth layer the spawn site has to keep
+/// in the right order forever.
+fn merge_task_env(
+    job_env: &BTreeMap<String, String>,
+    task_env: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+
+    let mut env = job_env.clone();
+
+    for (name, value) in task_env {
+        env.insert(name.clone(), value.clone());
+    }
+
+    env
+}
+
+
 fn is_valid_parameter_name(name: &str) -> bool {
     let mut chars = name.chars();
 
@@ -156,6 +178,8 @@ impl CRUD {
 
         let parameters = resolve_job_parameters(job_id, &job.parameters.0, overrides)?;
 
+        let job_env = job.env.0.clone();
+
         let tasks = self.select_tasks(&mut *conn, &SelectTasksData {
             filter: SelectTasksDataFilter {
                 task_id: None,
@@ -181,7 +205,7 @@ impl CRUD {
                     timeout: task.timeout,
                     max_retries: task.max_retries,
                     retry_delay: task.retry_delay,
-                    env: task.env.0.clone(),
+                    env: merge_task_env(&job_env, &task.env.0),
                     working_dir: task.working_dir.clone(),
                 })
                 .collect(),
@@ -532,5 +556,49 @@ mod tests {
         assert_eq!(task_runs[0].env.0.get("PYTHONUNBUFFERED").unwrap(), "1");
         assert_eq!(task_runs[0].working_dir, "/tmp");
         assert_eq!(task_runs[0].status, TaskRunStatus::Pending);
+    }
+
+    #[test]
+    fn a_job_env_value_reaches_a_task_that_declares_none() {
+        let env = merge_task_env(&map(&[("TZ", "UTC")]), &map(&[]));
+
+        assert_eq!(env.get("TZ").unwrap(), "UTC");
+    }
+
+    #[test]
+    fn a_task_env_value_is_kept_when_the_job_declares_none() {
+        let env = merge_task_env(&map(&[]), &map(&[("LC_ALL", "C")]));
+
+        assert_eq!(env.get("LC_ALL").unwrap(), "C");
+    }
+
+    /// The point of the whole change: the task is the more specific declaration, so it
+    /// wins the name both of them set.
+    #[test]
+    fn a_task_env_value_overrides_the_job_on_the_same_name() {
+        let env = merge_task_env(
+            &map(&[("TZ", "UTC")]),
+            &map(&[("TZ", "Europe/Vienna")]),
+        );
+
+        assert_eq!(env.get("TZ").unwrap(), "Europe/Vienna");
+    }
+
+    #[test]
+    fn the_names_only_one_of_them_sets_all_survive_the_merge() {
+        let env = merge_task_env(
+            &map(&[("TZ", "UTC"), ("SHARED", "job")]),
+            &map(&[("LC_ALL", "C"), ("SHARED", "task")]),
+        );
+
+        assert_eq!(env.get("TZ").unwrap(), "UTC");
+        assert_eq!(env.get("LC_ALL").unwrap(), "C");
+        assert_eq!(env.get("SHARED").unwrap(), "task");
+        assert_eq!(env.len(), 3);
+    }
+
+    #[test]
+    fn two_jobs_declaring_nothing_merge_to_nothing() {
+        assert!(merge_task_env(&map(&[]), &map(&[])).is_empty());
     }
 }

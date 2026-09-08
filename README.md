@@ -84,20 +84,30 @@ dags:
 
 ## Command inputs
 
-A command can be given configuration three ways: parameters declared on the job, environment variables set on a task, and a working directory — plus a handful of variables flowlite injects itself. All of them arrive as environment variables, since `sh -c <command>` inherits its environment like any process:
+A command can be given configuration three ways: parameters declared on the job, environment variables set on the job or on a task, and a working directory — plus a handful of variables flowlite injects itself. All of them arrive as environment variables, since `sh -c <command>` inherits its environment like any process:
 
 ```yaml
 id: daily-etl
 name: Daily ETL
 parameters:
   region: us-east-1
+env:
+  PYTHONUNBUFFERED: "1"
+  TZ: UTC
 tasks:
   - id: extract
     command: ./extract.sh
     env:
-      PYTHONUNBUFFERED: "1"
+      # Overrides the job's TZ; PYTHONUNBUFFERED still comes from the job.
+      TZ: Europe/Vienna
     working_dir: /srv/etl
 ```
+
+An `env:` block on the job applies to every one of its tasks, and a task's own `env:` wins
+any name both of them set. The two are merged when the run is submitted, so a task run
+records the environment it will actually run with and a rerun replays exactly that. A task
+cannot opt out of the job's block — setting the same name to a different value is how you
+override it.
 
 A declared parameter reaches the command **prefixed and upper-cased**: `region` becomes `FLOWLITE_PARAM_REGION`. The prefix is what stops a parameter named `path` or `home` from shadowing something the command actually needed.
 
@@ -114,9 +124,12 @@ flowlite job submit daily-etl --param region=eu-west-1
 Where a name collides, later wins, applied in this order:
 
 1. The environment flowlite itself inherited.
-2. The task's `env:`.
-3. `FLOWLITE_PARAM_*`.
-4. The variables below, injected by flowlite.
+2. The job's `env:`.
+3. The task's `env:`.
+4. `FLOWLITE_PARAM_*`.
+5. The variables below, injected by flowlite.
+
+Steps 2 and 3 are merged once, at submit time, onto `task_run.env`; steps 4 and 5 are composed at spawn.
 
 Injected metadata is applied last so nothing a user writes in `env:` or a parameter can make a command lie about which run it belongs to.
 
@@ -138,7 +151,7 @@ A rerun replays the original run's parameters and `FLOWLITE_SCHEDULED_AT` unchan
 
 ### `env:` is visible in the dashboard, on purpose
 
-A task's `env:` values are shown as written on the run and task pages. The YAML they came from is already plaintext on disk, so rendering it leaks nothing a reader of the config directory couldn't already see, and hiding it would make a wrong `env:` value undebuggable from the run that used it. A secret belongs in the environment flowlite's own process runs in — the command inherits that like any environment, and flowlite neither stores nor displays it.
+The merged `env:` values — the job's and the task's — are shown as written on the run and task pages. The YAML they came from is already plaintext on disk, so rendering it leaks nothing a reader of the config directory couldn't already see, and hiding it would make a wrong `env:` value undebuggable from the run that used it. A secret belongs in the environment flowlite's own process runs in — the command inherits that like any environment, and flowlite neither stores nor displays it.
 
 ## Retries
 

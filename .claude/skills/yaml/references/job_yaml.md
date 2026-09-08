@@ -26,6 +26,7 @@ tasks:
 | `description` | no | `""` | |
 | `max_parallel_runs` | no | `1` | How many runs of this job may be `Running` at once. **`0` means no limit.** Enforced only in `JobRunDispatcher::settle_as_pending`; submitting is never rejected for exceeding it. |
 | `parameters` | no | `{}` | Declared name to default value. A schedule's `jobs[].parameters` or `job submit --param` may override a declared name; naming one this job does not declare is a submit error, not a silent no-op. See the [entities skill](../../entities/references/job.md). |
+| `env` | no | `{}` | Environment variables for **every** task of this job. A task's own `env:` wins the names both of them set; the merge happens in `submit_job`, so `task_run.env` holds the merged result. |
 | `tasks` | no | `[]` | A job with no tasks is legal; its job runs finish `Succeeded` immediately. |
 
 ## `JobYamlTask`
@@ -38,8 +39,26 @@ tasks:
 | `timeout` | no | `3600` | Seconds. Applies per *attempt*, not to the task run as a whole. |
 | `max_retries` | no | `0` | Total executions are `1 + max_retries`; only a `Failed` attempt is retried. |
 | `retry_delay` | no | `60` | Seconds to wait after a failed attempt before the next one starts. Enforced in `TaskRunAttemptDispatcher::settle_as_pending`, measured from the retry row's `created_at`. |
-| `env` | no | `{}` | Environment variables for the command, layered over whatever flowlite itself inherited. Shown in the UI on purpose — see the gotcha below. |
+| `env` | no | `{}` | Environment variables for this task, layered over the job's `env:` and then over whatever flowlite itself inherited. A name set here beats the same name on the job. Shown in the UI on purpose — see the gotcha below. |
 | `working_dir` | no | `""` | The command's working directory. Empty means inherit the server's own. |
+
+## Which `env:` wins
+
+Both blocks use the same syntax and the same coercion. They are layered, most general
+first, so the more specific declaration wins:
+
+```
+the environment flowlite itself was started with
+  ← the job's env:
+  ← the task's env:
+  ← FLOWLITE_PARAM_* from the run's resolved parameters
+  ← the injected FLOWLITE_* run metadata
+```
+
+The first two are merged once, at submit, and snapshotted onto `task_run.env` — so a task
+run records the environment it will actually run with, and a rerun replays it. The last two
+are composed at spawn by `build_task_run_attempt_env`. A task cannot opt out of the job's
+block; declaring the same name with a different value is how you override it.
 
 ## `parameters` and `env`: what a scalar becomes
 

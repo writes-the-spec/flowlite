@@ -40,6 +40,10 @@ pub struct JobYaml {
     /// override a declared name; an undeclared one is a submit error.
     #[serde(default, deserialize_with = "deserialize_string_map")]
     pub parameters: BTreeMap<String, String>,
+    /// Environment variables for every task of this job. A task's own `env:` wins the
+    /// names both of them set.
+    #[serde(default, deserialize_with = "deserialize_string_map")]
+    pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub tasks: Vec<JobYamlTask>,
 }
