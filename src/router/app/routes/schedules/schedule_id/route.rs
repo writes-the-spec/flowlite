@@ -42,7 +42,7 @@ pub async fn schedule_id_route(
             name_like: None,
             ..Default::default()
         },
-        sort: Some(SelectSchedulesDataSort::Alphabetical),
+        sort: Some(SelectSchedulesDataSort::RowId),
         limit: None,
         offset: None,
     }).await.unwrap_or_default();

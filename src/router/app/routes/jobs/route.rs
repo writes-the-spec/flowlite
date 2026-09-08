@@ -60,7 +60,7 @@ pub async fn jobs_route(
             job_id: None,
             name_like: name_like.clone(),
         },
-        sort: Some(SelectJobsDataSort::Alphabetical),
+        sort: Some(SelectJobsDataSort::RowId),
         limit: Some(PAGE_SIZE + 1), // One extra row tells us whether a next page exists.
         offset: Some(offset),
     }).await.unwrap_or_default();

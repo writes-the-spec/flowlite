@@ -31,7 +31,7 @@ pub async fn job_id_route(
             job_id: Some(job_id.clone()),
             name_like: None,
         },
-        sort: Some(SelectJobsDataSort::Alphabetical),
+        sort: Some(SelectJobsDataSort::RowId),
         limit: None,
         offset: None,
     }).await.unwrap_or_default();
@@ -46,7 +46,7 @@ pub async fn job_id_route(
             task_id: None,
             job_id: Some(job.job_id.clone()),
         },
-        sort: Some(SelectTasksDataSort::TaskId),
+        sort: Some(SelectTasksDataSort::RowId),
         limit: None,
         offset: None,
     }).await.unwrap_or_default();

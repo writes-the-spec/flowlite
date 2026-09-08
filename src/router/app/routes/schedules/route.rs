@@ -63,7 +63,7 @@ pub async fn schedules_route(
             name_like: name_like.clone(),
             ..Default::default()
         },
-        sort: Some(SelectSchedulesDataSort::Alphabetical),
+        sort: Some(SelectSchedulesDataSort::RowId),
         limit: Some(PAGE_SIZE + 1), // One extra row tells us whether a next page exists.
         offset: Some(offset),
     }).await.unwrap_or_default();
