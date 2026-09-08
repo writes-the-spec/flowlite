@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use chrono::{DateTime, Utc};
 use crate::crud::job_run::JobRun;
 use crate::crud::task_run::TaskRun;
 use crate::crud::task_run_attempt::TaskRunAttempt;
@@ -31,20 +30,26 @@ pub fn build_task_run_attempt_env(
     env.insert("FLOWLITE_TASK_RUN_ATTEMPT_ID".to_string(), task_run_attempt.id.to_string());
     env.insert("FLOWLITE_ATTEMPT".to_string(), task_run_attempt.attempt.to_string());
 
+    // A BTreeMap can't express "unset", so a manual run (no scheduled_at) removes the key
+    // rather than leaving it absent from this map - otherwise a task env: value for this
+    // exact name would survive into the composed map untouched.
     if let Some(scheduled_at) = job_run.scheduled_at {
         env.insert("FLOWLITE_SCHEDULED_AT".to_string(), scheduled_at.to_rfc3339());
+    } else {
+        env.remove("FLOWLITE_SCHEDULED_AT");
     }
 
     env
 }
 
 fn parameter_env_name(name: &str) -> String {
-    format!("FLOWLITE_PARAM_{}", name.to_uppercase())
+    format!("FLOWLITE_PARAM_{}", name.to_ascii_uppercase())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
     use crate::crud::job_run::JobRunStatus;
     use crate::crud::task_run::TaskRunStatus;
     use crate::crud::task_run_attempt::TaskRunAttemptStatus;
@@ -154,8 +159,11 @@ mod tests {
         assert_eq!(env.get("FLOWLITE_JOB_RUN_ID").unwrap(), "7");
     }
 
+    /// The parameter prefix keeps a parameter from ever colliding with an injected
+    /// metadata key in the first place, so this does not exercise the layering order the
+    /// way `injected_metadata_wins_over_a_task_env_value` does.
     #[test]
-    fn injected_metadata_wins_over_a_parameter() {
+    fn a_parameter_cannot_collide_with_injected_metadata() {
         let env = build_task_run_attempt_env(
             &task_run(map(&[])),
             &job_run(map(&[("job_run_id", "999")]), None),
@@ -203,6 +211,20 @@ mod tests {
     fn a_manual_run_carries_no_scheduled_at_at_all() {
         let env = build_task_run_attempt_env(
             &task_run(map(&[])),
+            &job_run(map(&[]), None),
+            &task_run_attempt(),
+        );
+
+        assert!(!env.contains_key("FLOWLITE_SCHEDULED_AT"));
+    }
+
+    /// A forged FLOWLITE_SCHEDULED_AT in a task's own env: must not survive a manual run -
+    /// otherwise a command reading it would silently process whatever date the task
+    /// definition claims instead of failing on an unset variable.
+    #[test]
+    fn a_task_env_value_for_scheduled_at_does_not_survive_a_manual_run() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[("FLOWLITE_SCHEDULED_AT", "1999-01-01T00:00:00Z")])),
             &job_run(map(&[]), None),
             &task_run_attempt(),
         );

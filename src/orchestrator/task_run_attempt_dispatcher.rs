@@ -11,6 +11,7 @@ use crate::orchestrator::task_run_attempt_env::build_task_run_attempt_env;
 use crate::orchestrator::task_run_attempt_reader::read_task_run_attempt_stream;
 use crate::poller::Service;
 use crate::signals::Signals;
+use anyhow::Context;
 use chrono::{TimeDelta, Utc};
 
 
@@ -144,7 +145,26 @@ impl TaskRunAttemptDispatcher {
             command.current_dir(&task_run.working_dir);
         }
 
-        let mut child = command.spawn()?;
+        // A manual run's env map has FLOWLITE_SCHEDULED_AT removed, but that map can only
+        // ever overlay what flowlite itself inherited - it can't unset a value the server's
+        // own environment already carries. Without this, a forged FLOWLITE_SCHEDULED_AT in
+        // flowlite's own environment would reach the command on every manual run.
+        if job_run.scheduled_at.is_none() {
+            command.env_remove("FLOWLITE_SCHEDULED_AT");
+        }
+
+        let working_dir_description = if task_run.working_dir.is_empty() {
+            "the server's current directory".to_string()
+        } else {
+            format!("'{}'", task_run.working_dir)
+        };
+
+        let mut child = command.spawn()
+            .with_context(|| format!(
+                "Failed to spawn task '{}' in working directory {}",
+                task_run.task_id,
+                working_dir_description,
+            ))?;
 
         let stdout = child.stdout.take()
             .ok_or_else(|| anyhow::anyhow!("Failed to get stdout of task: {}", task_run_attempt.task_id))?;
@@ -513,5 +533,38 @@ mod tests {
             std::fs::canonicalize(read_command_file(&seen_path).await).unwrap(),
             std::fs::canonicalize(&working_dir).unwrap(),
         );
+    }
+
+    /// A spawn failure's message has to name the task and the directory itself - otherwise
+    /// it reads identically to `sh` being missing, and a bad working_dir is left to spin
+    /// forever with no way to tell which task or path is at fault.
+    #[tokio::test]
+    async fn a_spawn_failure_names_the_task_and_the_working_dir() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let task_run = db.insert_task_run_for_command_with_env(
+            job_run.id,
+            "echo hi",
+            std::collections::BTreeMap::new(),
+            "/nope/does/not/exist",
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            1,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        let error = db.task_run_attempt_dispatcher()
+            .handle(&task_run_attempt)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains(&task_run.task_id), "{error}");
+        assert!(error.contains("/nope/does/not/exist"), "{error}");
     }
 }

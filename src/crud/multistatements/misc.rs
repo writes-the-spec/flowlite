@@ -68,7 +68,54 @@ pub fn resolve_job_parameters(
         parameters.insert(name.clone(), value.clone());
     }
 
+    for name in parameters.keys() {
+        if !is_valid_parameter_name(name) {
+            anyhow::bail!(
+                "Job '{}' has a parameter named '{}', which is not a valid environment \
+                 variable name. A parameter name may contain only ASCII letters, digits \
+                 and underscores, and may not start with a digit.",
+                job_id,
+                name,
+            );
+        }
+    }
+
+    // Two names that only differ in case become the same FLOWLITE_PARAM_ env var, and a
+    // BTreeMap can only hold one of them - so this has to be caught here rather than left
+    // to silently drop one value at spawn time.
+    let mut seen_env_names: BTreeMap<String, &String> = BTreeMap::new();
+
+    for name in parameters.keys() {
+        let env_name = name.to_ascii_uppercase();
+
+        if let Some(other_name) = seen_env_names.insert(env_name.clone(), name) {
+            anyhow::bail!(
+                "Job '{}' declares parameters '{}' and '{}', which both become the \
+                 environment variable FLOWLITE_PARAM_{}. Parameter names must be distinct \
+                 once uppercased.",
+                job_id,
+                other_name,
+                name,
+                env_name,
+            );
+        }
+    }
+
     Ok(parameters)
+}
+
+fn is_valid_parameter_name(name: &str) -> bool {
+    let mut chars = name.chars();
+
+    let Some(first) = chars.next() else {
+        return false;
+    };
+
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Operations that span more than one entity, and so belong to no single entity file.
@@ -374,6 +421,59 @@ mod tests {
     #[test]
     fn a_job_declaring_nothing_resolves_to_nothing() {
         assert!(resolve_job_parameters("job", &map(&[]), &map(&[])).unwrap().is_empty());
+    }
+
+    /// Hyphenated identifiers are this repo's own naming convention, so `my-param` is the
+    /// natural thing for a user to declare - and it is exactly the name `sh` cannot read
+    /// out of an env var.
+    #[test]
+    fn a_hyphenated_parameter_name_is_rejected() {
+        let error = resolve_job_parameters(
+            "daily-etl",
+            &map(&[("my-param", "v")]),
+            &map(&[]),
+        ).unwrap_err().to_string();
+
+        assert!(error.contains("daily-etl"), "{error}");
+        assert!(error.contains("my-param"), "{error}");
+    }
+
+    #[test]
+    fn a_parameter_name_starting_with_a_digit_is_rejected() {
+        let error = resolve_job_parameters(
+            "daily-etl",
+            &map(&[("1region", "v")]),
+            &map(&[]),
+        ).unwrap_err().to_string();
+
+        assert!(error.contains("1region"), "{error}");
+    }
+
+    #[test]
+    fn a_parameter_name_with_underscores_and_digits_is_accepted() {
+        let resolved = resolve_job_parameters(
+            "job",
+            &map(&[("region_2", "eu")]),
+            &map(&[]),
+        ).unwrap();
+
+        assert_eq!(resolved.get("region_2").unwrap(), "eu");
+    }
+
+    /// `region` and `REGION` are distinct declared parameters but the same env var once
+    /// uppercased, and one of them would otherwise silently lose its value.
+    #[test]
+    fn two_names_differing_only_in_case_are_rejected_as_a_collision() {
+        let error = resolve_job_parameters(
+            "daily-etl",
+            &map(&[("region", "eu"), ("REGION", "us")]),
+            &map(&[]),
+        ).unwrap_err().to_string();
+
+        assert!(error.contains("daily-etl"), "{error}");
+        assert!(error.contains("region"), "{error}");
+        assert!(error.contains("REGION"), "{error}");
+        assert!(error.contains("FLOWLITE_PARAM_REGION"), "{error}");
     }
 
     use crate::crud::job_run::JobRunStatus;

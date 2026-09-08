@@ -48,7 +48,7 @@ Both fields, and `ScheduleYamlJob.parameters` in the [schedule YAML](schedule_ya
 | YAML value | Result |
 |---|---|
 | A string | Kept as written. |
-| A number or boolean | Coerced to its string form — `retries: 3` becomes `"3"`. |
+| A number or boolean | Coerced to its string form — `retries: 3` becomes `"3"`. This is YAML 1.2 numeric parsing, not a copy of the text: `version: 1.10` becomes `"1.1"`, `1e3` becomes `"1000.0"` and `0x1F` becomes `"31"` — while `yes` and `007` are not numbers under YAML 1.2 and are kept as written. Quote a value you want preserved literally. |
 | A nested map or list | Rejected, naming the key: `'<key>' is a map, but only a string, a number or a boolean can reach a command`. |
 | A bare `key:` (YAML null) | Rejected: `'<key>' has no value - write "" for an empty one`. A forgotten value and a deliberate empty one are not the same mistake, so the error says how to write the one that's legal. |
 
