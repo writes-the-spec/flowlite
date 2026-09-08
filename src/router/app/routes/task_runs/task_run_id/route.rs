@@ -99,18 +99,16 @@ pub async fn task_run_id_route(
         sort: Some(SelectTaskRunAttemptsDataSort::Id),
     }).await.unwrap_or_default();
 
-    let task_run_attempt_ids = task_run_attempts
-        .iter()
-        .map(|task_run_attempt| task_run_attempt.id)
-        .collect::<Vec<_>>();
-
-    // One query for every attempt on the page rather than one per attempt: this view is
-    // exactly the N+1 the id list exists to avoid.
+    // Every attempt on the page in one query, by the parent the page is already about.
+    // Without `task_run_id` on the row this would be one query per attempt.
     let task_run_attempt_output = crud.select_task_run_attempt_outputs(conn, &SelectTaskRunAttemptOutputsData {
         filter: SelectTaskRunAttemptOutputsDataFilter {
             id: None,
             task_run_attempt_id: None,
-            task_run_attempt_ids: Some(task_run_attempt_ids),
+            task_run_id: Some(task_run.id),
+            job_run_id: None,
+            job_id: None,
+            task_id: None,
             stream: None,
         },
         sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),

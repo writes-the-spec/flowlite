@@ -28,6 +28,10 @@ impl std::fmt::Display for TaskRunAttemptOutputStream {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InsertTaskRunAttemptOutputDataInput {
     pub task_run_attempt_id: i64,
+    pub task_run_id: i64,
+    pub job_run_id: i64,
+    pub job_id: String,
+    pub task_id: String,
     pub stream: TaskRunAttemptOutputStream,
     pub content: String,
 }
@@ -43,10 +47,10 @@ pub struct InsertTaskRunAttemptOutputData {
 pub struct SelectTaskRunAttemptOutputsDataFilter {
     pub id: Option<i64>,
     pub task_run_attempt_id: Option<i64>,
-    /// Every attempt on one page at once. Both readers of this table list the attempts
-    /// before they want their output, so filtering on the ids they already hold is what
-    /// keeps the task-run view and `job-run logs` one query rather than one per attempt.
-    pub task_run_attempt_ids: Option<Vec<i64>>,
+    pub task_run_id: Option<i64>,
+    pub job_run_id: Option<i64>,
+    pub job_id: Option<String>,
+    pub task_id: Option<String>,
     pub stream: Option<TaskRunAttemptOutputStream>,
 }
 
@@ -68,6 +72,10 @@ pub enum SelectTaskRunAttemptOutputsDataSort {
 pub struct TaskRunAttemptOutput {
     pub id: i64,
     pub task_run_attempt_id: i64,
+    pub task_run_id: i64,
+    pub job_run_id: i64,
+    pub job_id: String,
+    pub task_id: String,
     pub stream: TaskRunAttemptOutputStream,
     pub created_at: DateTime<Utc>,
     pub content: String,
@@ -118,9 +126,13 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO task_run_attempt_output (task_run_attempt_id, stream, created_at, content) VALUES (?, ?, ?, ?)"
+            "INSERT INTO task_run_attempt_output (task_run_attempt_id, task_run_id, job_run_id, job_id, task_id, stream, created_at, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(data.input.task_run_attempt_id)
+            .bind(data.input.task_run_id)
+            .bind(data.input.job_run_id)
+            .bind(&data.input.job_id)
+            .bind(&data.input.task_id)
             .bind(&data.input.stream)
             .bind(self.toolkit.get_current_ts())
             .bind(&data.input.content)
@@ -135,7 +147,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, task_run_attempt_id, stream, created_at, content FROM task_run_attempt_output WHERE 1=1"
+            "SELECT id, task_run_attempt_id, task_run_id, job_run_id, job_id, task_id, stream, created_at, content FROM task_run_attempt_output WHERE 1=1"
         );
 
         if let Some(id) = &data.filter.id {
@@ -148,29 +160,24 @@ impl CRUD {
             query_builder.push_bind(task_run_attempt_id);
         }
 
-        if let Some(task_run_attempt_ids) = &data.filter.task_run_attempt_ids {
+        if let Some(task_run_id) = &data.filter.task_run_id {
+            query_builder.push(" AND task_run_id = ");
+            query_builder.push_bind(task_run_id);
+        }
 
-            match task_run_attempt_ids.is_empty() {
-                // `IN ()` is a syntax error, and an empty list is a real case: a task run
-                // with no attempts yet asks for the output of nothing.
-                true => {
-                    query_builder.push(" AND 0 = 1");
-                },
-                false => {
-                    query_builder.push(" AND task_run_attempt_id IN (");
+        if let Some(job_run_id) = &data.filter.job_run_id {
+            query_builder.push(" AND job_run_id = ");
+            query_builder.push_bind(job_run_id);
+        }
 
-                    // Scoped so the Separated borrow ends before the paren is closed.
-                    {
-                        let mut separated = query_builder.separated(", ");
+        if let Some(job_id) = &data.filter.job_id {
+            query_builder.push(" AND job_id = ");
+            query_builder.push_bind(job_id);
+        }
 
-                        for task_run_attempt_id in task_run_attempt_ids {
-                            separated.push_bind(*task_run_attempt_id);
-                        }
-                    }
-
-                    query_builder.push(")");
-                },
-            }
+        if let Some(task_id) = &data.filter.task_id {
+            query_builder.push(" AND task_id = ");
+            query_builder.push_bind(task_id);
         }
 
         if let Some(stream) = &data.filter.stream {
@@ -212,12 +219,22 @@ mod tests {
         db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await
     }
 
-    async fn insert(db: &TestDb, task_run_attempt_id: i64, stream: TaskRunAttemptOutputStream, content: &str) {
+    /// Carries the parent ids off the attempt, the way the monitor does.
+    async fn insert(
+        db: &TestDb,
+        task_run_attempt: &TaskRunAttempt,
+        stream: TaskRunAttemptOutputStream,
+        content: &str,
+    ) {
         db.crud.insert_task_run_attempt_output(
             &*db.conn_pool,
             &InsertTaskRunAttemptOutputData {
                 input: InsertTaskRunAttemptOutputDataInput {
-                    task_run_attempt_id,
+                    task_run_attempt_id: task_run_attempt.id,
+                    task_run_id: task_run_attempt.task_run_id,
+                    job_run_id: task_run_attempt.job_run_id,
+                    job_id: task_run_attempt.job_id.clone(),
+                    task_id: task_run_attempt.task_id.clone(),
                     stream,
                     content: content.to_string(),
                 },
@@ -239,7 +256,10 @@ mod tests {
         SelectTaskRunAttemptOutputsDataFilter {
             id: None,
             task_run_attempt_id: None,
-            task_run_attempt_ids: None,
+            task_run_id: None,
+            job_run_id: None,
+            job_id: None,
+            task_id: None,
             stream: None,
         }
     }
@@ -251,8 +271,8 @@ mod tests {
         let db = TestDb::new().await;
         let task_run_attempt = attempt(&db).await;
 
-        insert(&db, task_run_attempt.id, TaskRunAttemptOutputStream::Stdout, "one\n").await;
-        insert(&db, task_run_attempt.id, TaskRunAttemptOutputStream::Stdout, "two\n").await;
+        insert(&db, &task_run_attempt, TaskRunAttemptOutputStream::Stdout, "one\n").await;
+        insert(&db, &task_run_attempt, TaskRunAttemptOutputStream::Stdout, "two\n").await;
 
         let rows = select(&db, SelectTaskRunAttemptOutputsDataFilter {
             task_run_attempt_id: Some(task_run_attempt.id),
@@ -273,11 +293,11 @@ mod tests {
         let db = TestDb::new().await;
         let task_run_attempt = attempt(&db).await;
 
-        insert(&db, task_run_attempt.id, TaskRunAttemptOutputStream::Stdout, "out").await;
-        insert(&db, task_run_attempt.id, TaskRunAttemptOutputStream::Stderr, "err").await;
+        insert(&db, &task_run_attempt, TaskRunAttemptOutputStream::Stdout, "out").await;
+        insert(&db, &task_run_attempt, TaskRunAttemptOutputStream::Stderr, "err").await;
 
         let rows = select(&db, SelectTaskRunAttemptOutputsDataFilter {
-            task_run_attempt_ids: Some(vec![task_run_attempt.id]),
+            task_run_attempt_id: Some(task_run_attempt.id),
             ..filter()
         }).await;
 
@@ -289,42 +309,83 @@ mod tests {
         assert_eq!(streams.stderr, "err");
     }
 
-    /// The id list is what keeps the two views one query, so it has to hold more than one.
+    /// `task_run_id` is what the task-run page filters on: every attempt of one task run
+    /// in one query, which is the N+1 the denormalized column exists to avoid.
     #[tokio::test]
-    async fn the_id_list_groups_several_attempts_from_one_query() {
+    async fn task_run_id_selects_every_attempt_of_one_task_run() {
         let db = TestDb::new().await;
-        let first = attempt(&db).await;
-        let second = attempt(&db).await;
 
-        insert(&db, first.id, TaskRunAttemptOutputStream::Stdout, "first").await;
-        insert(&db, second.id, TaskRunAttemptOutputStream::Stdout, "second").await;
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
 
-        let rows = select(&db, SelectTaskRunAttemptOutputsDataFilter {
-            task_run_attempt_ids: Some(vec![first.id, second.id]),
-            ..filter()
-        }).await;
+        let first = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Failed).await;
+        let second = db.insert_task_run_attempt(&task_run, 2, TaskRunAttemptStatus::Running).await;
 
-        let grouped = group_task_run_attempt_output(rows);
+        insert(&db, &first, TaskRunAttemptOutputStream::Stdout, "first").await;
+        insert(&db, &second, TaskRunAttemptOutputStream::Stdout, "second").await;
 
+        let grouped = group_task_run_attempt_output(
+            select(&db, SelectTaskRunAttemptOutputsDataFilter {
+                task_run_id: Some(task_run.id),
+                ..filter()
+            }).await
+        );
+
+        assert_eq!(grouped.len(), 2);
         assert_eq!(grouped.get(&first.id).unwrap().stdout, "first");
         assert_eq!(grouped.get(&second.id).unwrap().stdout, "second");
     }
 
-    /// An empty id list has to mean "no rows" rather than `IN ()`, which is a SQLite
-    /// syntax error. A task run with no attempts reaches here.
+    /// `job_run_id` narrowed by `task_id` is what `job-run logs --task` filters on, and it
+    /// has to read only that task's output rather than the whole run's.
     #[tokio::test]
-    async fn an_empty_id_list_selects_nothing() {
+    async fn job_run_id_and_task_id_narrow_to_one_task() {
         let db = TestDb::new().await;
-        let task_run_attempt = attempt(&db).await;
 
-        insert(&db, task_run_attempt.id, TaskRunAttemptOutputStream::Stdout, "out").await;
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
 
-        let rows = select(&db, SelectTaskRunAttemptOutputsDataFilter {
-            task_run_attempt_ids: Some(Vec::new()),
+        let wanted_task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
+        let other_task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
+
+        let wanted = db.insert_task_run_attempt(&wanted_task_run, 1, TaskRunAttemptStatus::Running).await;
+        let other = db.insert_task_run_attempt(&other_task_run, 1, TaskRunAttemptStatus::Running).await;
+
+        insert(&db, &wanted, TaskRunAttemptOutputStream::Stdout, "wanted").await;
+        insert(&db, &other, TaskRunAttemptOutputStream::Stdout, "other").await;
+
+        let whole_run = select(&db, SelectTaskRunAttemptOutputsDataFilter {
+            job_run_id: Some(job_run.id),
             ..filter()
         }).await;
 
-        assert!(rows.is_empty());
+        let one_task = select(&db, SelectTaskRunAttemptOutputsDataFilter {
+            job_run_id: Some(job_run.id),
+            task_id: Some(wanted.task_id.clone()),
+            ..filter()
+        }).await;
+
+        assert_eq!(whole_run.len(), 2);
+        assert_eq!(one_task.len(), 1);
+        assert_eq!(one_task[0].content, "wanted");
+    }
+
+    /// The parent ids are carried, not left to a join - a row knows every run it belongs to.
+    #[tokio::test]
+    async fn a_row_carries_every_parent_id() {
+        let db = TestDb::new().await;
+        let task_run_attempt = attempt(&db).await;
+
+        insert(&db, &task_run_attempt, TaskRunAttemptOutputStream::Stdout, "out").await;
+
+        let rows = select(&db, SelectTaskRunAttemptOutputsDataFilter {
+            task_run_attempt_id: Some(task_run_attempt.id),
+            ..filter()
+        }).await;
+
+        assert_eq!(rows[0].task_run_id, task_run_attempt.task_run_id);
+        assert_eq!(rows[0].job_run_id, task_run_attempt.job_run_id);
+        assert_eq!(rows[0].job_id, task_run_attempt.job_id);
+        assert_eq!(rows[0].task_id, task_run_attempt.task_id);
     }
 
     /// An attempt that printed nothing has empty output, not unknown output.

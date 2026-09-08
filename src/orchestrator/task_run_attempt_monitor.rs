@@ -365,6 +365,10 @@ impl TaskRunAttemptMonitor {
                 &InsertTaskRunAttemptOutputData {
                     input: InsertTaskRunAttemptOutputDataInput {
                         task_run_attempt_id: task_run_attempt.id,
+                        task_run_id: task_run_attempt.task_run_id,
+                        job_run_id: task_run_attempt.job_run_id,
+                        job_id: task_run_attempt.job_id.clone(),
+                        task_id: task_run_attempt.task_id.clone(),
                         stream,
                         content,
                     },
@@ -892,7 +896,10 @@ mod tests {
                 filter: SelectTaskRunAttemptOutputsDataFilter {
                     id: None,
                     task_run_attempt_id: Some(task_run_attempt.id),
-                    task_run_attempt_ids: None,
+                    task_run_id: None,
+                    job_run_id: None,
+                    job_id: None,
+                    task_id: None,
                     stream: None,
                 },
                 sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),

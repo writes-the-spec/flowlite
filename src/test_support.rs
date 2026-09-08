@@ -391,7 +391,10 @@ impl TestDb {
                 filter: SelectTaskRunAttemptOutputsDataFilter {
                     id: None,
                     task_run_attempt_id: Some(task_run_attempt_id),
-                    task_run_attempt_ids: None,
+                    task_run_id: None,
+                    job_run_id: None,
+                    job_id: None,
+                    task_id: None,
                     stream: None,
                 },
                 sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),

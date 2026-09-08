@@ -5,7 +5,10 @@ The output of one [`task_run_attempt`](task_run_attempt.md), in chunks. **Append
 | Column | Meaning |
 |---|---|
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`. **Also the ordering** — see below. |
-| `task_run_attempt_id` | Foreign key to [`task_run_attempt`](task_run_attempt.md). The only parent id carried; see below. |
+| `task_run_attempt_id` | Foreign key to [`task_run_attempt`](task_run_attempt.md). |
+| `task_run_id` | Foreign key to [`task_run`](task_run.md). What the task-run page filters on. |
+| `job_run_id` | Foreign key to [`job_run`](job_run.md). What `job-run logs` filters on. |
+| `job_id`, `task_id` | Denormalized text, like [`task_run_attempt`](task_run_attempt.md) carries them. `job_run_id` + `task_id` is `job-run logs --task`. |
 | `stream` | `TaskRunAttemptOutputStream` — `stdout` or `stderr`. The streams stay apart because a task that failed usually explains itself on stderr while stdout still holds whatever it managed to produce. |
 | `created_at` | Bound from `Toolkit`. |
 | `content` | `TEXT NOT NULL`, already-validated UTF-8. Never empty: a stream with nothing new writes no row. |
@@ -14,11 +17,19 @@ The output of one [`task_run_attempt`](task_run_attempt.md), in chunks. **Append
 
 Every chunk of one stream is inserted by one writer in write order, so `ORDER BY id` *is* write order. A `seq` column would be a second source of truth for the same fact, and `group_task_run_attempt_output` depends on the order rather than re-deriving it — which is why the sort is a contract with `select_task_run_attempt_outputs`, not an incidental choice.
 
-## Why there are no denormalized parent ids
+## Why every parent id is carried
 
-`task_run_attempt` carries `job_run_id`, `job_id` and `task_id` so the log views need no join through `task_run`. This table deliberately does not, because **both its readers already hold the attempt ids they want output for** and filter on `task_run_attempt_ids`, an `IN (...)` list. That avoids the join for the same reason the denormalization does, with less schema — and it avoids an over-fetch the denormalization would have caused: `job-run logs --task X` filtered by `job_run_id` would read every task's output to print one task's.
+The same reason [`task_run_attempt`](task_run_attempt.md) carries its own: **a log view should not join through `task_run` to find the rows it wants.** Each reader filters by the parent it is already about, exactly, in one query:
 
-An empty id list becomes `AND 0 = 1` rather than `IN ()`, which is a syntax error. A task run with no attempts reaches that case.
+| Reader | Filter | Reads |
+|---|---|---|
+| task-run page | `task_run_id` | every attempt of that task run |
+| `job-run logs` | `job_run_id` | every attempt of that job run |
+| `job-run logs --task X` | `job_run_id` + `task_id` | only that task's attempts |
+
+Each of those is one indexed query for a whole view. Without the columns it is one query per attempt — the N+1 these exist to avoid — or an `IN (...)` list of ids the caller has to collect first, which also has to special-case the empty list, since `IN ()` is a syntax error.
+
+They also make the pruning this table will eventually need a single statement (`DELETE ... WHERE job_run_id = ?`) rather than a correlated subquery.
 
 ## One row per stream per pass
 

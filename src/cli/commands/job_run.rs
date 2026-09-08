@@ -81,19 +81,17 @@ impl JobRunLogsCmd {
             return Ok(());
         }
 
-        // The attempt list is already narrowed by `--task`, so filtering the output on the
-        // ids it holds narrows that query too: this reads only the output it prints, where
-        // filtering by job run would read every task's to print one task's.
-        let task_run_attempt_ids = task_run_attempts
-            .iter()
-            .map(|task_run_attempt| task_run_attempt.id)
-            .collect::<Vec<_>>();
-
+        // Filtered exactly as the attempts above were - the same job run, narrowed by the
+        // same `--task` - so this reads only the output it is about to print rather than
+        // every task's to print one task's.
         let task_run_attempt_output = crud.select_task_run_attempt_outputs(&mut conn, &SelectTaskRunAttemptOutputsData {
             filter: SelectTaskRunAttemptOutputsDataFilter {
                 id: None,
                 task_run_attempt_id: None,
-                task_run_attempt_ids: Some(task_run_attempt_ids),
+                task_run_id: None,
+                job_run_id: Some(self.job_run_id),
+                job_id: None,
+                task_id: self.task.clone(),
                 stream: None,
             },
             sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),
