@@ -10,9 +10,6 @@ use crate::toolkit::Toolkit;
 #[derive(Parser)]
 #[command(name = "FlowLite")]
 pub struct Cli {
-    #[arg(short = 'C', long, env = "FLOWLITE_CONFIG_DIR")]
-    pub config_dir: Option<PathBuf>,
-
     #[arg(short = 'D', long, env = "FLOWLITE_DATA_DIR")]
     pub data_dir: Option<PathBuf>,
 
@@ -33,7 +30,7 @@ impl Cli {
 
     pub async fn run(&self) -> anyhow::Result<()> {
 
-        let app_config = AppConfig::load(self.config_dir.clone(), self.data_dir.clone())?;
+        let app_config = AppConfig::load(self.data_dir.clone())?;
         let toolkit = Toolkit::new(app_config);
 
         match &self.command {

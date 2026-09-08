@@ -4,6 +4,7 @@ use axum::Extension;
 use axum::extract::{State, Query};
 use serde::Deserialize;
 
+use crate::app_config::AppConfig;
 use crate::crud::CRUD;
 use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
 use crate::crud::job_run::JobRunStatus;
@@ -20,8 +21,6 @@ pub const ALL_STATUSES: [JobRunStatus; 7] = [
     JobRunStatus::TimedOut,
 ];
 
-const DEFAULT_PAGE_SIZE: usize = 25;
-const MAX_PAGE_SIZE: usize = 100;
 
 #[derive(Deserialize)]
 pub struct HomeQuery {
@@ -36,8 +35,11 @@ impl HomeQuery {
         self.page.unwrap_or(1).max(1)
     }
 
-    pub fn page_size(&self) -> usize {
-        self.page_size.unwrap_or(DEFAULT_PAGE_SIZE).clamp(1, MAX_PAGE_SIZE)
+    /// The query string's own value, defaulted and capped by `[ui]` in config.toml.
+    pub fn page_size(&self, app_config: &AppConfig) -> usize {
+        self.page_size
+            .unwrap_or(app_config.ui.page_size as usize)
+            .clamp(1, app_config.ui.max_page_size as usize)
     }
 
     /// The job select posts an empty value for "All jobs", which means no filter at all
@@ -96,6 +98,7 @@ pub struct StatusChip {
 struct HomeRouteTemplate {
     current_route: &'static str,
     page_size: usize,
+    refresh_seconds: u32,
     table_href: String,
     jobs: Vec<Job>,
     selected_job_id: Option<String>,
@@ -108,8 +111,10 @@ pub async fn home_route(
     State(state): State<AppState>,
     Query(query): Query<HomeQuery>,
 ) -> impl IntoResponse {
+    let app_config = &state.toolkit.app_config;
+
     let page = query.page();
-    let page_size = query.page_size();
+    let page_size = query.page_size(app_config);
     let filter_job_id = query.job_id();
 
     let jobs = crud.select_jobs(&*state.conn_pool, &SelectJobsData {
@@ -148,6 +153,7 @@ pub async fn home_route(
     let template = HomeRouteTemplate {
         current_route: "home",
         page_size,
+        refresh_seconds: app_config.ui.refresh_interval_seconds,
         table_href,
         jobs,
         selected_job_id: filter_job_id,

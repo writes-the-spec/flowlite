@@ -38,13 +38,13 @@
             {% endfor %}
         </div>
 
-        <span class="section__note">Updates every 3 seconds</span>
+        <span class="section__note">Updates every {{ refresh_seconds }} seconds</span>
     </div>
 
     <div
         id="runs"
         hx-get="{{ table_href }}"
-        hx-trigger="load, every 3s"
+        hx-trigger="load, every {{ refresh_seconds }}s"
         hx-swap="innerHTML"
     >
         <div class="loading">

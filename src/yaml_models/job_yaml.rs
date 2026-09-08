@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use crate::yaml_models::defaults::default_u32;
 use anyhow::Context;
 use validator::Validate;
 use std::collections::BTreeMap;
@@ -14,13 +13,15 @@ pub struct JobYamlTask {
     pub command: String,
     #[serde(default)]
     pub depends_on: Vec<String>,
-    #[serde(default = "default_u32::<3600>")]
-    pub timeout: u32,
+    /// Seconds one attempt may run for. `None` is "not declared", which `CRUD::init`
+    /// resolves against `[job_defaults]` in config.toml rather than a number written here.
     #[serde(default)]
-    pub max_retries: u32,
+    pub timeout: Option<u32>,
+    #[serde(default)]
+    pub max_retries: Option<u32>,
     /// Seconds to wait after a failed attempt before the next one starts.
-    #[serde(default = "default_u32::<60>")]
-    pub retry_delay: u32,
+    #[serde(default)]
+    pub retry_delay: Option<u32>,
     /// Environment variables for the command, over the environment flowlite inherited.
     #[serde(default, deserialize_with = "deserialize_string_map")]
     pub env: BTreeMap<String, String>,
@@ -35,9 +36,10 @@ pub struct JobYaml {
     pub name: String,
     #[serde(default)]
     pub description: String,
-    /// How many runs of this job may run in parallel, 0 for no limit.
-    #[serde(default = "default_u32::<1>")]
-    pub max_parallel_runs: u32,
+    /// How many runs of this job may run in parallel, 0 for no limit. `None` is "not
+    /// declared" — see `JobYamlTask::timeout`.
+    #[serde(default)]
+    pub max_parallel_runs: Option<u32>,
     /// The parameters this job accepts, name to default value. A schedule or the CLI may
     /// override a declared name; an undeclared one is a submit error.
     #[serde(default, deserialize_with = "deserialize_string_map")]

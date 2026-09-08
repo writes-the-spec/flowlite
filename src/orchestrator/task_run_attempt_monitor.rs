@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use crate::app_config::AppConfig;
 use crate::crud::CRUD;
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus, UpdateTaskRunAttemptsData, UpdateTaskRunAttemptsDataFilter, UpdateTaskRunAttemptsDataInput};
@@ -8,14 +8,6 @@ use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRu
 use crate::poller::Service;
 use crate::signals::Signals;
 use chrono::Utc;
-
-
-/// How long a terminal pass waits for both readers to reach EOF.
-///
-/// Bounded because EOF is not guaranteed: something that escaped the process group can
-/// hold a pipe open after the kill. Poller::run handles rows in sequence, so an unbounded
-/// wait on one attempt would stop every other attempt from being handled at all.
-const READER_EOF_TIMEOUT: Duration = Duration::from_secs(2);
 
 
 /// Whether the ladder settled the attempt for good or handed it on to the next pass,
@@ -39,6 +31,7 @@ pub struct TaskRunAttemptMonitor {
     pub conn_pool: Arc<sqlx::SqlitePool>,
     pub children: Arc<TaskRunAttemptChildren>,
     pub signals: Arc<Signals>,
+    pub app_config: AppConfig,
 }
 
 
@@ -49,12 +42,14 @@ impl TaskRunAttemptMonitor {
         conn_pool: Arc<sqlx::SqlitePool>,
         children: Arc<TaskRunAttemptChildren>,
         signals: Arc<Signals>,
+        app_config: AppConfig,
     ) -> Self {
         Self {
             crud,
             conn_pool,
             children,
             signals,
+            app_config,
         }
     }
 
@@ -76,7 +71,7 @@ impl TaskRunAttemptMonitor {
     /// end at EOF and a pipe closes when the process holding it dies, so killing is what
     /// produces the EOF that lets `finish_reading` return. The reverse order — which is
     /// what this did while the pass read the pipes itself — would wait out the whole of
-    /// READER_EOF_TIMEOUT on every timeout and every stop.
+    /// the configured reader EOF timeout on every timeout and every stop.
     async fn handle_running_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         let mut task_run_attempt_child = self.take_task_run_attempt_child(task_run_attempt).await?;
@@ -226,7 +221,7 @@ impl TaskRunAttemptMonitor {
 
         // The kill comes before the drain: killing is what closes the pipes, and a closed
         // pipe is the EOF that ends a reader. Draining first would wait out the whole of
-        // READER_EOF_TIMEOUT on a process that is still running and still holding them.
+        // the EOF timeout on a process that is still running and still holding them.
         task_run_attempt_child.kill_process_group().await;
 
         self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
@@ -318,7 +313,10 @@ impl TaskRunAttemptMonitor {
         let mut stdout = String::new();
         let mut stderr = String::new();
 
-        let drained = tokio::time::timeout(READER_EOF_TIMEOUT, async {
+        // Bounded because EOF is not guaranteed: something that escaped the process group
+        // can hold a pipe open after the kill. Poller::run handles rows in sequence, so an
+        // unbounded wait on one attempt would stop every other attempt being handled.
+        let drained = tokio::time::timeout(self.app_config.orchestrator.reader_eof_timeout(), async {
             while let Some(chunk) = task_run_attempt_child.chunks.recv().await {
                 match chunk.stream {
                     TaskRunAttemptOutputStream::Stdout => stdout.push_str(&chunk.content),
@@ -480,6 +478,7 @@ impl Service for TaskRunAttemptMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use crate::crud::job_run::JobRunStatus;
     use crate::crud::task_run::TaskRunStatus;
     use crate::crud::task_run_attempt_output::{SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort};
@@ -836,7 +835,7 @@ mod tests {
         assert!(
             stdout.ends_with(&format!(
                 "\n[flowlite: output truncated, exceeded {} bytes]\n",
-                crate::orchestrator::task_run_attempt_reader::MAX_STREAM_BYTES,
+                crate::app_config::AppConfig::default().orchestrator.max_stream_bytes,
             )),
             "the cap did not report itself",
         );

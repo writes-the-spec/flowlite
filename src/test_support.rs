@@ -48,8 +48,8 @@ impl TestDb {
         let data_dir = std::env::temp_dir().join(format!("flowlite-test-{}", uuid::Uuid::new_v4()));
 
         let app_config = AppConfig {
-            config_dir: data_dir.join("config").to_string_lossy().into_owned(),
             data_dir: data_dir.to_string_lossy().into_owned(),
+            ..AppConfig::default()
         };
 
         let toolkit = Arc::new(Toolkit::new(app_config));
@@ -93,6 +93,7 @@ impl TestDb {
             self.conn_pool.clone(),
             self.children.clone(),
             self.signals.clone(),
+            self.app_config(),
         )
     }
 
@@ -102,7 +103,13 @@ impl TestDb {
             self.conn_pool.clone(),
             self.children.clone(),
             self.signals.clone(),
+            self.app_config(),
         )
+    }
+
+    /// What a data directory with no config.toml gets, which is what the tests run with.
+    pub fn app_config(&self) -> AppConfig {
+        AppConfig::default()
     }
 
     pub async fn insert_job_run(&self, status: JobRunStatus) -> JobRun {
@@ -426,11 +433,13 @@ impl TestDb {
                 stdout,
                 TaskRunAttemptOutputStream::Stdout,
                 chunks_sender.clone(),
+                self.app_config(),
             )),
             tokio::spawn(read_task_run_attempt_stream(
                 stderr,
                 TaskRunAttemptOutputStream::Stderr,
                 chunks_sender,
+                self.app_config(),
             )),
         ];
 

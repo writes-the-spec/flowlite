@@ -45,7 +45,7 @@ pub async fn job_run_table_route(
     Query(query): Query<HomeQuery>,
 ) -> impl IntoResponse {
     let page = query.page();
-    let page_size = query.page_size();
+    let page_size = query.page_size(&state.toolkit.app_config);
     let filter_job_id = query.job_id();
     let offset = (page - 1) * page_size;
 

@@ -33,7 +33,11 @@ impl CRUD {
     where
         E: Acquire<'e, Database = sqlx::Sqlite>,
     {
-        let config_dir = PathBuf::from(&self.toolkit.app_config.config_dir);
+        let data_dir = PathBuf::from(&self.toolkit.app_config.data_dir);
+
+        // What a job, task or schedule gets for a field its YAML leaves out.
+        let job_defaults = &self.toolkit.app_config.job_defaults;
+        let schedule_defaults = &self.toolkit.app_config.schedule_defaults;
 
         let mut conn = executor.acquire().await
             .context("Failed to acquire a database connection to read the configuration into")?;
@@ -43,7 +47,7 @@ impl CRUD {
 
         let mut row_id = 0;
 
-        let jobs_dir = config_dir.join("jobs");
+        let jobs_dir = data_dir.join("jobs");
         if jobs_dir.exists() {
             for job_path in CRUD::read_dir_sorted(&jobs_dir)? {
                 if Self::is_yaml_file(&job_path) {
@@ -63,7 +67,8 @@ impl CRUD {
                             job_id: job_yaml.id.clone(),
                             name: job_yaml.name,
                             description: job_yaml.description,
-                            max_parallel_runs: job_yaml.max_parallel_runs,
+                            max_parallel_runs: job_yaml.max_parallel_runs
+                                .unwrap_or(job_defaults.max_parallel_runs),
                             parameters: job_yaml.parameters.clone(),
                             env: job_yaml.env.clone(),
                         }
@@ -85,9 +90,12 @@ impl CRUD {
                                 description: task_yaml.description,
                                 command: task_yaml.command,
                                 depends_on: task_yaml.depends_on.clone(),
-                                timeout: task_yaml.timeout,
-                                max_retries: task_yaml.max_retries,
-                                retry_delay: task_yaml.retry_delay,
+                                timeout: task_yaml.timeout
+                                    .unwrap_or(job_defaults.timeout_seconds),
+                                max_retries: task_yaml.max_retries
+                                    .unwrap_or(job_defaults.max_retries),
+                                retry_delay: task_yaml.retry_delay
+                                    .unwrap_or(job_defaults.retry_delay_seconds),
                                 env: task_yaml.env.clone(),
                                 working_dir: task_yaml.working_dir.clone(),
                             }
@@ -125,15 +133,20 @@ impl CRUD {
             }
         }
 
-        let schedules_dir = config_dir.join("schedules");
+        let schedules_dir = data_dir.join("schedules");
         if schedules_dir.exists() {
             for schedule_path in CRUD::read_dir_sorted(&schedules_dir)? {
                 if Self::is_yaml_file(&schedule_path) {
                     let schedule_yaml = ScheduleYaml::from_yaml(&schedule_path)?;
 
+                    // Resolved once: the trigger that computes the first next_run and the
+                    // row it is stored on must read the cron in the same zone.
+                    let timezone = schedule_yaml.timezone
+                        .unwrap_or(schedule_defaults.timezone);
+
                     let cron_trigger = CronTrigger::new(
                         schedule_yaml.cron.clone(),
-                        schedule_yaml.timezone,
+                        timezone,
                         schedule_yaml.start_date,
                         schedule_yaml.end_date,
                     );
@@ -148,7 +161,7 @@ impl CRUD {
                             name: schedule_yaml.name,
                             description: schedule_yaml.description,
                             cron: schedule_yaml.cron,
-                            timezone: schedule_yaml.timezone,
+                            timezone,
                             start_date: schedule_yaml.start_date,
                             end_date: schedule_yaml.end_date,
                             disabled: schedule_yaml.disabled,
@@ -188,7 +201,7 @@ impl CRUD {
         tx.commit().await
             .with_context(|| format!(
                 "Failed to commit the configuration read from {}",
-                config_dir.display(),
+                data_dir.display(),
             ))?;
 
         Ok(())

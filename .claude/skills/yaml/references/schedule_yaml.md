@@ -1,6 +1,6 @@
 # ScheduleYaml
 
-[src/yaml_models/schedule_yaml.rs](../../../../src/yaml_models/schedule_yaml.rs) — one file per schedule under `<config_dir>/schedules/*.yml`, seeding `mem.schedule` and `mem.schedule_job`.
+[src/yaml_models/schedule_yaml.rs](../../../../src/yaml_models/schedule_yaml.rs) — one file per schedule under `<data_dir>/schedules/*.yml`, seeding `mem.schedule` and `mem.schedule_job`.
 
 ```yaml
 id: nightly
@@ -23,7 +23,7 @@ jobs:
 | `name` | yes | — | Display label only. |
 | `description` | no | `""` | |
 | `cron` | yes | — | Parsed into a `cron::Schedule` at load, so an invalid expression fails startup naming the file. |
-| `timezone` | no | `UTC` | A `chrono_tz::Tz` name, e.g. `Europe/Vienna`. The cron expression is evaluated in it. |
+| `timezone` | no | `[schedule_defaults]`, `UTC` | A `chrono_tz::Tz` name, e.g. `Europe/Vienna`. The cron expression is evaluated in it. `Option` on the model: `CRUD::init` resolves a `None` against config.toml. |
 | `start_date` | no | `None` | Date only. Occurrences before it are pulled forward to it. |
 | `end_date` | no | `None` | Date only, inclusive to `23:59:59`. Past it the schedule stops firing for good. |
 | `disabled` | no | `false` | A disabled schedule is filtered out of the scheduler's poll. |

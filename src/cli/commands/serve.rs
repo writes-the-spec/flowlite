@@ -7,7 +7,7 @@ use crate::router::app::app_state::AppState;
 use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
 use crate::orchestrator::Orchestrator;
-use crate::poller::{Poller, POLL_INTERVAL};
+use crate::poller::Poller;
 use crate::scheduler::Scheduler;
 use crate::signals::Signals;
 
@@ -39,6 +39,8 @@ impl ServeCmd {
 
         let signals = Arc::new(Signals::new());
 
+        let app_config = toolkit.app_config.clone();
+
         let scheduler = Scheduler::new(
             toolkit.clone(),
             crud.clone(),
@@ -51,13 +53,14 @@ impl ServeCmd {
         Poller::new(
             Arc::new(scheduler),
             Arc::new(tokio::sync::Notify::new()),
-            POLL_INTERVAL,
+            app_config.clone(),
         ).start();
 
         let orchestrator = Orchestrator::new(
             crud.clone(),
             conn_pool.clone(),
             signals.clone(),
+            app_config,
         );
 
         orchestrator.start();

@@ -56,6 +56,7 @@ struct JobRunIdRouteTemplate {
     ticks: Vec<Tick>,
     task_count: String,
     polling: bool,
+    refresh_seconds: u32,
     stoppable: bool,
 }
 
@@ -203,6 +204,7 @@ pub async fn job_run_id_route(
         ticks: build_ticks(window_seconds),
         task_count: format!("{} task{}", lane_count, if lane_count == 1 { "" } else { "s" }),
         polling: matches!(job_run.status, JobRunStatus::Pending | JobRunStatus::Running),
+        refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
         stoppable: matches!(job_run.status, JobRunStatus::Running),
     };
 

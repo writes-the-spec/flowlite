@@ -9,8 +9,6 @@ use crate::crud::job::{SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort}
 use crate::crud::task::{SelectTasksData, SelectTasksDataFilter};
 use crate::router::app::app_state::AppState;
 
-const PAGE_SIZE: u32 = 25;
-
 pub struct JobEntry {
     pub job_id: String,
     pub name: String,
@@ -48,8 +46,10 @@ pub async fn jobs_route(
 ) -> impl IntoResponse {
     let conn = &*state.conn_pool;
 
+    let page_size = state.toolkit.app_config.ui.page_size;
+
     let page = query.page.unwrap_or(1).max(1);
-    let offset = (page - 1) * PAGE_SIZE;
+    let offset = (page - 1) * page_size;
 
     // A cleared search box posts an empty value, which means no filter rather than a
     // filter on the empty name.
@@ -61,15 +61,15 @@ pub async fn jobs_route(
             name_like: name_like.clone(),
         },
         sort: Some(SelectJobsDataSort::RowId),
-        limit: Some(PAGE_SIZE + 1), // One extra row tells us whether a next page exists.
+        limit: Some(page_size + 1), // One extra row tells us whether a next page exists.
         offset: Some(offset),
     }).await.unwrap_or_default();
 
-    let has_next_page = jobs.len() > PAGE_SIZE as usize;
+    let has_next_page = jobs.len() > page_size as usize;
 
     let mut entries = Vec::new();
 
-    for job in jobs.into_iter().take(PAGE_SIZE as usize) {
+    for job in jobs.into_iter().take(page_size as usize) {
         let tasks = crud.select_tasks(conn, &SelectTasksData {
             filter: SelectTasksDataFilter {
                 task_id: None,

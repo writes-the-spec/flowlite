@@ -2,7 +2,7 @@
 
 flowlite is a lightweight scheduler and orchestrator that ships as a single, zero-dependency Rust binary.
 
-No database to install, no message broker, no runtime to configure — download the binary, point it at a config directory, and it runs your jobs.
+No database to install, no message broker, no runtime to configure — download the binary, point it at a directory of YAML, and it runs your jobs.
 
 ## Why flowlite
 
@@ -19,7 +19,7 @@ cargo install flowlite
 
 ## Quick start
 
-Define a job in `.config/jobs/hello.yaml` (`.yml` works too):
+Define a job in `jobs/hello.yaml` (`.yml` works too):
 
 ```yaml
 id: hello-world
@@ -30,10 +30,18 @@ tasks:
     command: echo "hello from flowlite"
 ```
 
-Start the server (runs the scheduler and the UI):
+Start the server (runs the scheduler and the UI) from the directory that `jobs/` sits in:
 
 ```bash
-flowlite --config-dir .config serve
+flowlite serve
+```
+
+flowlite reads `jobs/`, `schedules/` and an optional `config.toml` from its data
+directory, and writes `flowlite.db` there. That directory is the current one unless
+`-D` / `--data-dir` / `FLOWLITE_DATA_DIR` says otherwise:
+
+```bash
+flowlite --data-dir /var/lib/flowlite serve
 ```
 
 Submit the job:
@@ -75,7 +83,7 @@ tasks:
 
 ## Schedules
 
-Schedules trigger jobs on a cron expression. Define them in `.config/schedules/daily.yaml`:
+Schedules trigger jobs on a cron expression. Define them in `schedules/daily.yaml`:
 
 ```yaml
 id: daily-schedule
@@ -156,7 +164,7 @@ A rerun replays the original run's parameters and `FLOWLITE_SCHEDULED_AT` unchan
 
 ### `env:` is visible in the dashboard, on purpose
 
-The merged `env:` values — the job's and the task's — are shown as written on the run and task pages. The YAML they came from is already plaintext on disk, so rendering it leaks nothing a reader of the config directory couldn't already see, and hiding it would make a wrong `env:` value undebuggable from the run that used it. A secret belongs in the environment flowlite's own process runs in — the command inherits that like any environment, and flowlite neither stores nor displays it.
+The merged `env:` values — the job's and the task's — are shown as written on the run and task pages. The YAML they came from is already plaintext on disk, so rendering it leaks nothing a reader of the data directory couldn't already see, and hiding it would make a wrong `env:` value undebuggable from the run that used it. A secret belongs in the environment flowlite's own process runs in — the command inherits that like any environment, and flowlite neither stores nor displays it.
 
 ## Retries
 
@@ -240,11 +248,49 @@ flowlite job submit hello-world
 A read-only, pure HTML dashboard is served directly from the binary:
 
 ```bash
-flowlite --config-dir .config serve
+flowlite serve
 ```
 
 Visit `http://localhost:8000` to see the job list, run history, DAG status, and the
 output of any task.
+
+## Configuration
+
+Everything below has a default, so flowlite runs with no `config.toml` at all. Write one
+in the data directory to change any of it; a file naming a single key leaves every other
+default alone, and each key can also be set as an environment variable
+(`FLOWLITE_UI__PAGE_SIZE=10`, `FLOWLITE_ORCHESTRATOR__POLL_INTERVAL_SECONDS=5`).
+
+```toml
+[orchestrator]
+poll_interval_seconds = 1       # how often a service looks for work itself
+error_backoff_seconds = 5       # pause before a failed service restarts
+reader_eof_timeout_seconds = 2  # wait for a finished attempt's output to end
+max_stream_bytes = 1048576      # per stream, per attempt, then truncated
+read_buffer_bytes = 8192        # one read from a running command's pipe
+
+[ui]
+page_size = 25                  # rows per page on the run, job and schedule lists
+max_page_size = 100             # the largest ?page_size= the run list accepts
+refresh_interval_seconds = 3    # how often a page showing a live run refreshes
+
+[job_defaults]
+timeout_seconds = 3600          # what a task with no timeout: gets
+max_retries = 0
+retry_delay_seconds = 60
+max_parallel_runs = 1           # what a job with no max_parallel_runs: gets
+
+[schedule_defaults]
+timezone = "UTC"                # what a schedule with no timezone: reads its cron in
+```
+
+`[job_defaults]` and `[schedule_defaults]` fill in what a job's or schedule's YAML leaves
+out, and they are read when the YAML is — at startup. So a task with no `timeout:` takes its timeout from the data directory it was
+read in, and a run already submitted keeps the value it was submitted with.
+
+The data directory itself is the one thing not worth setting here (`data_dir` in a file
+inside it is circular); pass `-D` / `--data-dir` / `FLOWLITE_DATA_DIR`. Likewise
+`--address` and `--port` are flags on `serve`.
 
 ## Upgrading
 
@@ -263,10 +309,9 @@ The remedy is to delete the run history and let it be recreated on the next star
 rm <data_dir>/flowlite.db
 ```
 
-`<data_dir>` is whatever you pass to `--data-dir`, and otherwise your OS data directory
-plus `flowlite` (`~/Library/Application Support/flowlite` on macOS,
-`~/.local/share/flowlite` on Linux). Only run history is lost — jobs and schedules are
-read from the YAML on every start.
+`<data_dir>` is whatever you pass to `--data-dir`, and otherwise the directory you run
+from. Only run history is lost — jobs and schedules are read from the YAML on every
+start.
 
 ## Status
 

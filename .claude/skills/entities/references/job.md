@@ -1,6 +1,6 @@
 # `job` (mem)
 
-One row per job YAML file under `<config_dir>/jobs/*.yml` — the *definition* of a job, never one of its executions. The execution is [`job_run`](job_run.md), and the two are not interchangeable: a `job` is the template, a `job_run` is one run of it.
+One row per job YAML file under `<data_dir>/jobs/*.yml` — the *definition* of a job, never one of its executions. The execution is [`job_run`](job_run.md), and the two are not interchangeable: a `job` is the template, a `job_run` is one run of it.
 
 In-memory config, re-seeded on every startup, so nothing here survives a restart independently of the YAML.
 

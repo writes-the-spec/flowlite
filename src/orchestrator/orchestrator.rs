@@ -7,7 +7,8 @@ use crate::orchestrator::task_run_attempt_dispatcher::TaskRunAttemptDispatcher;
 use crate::orchestrator::task_run_attempt_monitor::TaskRunAttemptMonitor;
 use crate::orchestrator::task_run_dispatcher::TaskRunDispatcher;
 use crate::orchestrator::task_run_monitor::TaskRunMonitor;
-use crate::poller::{Poller, POLL_INTERVAL};
+use crate::app_config::AppConfig;
+use crate::poller::Poller;
 use crate::signals::Signals;
 
 
@@ -21,6 +22,8 @@ pub struct Orchestrator {
     /// The child processes the two attempt services share: the dispatcher spawns them,
     /// the monitor waits on them, and `shutdown` kills whatever is left.
     pub children: Arc<TaskRunAttemptChildren>,
+    /// config.toml, or its defaults.
+    pub app_config: AppConfig,
 }
 
 
@@ -30,12 +33,14 @@ impl Orchestrator {
         crud: Arc<CRUD>,
         conn_pool: Arc<sqlx::SqlitePool>,
         signals: Arc<Signals>,
+        app_config: AppConfig,
     ) -> Self {
         Self {
             crud,
             conn_pool,
             signals,
             children: Arc::new(TaskRunAttemptChildren::new()),
+            app_config,
         }
     }
 
@@ -90,6 +95,7 @@ impl Orchestrator {
             self.conn_pool.clone(),
             self.children.clone(),
             self.signals.clone(),
+            self.app_config.clone(),
         );
 
         let task_run_attempt_monitor = TaskRunAttemptMonitor::new(
@@ -97,14 +103,15 @@ impl Orchestrator {
             self.conn_pool.clone(),
             self.children.clone(),
             self.signals.clone(),
+            self.app_config.clone(),
         );
 
-        Poller::new(Arc::new(job_run_dispatcher), job_run_dispatcher_wakeup, POLL_INTERVAL).start();
-        Poller::new(Arc::new(job_run_monitor), job_run_monitor_wakeup, POLL_INTERVAL).start();
-        Poller::new(Arc::new(task_run_dispatcher), task_run_dispatcher_wakeup, POLL_INTERVAL).start();
-        Poller::new(Arc::new(task_run_monitor), task_run_monitor_wakeup, POLL_INTERVAL).start();
-        Poller::new(Arc::new(task_run_attempt_dispatcher), task_run_attempt_dispatcher_wakeup, POLL_INTERVAL).start();
-        Poller::new(Arc::new(task_run_attempt_monitor), task_run_attempt_monitor_wakeup, POLL_INTERVAL).start();
+        Poller::new(Arc::new(job_run_dispatcher), job_run_dispatcher_wakeup, self.app_config.clone()).start();
+        Poller::new(Arc::new(job_run_monitor), job_run_monitor_wakeup, self.app_config.clone()).start();
+        Poller::new(Arc::new(task_run_dispatcher), task_run_dispatcher_wakeup, self.app_config.clone()).start();
+        Poller::new(Arc::new(task_run_monitor), task_run_monitor_wakeup, self.app_config.clone()).start();
+        Poller::new(Arc::new(task_run_attempt_dispatcher), task_run_attempt_dispatcher_wakeup, self.app_config.clone()).start();
+        Poller::new(Arc::new(task_run_attempt_monitor), task_run_attempt_monitor_wakeup, self.app_config.clone()).start();
 
     }
 

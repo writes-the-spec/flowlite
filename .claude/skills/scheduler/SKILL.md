@@ -15,13 +15,13 @@ That is why it submits a job **unconditionally**, even one whose earlier run is 
 
 ## Definition (YAML → in-memory `mem.schedule` + `mem.schedule_job`)
 
-A schedule is a YAML file under `<config_dir>/schedules/*.yml`, parsed by `ScheduleYaml` ([src/yaml_models/schedule_yaml.rs](../../../src/yaml_models/schedule_yaml.rs)):
+A schedule is a YAML file under `<data_dir>/schedules/*.yml`, parsed by `ScheduleYaml` ([src/yaml_models/schedule_yaml.rs](../../../src/yaml_models/schedule_yaml.rs)):
 
 ```yaml
 id: nightly
 name: Nightly
 cron: "0 0 3 * * *"     # 6 fields, seconds first
-timezone: Europe/Vienna # defaults to UTC
+timezone: Europe/Vienna # defaults to [schedule_defaults] in config.toml, itself UTC
 start_date: 2026-01-01  # optional
 end_date: 2026-12-31    # optional
 disabled: false
@@ -54,7 +54,7 @@ A schedule that fails to be handled is logged and left for the next tick; only a
 
 `CronTrigger::get_next_run` ([src/cron_trigger.rs](../../../src/cron_trigger.rs)) returns `None` past `end_date`, which writes `next_run = NULL`. The filter is `next_run < now`, and SQL comparisons against NULL are never true, so **a NULL `next_run` retires the schedule for the rest of the process's life** — that is how an expired schedule stops firing, and it is also what a bug that nulls `next_run` would look like.
 
-`from_schedule` unwraps the parsed cron expression and timezone. That is safe only because `ScheduleYaml` deserializes them into `cron::Schedule` and `Tz` at load time, so an invalid one fails startup, not the loop. Don't build a `Schedule` row from anything that hasn't been through that.
+`from_schedule` unwraps the parsed cron expression and timezone. That is safe only because `ScheduleYaml` deserializes them into `cron::Schedule` and `Option<Tz>` at load time — and `AppConfig` deserializes the fallback zone the same way — so an invalid one fails startup, not the loop. Don't build a `Schedule` row from anything that hasn't been through that.
 
 ## Gotchas
 

@@ -10,7 +10,7 @@
     id="task-run"
     {% if polling %}
     hx-get="/task-runs/{{ task_run.id }}"
-    hx-trigger="every 3s"
+    hx-trigger="every {{ refresh_seconds }}s"
     hx-select="#task-run"
     hx-target="#task-run"
     hx-swap="outerHTML"

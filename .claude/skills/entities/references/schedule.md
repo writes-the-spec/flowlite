@@ -1,6 +1,6 @@
 # `schedule` (mem)
 
-One row per schedule YAML file under `<config_dir>/schedules/*.yml`. The [Scheduler](../../scheduler/SKILL.md) polls this table once a second and submits the jobs of every due schedule.
+One row per schedule YAML file under `<data_dir>/schedules/*.yml`. The [Scheduler](../../scheduler/SKILL.md) polls this table once a second and submits the jobs of every due schedule.
 
 | Column | Meaning |
 |---|---|
@@ -8,7 +8,7 @@ One row per schedule YAML file under `<config_dir>/schedules/*.yml`. The [Schedu
 | `schedule_id` | **Primary key.** |
 | `name`, `description` | Display only. `description` is `NOT NULL`, defaulted to `""` by serde. |
 | `cron` | **Six fields, seconds first** (the `cron` crate's dialect) — a five-field crontab expression silently means something else. |
-| `timezone` | IANA name; defaults to UTC in the YAML. |
+| `timezone` | IANA name. A schedule that declares none takes `[schedule_defaults]` from the data dir's config.toml, which itself defaults to UTC. |
 | `start_date`, `end_date` | Nullable `DATE`. An open-ended schedule genuinely has no bound. |
 | `disabled` | `INTEGER NOT NULL` — a boolean has no third state. |
 | `next_run` | Nullable `TIMESTAMP`. Unset until computed; `NULL` past `end_date`. |

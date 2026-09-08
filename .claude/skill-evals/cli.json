@@ -24,7 +24,7 @@
     "should_trigger": true
   },
   {
-    "query": "ops wants `flowlite validate` that just parses the config dir and exits nonzero if anything is broken. where does a command like that go",
+    "query": "ops wants `flowlite validate` that just parses the data dir's YAML and exits nonzero if anything is broken. where does a command like that go",
     "should_trigger": true
   },
   {

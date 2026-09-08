@@ -1,6 +1,6 @@
 # JobYaml
 
-[src/yaml_models/job_yaml.rs](../../../../src/yaml_models/job_yaml.rs) — one file per job under `<config_dir>/jobs/*.yml`, seeding `mem.job`, `mem.task` and `mem.task_dependent`.
+[src/yaml_models/job_yaml.rs](../../../../src/yaml_models/job_yaml.rs) — one file per job under `<data_dir>/jobs/*.yml`, seeding `mem.job`, `mem.task` and `mem.task_dependent`.
 
 ```yaml
 id: my-job
@@ -20,12 +20,14 @@ tasks:
 
 ## `JobYaml`
 
+A `[job_defaults]` default is the data dir's `config.toml` value, falling back to the number shown — the field is `Option` on the model and resolved by `CRUD::init`.
+
 | Field | Required | Default | Notes |
 |---|---|---|---|
 | `id` | yes | — | Primary key of `mem.job`. The id CLI and API lookups filter on — **not** `name`. |
 | `name` | yes | — | Display label only, not unique. |
 | `description` | no | `""` | |
-| `max_parallel_runs` | no | `1` | How many runs of this job may be `Running` at once. **`0` means no limit.** Enforced only in `JobRunDispatcher::settle_as_pending`; submitting is never rejected for exceeding it. |
+| `max_parallel_runs` | no | `[job_defaults]`, `1` | How many runs of this job may be `Running` at once. **`0` means no limit.** Enforced only in `JobRunDispatcher::settle_as_pending`; submitting is never rejected for exceeding it. |
 | `parameters` | no | `{}` | Declared name to default value. A schedule's `jobs[].parameters` or `job submit --param` may override a declared name; naming one this job does not declare is a submit error, not a silent no-op. See the [entities skill](../../entities/references/job.md). |
 | `env` | no | `{}` | Environment variables for **every** task of this job. A task's own `env:` wins the names both of them set; the merge happens in `submit_job`, so `task_run.env` holds the merged result. |
 | `tasks` | no | `[]` | A job with no tasks is legal; its job runs finish `Succeeded` immediately. |
@@ -38,9 +40,9 @@ tasks:
 | `description` | no | `""` | What the task does, in words. The job page's task table shows this rather than the command. |
 | `command` | yes | — | Run as `sh -c <command>`, so shell syntax works. |
 | `depends_on` | no | `[]` | Task ids **of the same job**. |
-| `timeout` | no | `3600` | Seconds. Applies per *attempt*, not to the task run as a whole. |
-| `max_retries` | no | `0` | Total executions are `1 + max_retries`; only a `Failed` attempt is retried. |
-| `retry_delay` | no | `60` | Seconds to wait after a failed attempt before the next one starts. Enforced in `TaskRunAttemptDispatcher::settle_as_pending`, measured from the retry row's `created_at`. |
+| `timeout` | no | `[job_defaults]`, `3600` | Seconds. Applies per *attempt*, not to the task run as a whole. |
+| `max_retries` | no | `[job_defaults]`, `0` | Total executions are `1 + max_retries`; only a `Failed` attempt is retried. |
+| `retry_delay` | no | `[job_defaults]`, `60` | Seconds to wait after a failed attempt before the next one starts. Enforced in `TaskRunAttemptDispatcher::settle_as_pending`, measured from the retry row's `created_at`. |
 | `env` | no | `{}` | Environment variables for this task, layered over the job's `env:` and then over whatever flowlite itself inherited. A name set here beats the same name on the job. Shown on the task page, `/jobs/{job_id}/tasks/{task_id}` — the job's own `env:` is not shown anywhere in the UI. |
 | `working_dir` | no | `""` | The command's working directory. Empty means inherit the server's own. |
 

@@ -9,8 +9,6 @@ use crate::crud::schedule::{SelectSchedulesData, SelectSchedulesDataFilter, Sele
 use crate::router::app::app_state::AppState;
 use crate::router::app::format;
 
-const PAGE_SIZE: u32 = 25;
-
 pub struct ScheduleEntry {
     pub schedule_id: String,
     pub name: String,
@@ -50,8 +48,10 @@ pub async fn schedules_route(
 ) -> impl IntoResponse {
     let conn = &*state.conn_pool;
 
+    let page_size = state.toolkit.app_config.ui.page_size;
+
     let page = query.page.unwrap_or(1).max(1);
-    let offset = (page - 1) * PAGE_SIZE;
+    let offset = (page - 1) * page_size;
 
     // A cleared search box posts an empty value, which means no filter rather than a
     // filter on the empty name.
@@ -64,13 +64,13 @@ pub async fn schedules_route(
             ..Default::default()
         },
         sort: Some(SelectSchedulesDataSort::RowId),
-        limit: Some(PAGE_SIZE + 1), // One extra row tells us whether a next page exists.
+        limit: Some(page_size + 1), // One extra row tells us whether a next page exists.
         offset: Some(offset),
     }).await.unwrap_or_default();
 
-    let has_next_page = schedules.len() > PAGE_SIZE as usize;
+    let has_next_page = schedules.len() > page_size as usize;
 
-    let entries = schedules.into_iter().take(PAGE_SIZE as usize).map(|schedule| {
+    let entries = schedules.into_iter().take(page_size as usize).map(|schedule| {
         ScheduleEntry {
             schedule_id: schedule.schedule_id,
             name: schedule.name,

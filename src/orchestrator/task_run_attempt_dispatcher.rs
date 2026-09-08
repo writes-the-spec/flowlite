@@ -8,6 +8,7 @@ use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAtte
 use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStream;
 use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
 use crate::orchestrator::task_run_attempt_env::build_task_run_attempt_env;
+use crate::app_config::AppConfig;
 use crate::orchestrator::task_run_attempt_reader::read_task_run_attempt_stream;
 use crate::poller::Service;
 use crate::signals::Signals;
@@ -24,6 +25,7 @@ pub struct TaskRunAttemptDispatcher {
     pub conn_pool: Arc<sqlx::SqlitePool>,
     pub children: Arc<TaskRunAttemptChildren>,
     pub signals: Arc<Signals>,
+    pub app_config: AppConfig,
 }
 
 
@@ -34,12 +36,14 @@ impl TaskRunAttemptDispatcher {
         conn_pool: Arc<sqlx::SqlitePool>,
         children: Arc<TaskRunAttemptChildren>,
         signals: Arc<Signals>,
+        app_config: AppConfig,
     ) -> Self {
         Self {
             crud,
             conn_pool,
             children,
             signals,
+            app_config,
         }
     }
 
@@ -181,6 +185,7 @@ impl TaskRunAttemptDispatcher {
                 stdout,
                 TaskRunAttemptOutputStream::Stdout,
                 chunks_sender.clone(),
+                self.app_config.clone(),
             )),
             // The original sender moves in here rather than being kept: the channel closes
             // when the last sender drops, and that close is how TaskRunAttemptMonitor knows
@@ -190,6 +195,7 @@ impl TaskRunAttemptDispatcher {
                 stderr,
                 TaskRunAttemptOutputStream::Stderr,
                 chunks_sender,
+                self.app_config.clone(),
             )),
         ];
 

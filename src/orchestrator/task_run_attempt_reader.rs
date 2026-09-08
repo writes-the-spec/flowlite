@@ -1,16 +1,7 @@
+use crate::app_config::AppConfig;
 use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStream;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::mpsc::UnboundedSender;
-
-
-/// The most output one stream of one attempt records.
-///
-/// Past it the reader keeps reading and stops recording, which bounds both the table and
-/// the memory in flight: the channel is unbounded, so the reader declining to send is the
-/// only thing that caps it.
-pub const MAX_STREAM_BYTES: usize = 1024 * 1024;
-
-const READ_BUF_BYTES: usize = 8192;
 
 
 /// One coalescible piece of one stream, already validated as UTF-8.
@@ -38,15 +29,20 @@ pub struct TaskRunAttemptOutputChunk {
 /// A reader whose EOF never comes — a grandchild that escaped the process group still
 /// holds the pipe — is aborted by `TaskRunAttemptChild::abort_readers`, since it will not
 /// return on its own.
+/// `[orchestrator]`'s `max_stream_bytes` is the most output one stream of one attempt
+/// records. Past it the reader keeps reading and stops recording, which bounds both the
+/// table and the memory in flight: the channel is unbounded, so the reader declining to
+/// send is the only thing that caps it.
 pub async fn read_task_run_attempt_stream<R>(
     mut reader: R,
     stream: TaskRunAttemptOutputStream,
     chunks: UnboundedSender<TaskRunAttemptOutputChunk>,
+    app_config: AppConfig,
 )
 where
     R: AsyncRead + Unpin,
 {
-    let mut buf = [0u8; READ_BUF_BYTES];
+    let mut buf = vec![0u8; app_config.orchestrator.read_buffer_bytes];
     let mut carry: Vec<u8> = Vec::new();
     let mut recorded: usize = 0;
     let mut capped = false;
@@ -69,7 +65,7 @@ where
             continue;
         }
 
-        if send_within_cap(stream, &chunks, &mut recorded, &mut capped, content).is_err() {
+        if send_within_cap(stream, &chunks, &mut recorded, &mut capped, content, &app_config).is_err() {
             return;
         }
     }
@@ -83,6 +79,7 @@ where
             &mut recorded,
             &mut capped,
             char::REPLACEMENT_CHARACTER.to_string(),
+            &app_config,
         );
     }
 }
@@ -150,9 +147,12 @@ fn send_within_cap(
     recorded: &mut usize,
     capped: &mut bool,
     content: String,
+    app_config: &AppConfig,
 ) -> Result<(), ()> {
 
-    let room = MAX_STREAM_BYTES.saturating_sub(*recorded);
+    let max_stream_bytes = app_config.orchestrator.max_stream_bytes;
+
+    let room = max_stream_bytes.saturating_sub(*recorded);
 
     if content.len() <= room {
         *recorded += content.len();
@@ -179,7 +179,7 @@ fn send_within_cap(
             stream,
             content: format!(
                 "\n[flowlite: output truncated, exceeded {} bytes]\n",
-                MAX_STREAM_BYTES,
+                max_stream_bytes,
             ),
         })
         .map_err(|_| ())
@@ -207,6 +207,11 @@ fn truncate_at_char_boundary(content: &str, max: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// What a data directory with no config.toml reads with, so these tests follow the
+    /// default rather than restating it.
+    fn max_stream_bytes() -> usize {
+        AppConfig::default().orchestrator.max_stream_bytes
+    }
 
     /// Drives the reader over an in-memory buffer and returns everything it recorded.
     /// Generic over AsyncRead is what makes this possible with no process involved.
@@ -218,6 +223,7 @@ mod tests {
             std::io::Cursor::new(bytes),
             TaskRunAttemptOutputStream::Stdout,
             chunks,
+            AppConfig::default(),
         ).await;
 
         let mut content = String::new();
@@ -282,14 +288,14 @@ mod tests {
     #[tokio::test]
     async fn the_cap_keeps_the_head_and_appends_the_marker() {
 
-        let content = read(vec![b'x'; MAX_STREAM_BYTES + 4096]).await;
+        let content = read(vec![b'x'; max_stream_bytes() + 4096]).await;
 
         assert_eq!(
             content,
             format!(
                 "{}\n[flowlite: output truncated, exceeded {} bytes]\n",
-                "x".repeat(MAX_STREAM_BYTES),
-                MAX_STREAM_BYTES,
+                "x".repeat(max_stream_bytes()),
+                max_stream_bytes(),
             ),
         );
     }
@@ -302,7 +308,7 @@ mod tests {
         // it and has to be dropped whole rather than sliced.
         let mut bytes = Vec::new();
 
-        while bytes.len() < MAX_STREAM_BYTES + 4096 {
+        while bytes.len() < max_stream_bytes() + 4096 {
             bytes.extend_from_slice("€".as_bytes());
         }
 
@@ -310,7 +316,7 @@ mod tests {
         let head = content.split('\n').next().unwrap();
 
         assert!(head.chars().all(|c| c == '€'), "the cap sliced a character in half");
-        assert!(head.len() <= MAX_STREAM_BYTES);
-        assert!(head.len() > MAX_STREAM_BYTES - 3);
+        assert!(head.len() <= max_stream_bytes());
+        assert!(head.len() > max_stream_bytes() - 3);
     }
 }

@@ -11,7 +11,7 @@
     {% if polling %}
     hx-get="/job-runs/{{ job_run.id }}"
     {# A poll swaps out the region the dialogs live in, closing an open one under whoever is reading it. #}
-    hx-trigger="every 3s [!document.querySelector('dialog[open]')]"
+    hx-trigger="every {{ refresh_seconds }}s [!document.querySelector('dialog[open]')]"
     hx-select="#run"
     hx-target="#run"
     hx-swap="outerHTML"

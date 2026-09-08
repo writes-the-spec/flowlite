@@ -45,6 +45,7 @@ struct TaskRunIdRouteTemplate {
     attempts: Vec<AttemptDisplay>,
     attempt_note: String,
     polling: bool,
+    refresh_seconds: u32,
 }
 
 fn build_attempt(
@@ -160,6 +161,7 @@ pub async fn task_run_id_route(
         attempts,
         attempt_note,
         polling: matches!(task_run.status, TaskRunStatus::Pending | TaskRunStatus::Running),
+        refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
     };
 
     match template.render() {

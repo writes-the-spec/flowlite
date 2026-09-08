@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
+use crate::app_config::AppConfig;
 use tokio::sync::Notify;
 
 
@@ -21,17 +21,11 @@ pub trait Service: Send + Sync + 'static {
 }
 
 
-/// Every poller shares this. It is the safety net rather than the driver — signals do the
-/// waking — but it cannot be removed: `job submit` writes from another process and so
-/// cannot publish, and this interval is the only thing that notices.
-pub const POLL_INTERVAL: Duration = Duration::from_secs(1);
-
-
 /// Drives one Service, waking on its signal or its interval, whichever comes first.
 pub struct Poller<S: Service> {
     service: Arc<S>,
     wakeup: Arc<Notify>,
-    interval: Duration,
+    app_config: AppConfig,
 }
 
 
@@ -40,12 +34,12 @@ impl<S: Service> Poller<S> {
     pub fn new(
         service: Arc<S>,
         wakeup: Arc<Notify>,
-        interval: Duration,
+        app_config: AppConfig,
     ) -> Self {
         Self {
             service,
             wakeup,
-            interval,
+            app_config,
         }
     }
 
@@ -55,8 +49,14 @@ impl<S: Service> Poller<S> {
         tokio::spawn(async move {
             loop {
                 if let Err(e) = self.run().await {
-                    eprintln!("{} error, restarting in 5s: {e:?}", self.service.name());
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    let backoff = self.app_config.orchestrator.error_backoff();
+
+                    eprintln!(
+                        "{} error, restarting in {}s: {e:?}",
+                        self.service.name(),
+                        backoff.as_secs(),
+                    );
+                    tokio::time::sleep(backoff).await;
                 }
             }
         });
@@ -69,7 +69,7 @@ impl<S: Service> Poller<S> {
         // Burst, tokio's default MissedTickBehavior, is left as-is: it is what the loops
         // this replaced already did, so a handle pass longer than the interval is
         // followed immediately by another rather than by a delay to catch up.
-        let mut timer = tokio::time::interval(self.interval);
+        let mut timer = tokio::time::interval(self.app_config.orchestrator.poll_interval());
 
         loop {
 
@@ -106,7 +106,21 @@ impl<S: Service> Poller<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+    use crate::app_config::{AppConfig, AppConfigOrchestrator};
     use crate::signals::Signals;
+
+    /// A whole config, since that is what a Poller takes, differing only in the interval
+    /// the test is about.
+    fn app_config_polling_every(seconds: u64) -> AppConfig {
+        AppConfig {
+            orchestrator: AppConfigOrchestrator {
+                poll_interval_seconds: seconds,
+                ..AppConfigOrchestrator::default()
+            },
+            ..AppConfig::default()
+        }
+    }
     use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
     struct CountingService {
@@ -198,7 +212,7 @@ mod tests {
             handled,
         });
 
-        Poller::new(service, Arc::new(Notify::new()), Duration::from_secs(1)).start();
+        Poller::new(service, Arc::new(Notify::new()), app_config_polling_every(1)).start();
 
         selects.recv().await.unwrap();
         let first_select = tokio::time::Instant::now();
@@ -221,7 +235,7 @@ mod tests {
             handled,
         });
 
-        Poller::new(service, Arc::new(Notify::new()), Duration::from_secs(60)).start();
+        Poller::new(service, Arc::new(Notify::new()), app_config_polling_every(60)).start();
 
         selects.recv().await.unwrap();
 
@@ -244,7 +258,7 @@ mod tests {
 
         let wakeup = Arc::new(Notify::new());
 
-        Poller::new(service, wakeup.clone(), Duration::from_secs(60)).start();
+        Poller::new(service, wakeup.clone(), app_config_polling_every(60)).start();
 
         selects.recv().await.unwrap();
 
@@ -270,7 +284,7 @@ mod tests {
 
         let wakeup = Arc::new(Notify::new());
 
-        Poller::new(service, wakeup.clone(), Duration::from_secs(60)).start();
+        Poller::new(service, wakeup.clone(), app_config_polling_every(60)).start();
 
         selects.recv().await.unwrap();
         handle_entries.recv().await.unwrap();
@@ -300,7 +314,7 @@ mod tests {
         let signals = Signals::new();
         let wakeup = signals.register();
 
-        Poller::new(service, wakeup, Duration::from_secs(60)).start();
+        Poller::new(service, wakeup, app_config_polling_every(60)).start();
 
         selects.recv().await.unwrap();
 

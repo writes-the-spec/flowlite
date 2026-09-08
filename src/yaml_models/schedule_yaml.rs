@@ -2,7 +2,6 @@ use chrono_tz::Tz;
 use cron::Schedule;
 use serde::Deserialize;
 use validator::Validate;
-use crate::yaml_models::defaults::default_tz;
 use std::collections::BTreeMap;
 use crate::yaml_models::string_map::deserialize_string_map;
 
@@ -16,8 +15,10 @@ pub struct ScheduleYaml {
     #[serde(default)]
     pub description: String,
     pub cron: Schedule,
-    #[serde(default = "default_tz")]
-    pub timezone: Tz,
+    /// `None` is "not declared", which `CRUD::init` resolves against
+    /// `[schedule_defaults]` in config.toml rather than a zone written here.
+    #[serde(default)]
+    pub timezone: Option<Tz>,
     pub start_date: Option<chrono::NaiveDate>,
     pub end_date: Option<chrono::NaiveDate>,
     #[serde(default)]
