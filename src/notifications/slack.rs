@@ -150,94 +150,7 @@ pub fn escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use std::sync::Mutex;
-    use axum::Json;
-    use axum::extract::State;
-    use axum::routing::post;
-
-    /// One request the fake Slack recorded, in the parts a test asks about.
-    #[derive(Clone)]
-    struct Post {
-        authorization: String,
-        channel: String,
-        text: String,
-        blocks: serde_json::Value,
-    }
-
-    #[derive(Clone)]
-    struct FakeSlack {
-        posts: Arc<Mutex<Vec<Post>>>,
-        /// The `error` to refuse with, keyed by channel — everything else is accepted.
-        refusals: Arc<Vec<(String, String)>>,
-    }
-
-    /// A Slack that answers on localhost, so the whole path — the header, the JSON, and
-    /// the `ok: false` in a 200 — is exercised rather than mocked away.
-    async fn fake_slack(refusals: &[(&str, &str)]) -> (String, Arc<Mutex<Vec<Post>>>) {
-
-        let state = FakeSlack {
-            posts: Arc::new(Mutex::new(Vec::new())),
-            refusals: Arc::new(
-                refusals
-                    .iter()
-                    .map(|(channel, error)| (channel.to_string(), error.to_string()))
-                    .collect(),
-            ),
-        };
-
-        let posts = state.posts.clone();
-
-        let router = axum::Router::new()
-            .route("/chat.postMessage", post(post_message))
-            .with_state(state);
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-
-        tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
-        });
-
-        (format!("http://{}/chat.postMessage", address), posts)
-    }
-
-    async fn post_message(
-        State(state): State<FakeSlack>,
-        headers: axum::http::HeaderMap,
-        Json(body): Json<serde_json::Value>,
-    ) -> Json<serde_json::Value> {
-
-        let channel = body["channel"].as_str().unwrap().to_string();
-
-        state.posts.lock().unwrap().push(Post {
-            authorization: headers
-                .get("authorization")
-                .map(|value| value.to_str().unwrap().to_string())
-                .unwrap_or_default(),
-            channel: channel.clone(),
-            text: body["text"].as_str().unwrap().to_string(),
-            blocks: body["blocks"].clone(),
-        });
-
-        let refusal = state.refusals
-            .iter()
-            .find(|(refused, _)| refused == &channel);
-
-        match refusal {
-            Some((_, error)) => Json(serde_json::json!({ "ok": false, "error": error })),
-            None => Json(serde_json::json!({ "ok": true })),
-        }
-    }
-
-    fn channel(api_url: String) -> SlackChannel {
-        SlackChannel::new(AppConfigSlack {
-            token: "xoxb-test".to_string(),
-            api_url,
-            timeout_seconds: 5,
-            max_output_bytes: 2048,
-        })
-    }
+    use crate::test_support::FakeSlack;
 
     /// A message with no Slack rendering of its own, which is what the fallback path
     /// exists for.
@@ -267,11 +180,11 @@ mod tests {
     #[tokio::test]
     async fn a_post_carries_the_token_the_conversation_and_the_message() {
 
-        let (api_url, posts) = fake_slack(&[]).await;
+        let slack = FakeSlack::start().await;
 
-        channel(api_url).send(&["#oncall".to_string()], &message()).await.unwrap();
+        SlackChannel::new(slack.config()).send(&["#oncall".to_string()], &message()).await.unwrap();
 
-        let posts = posts.lock().unwrap();
+        let posts = slack.posts();
 
         assert_eq!(posts.len(), 1);
         assert_eq!(posts[0].authorization, "Bearer xoxb-test");
@@ -285,14 +198,14 @@ mod tests {
     #[tokio::test]
     async fn a_message_with_blocks_posts_them_rather_than_one_fenced_wall() {
 
-        let (api_url, posts) = fake_slack(&[]).await;
+        let slack = FakeSlack::start().await;
 
-        channel(api_url)
+        SlackChannel::new(slack.config())
             .send(&["#oncall".to_string()], &message_with_blocks())
             .await
             .unwrap();
 
-        let posts = posts.lock().unwrap();
+        let posts = slack.posts();
 
         assert_eq!(posts[0].text, "[flowlite] Nightly Sync run 42 failed");
         assert_eq!(posts[0].blocks[0]["type"], "header");
@@ -304,11 +217,11 @@ mod tests {
     #[tokio::test]
     async fn a_message_with_no_blocks_still_posts_everything_it_says() {
 
-        let (api_url, posts) = fake_slack(&[]).await;
+        let slack = FakeSlack::start().await;
 
-        channel(api_url).send(&["#oncall".to_string()], &message()).await.unwrap();
+        SlackChannel::new(slack.config()).send(&["#oncall".to_string()], &message()).await.unwrap();
 
-        let posts = posts.lock().unwrap();
+        let posts = slack.posts();
 
         assert!(posts[0].blocks.is_null(), "{}", posts[0].blocks);
         assert!(posts[0].text.contains("(nightly-sync) failed."), "{}", posts[0].text);
@@ -317,14 +230,14 @@ mod tests {
     #[tokio::test]
     async fn every_conversation_named_gets_its_own_call() {
 
-        let (api_url, posts) = fake_slack(&[]).await;
+        let slack = FakeSlack::start().await;
 
-        channel(api_url)
+        SlackChannel::new(slack.config())
             .send(&["#oncall".to_string(), "#data".to_string()], &message())
             .await
             .unwrap();
 
-        let channels: Vec<String> = posts.lock().unwrap()
+        let channels: Vec<String> = slack.posts()
             .iter()
             .map(|post| post.channel.clone())
             .collect();
@@ -337,9 +250,9 @@ mod tests {
     #[tokio::test]
     async fn a_refusal_in_a_200_is_a_failure_naming_what_slack_said() {
 
-        let (api_url, _) = fake_slack(&[("#typo", "channel_not_found")]).await;
+        let slack = FakeSlack::refusing(&[("#typo", "channel_not_found")]).await;
 
-        let error = channel(api_url)
+        let error = SlackChannel::new(slack.config())
             .send(&["#typo".to_string()], &message())
             .await
             .unwrap_err()
@@ -354,9 +267,9 @@ mod tests {
     #[tokio::test]
     async fn one_refused_conversation_does_not_stop_the_others() {
 
-        let (api_url, posts) = fake_slack(&[("#typo", "channel_not_found")]).await;
+        let slack = FakeSlack::refusing(&[("#typo", "channel_not_found")]).await;
 
-        let error = channel(api_url)
+        let error = SlackChannel::new(slack.config())
             .send(&["#typo".to_string(), "#oncall".to_string()], &message())
             .await
             .unwrap_err()
@@ -365,7 +278,7 @@ mod tests {
         assert!(error.contains("#typo"), "{}", error);
         assert!(!error.contains("#oncall"), "{}", error);
 
-        assert_eq!(posts.lock().unwrap().len(), 2);
+        assert_eq!(slack.posts().len(), 2);
     }
 
     #[tokio::test]
@@ -375,13 +288,20 @@ mod tests {
         let address = listener.local_addr().unwrap();
 
         tokio::spawn(async move {
-            let router = axum::Router::new()
-                .route("/chat.postMessage", post(|| async { "<html>gateway error</html>" }));
+            let router = axum::Router::new().route(
+                "/chat.postMessage",
+                axum::routing::post(|| async { "<html>gateway error</html>" }),
+            );
 
             axum::serve(listener, router).await.unwrap();
         });
 
-        let error = channel(format!("http://{}/chat.postMessage", address))
+        let error = SlackChannel::new(AppConfigSlack {
+            token: "xoxb-test".to_string(),
+            api_url: format!("http://{}/chat.postMessage", address),
+            timeout_seconds: 5,
+            max_output_bytes: 2048,
+        })
             .send(&["#oncall".to_string()], &message())
             .await
             .unwrap_err()

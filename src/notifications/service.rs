@@ -341,7 +341,7 @@ mod tests {
     use crate::crud::job_run_notification::{NotificationChannel, NotifyOn};
     use crate::crud::task_run::TaskRunStatus;
     use crate::poller::Service;
-    use crate::test_support::TestDb;
+    use crate::test_support::{FakeSlack, TestDb};
 
     /// A run in the given state, with the open `on_failure:` notification `submit_job`
     /// would have written for it when it was submitted.
@@ -413,29 +413,93 @@ mod tests {
         assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Pending);
     }
 
+    /// The whole point of the loop: a run that ended the way its notification was written
+    /// for is delivered, and the row is closed as sent so no later pass delivers it again.
+    #[tokio::test]
+    async fn a_failed_run_is_delivered_and_recorded_as_sent() {
+
+        let db = TestDb::new().await;
+
+        let slack = FakeSlack::start().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Failed).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Failed).await;
+
+        let notification = db.insert_job_run_notification(
+            job_run.id,
+            NotifyOn::Failure,
+            NotificationChannel::Slack,
+            &["#oncall"],
+        ).await;
+
+        let service = db.notification_service_with_slack(&slack);
+
+        service.handle(&notification).await.unwrap();
+
+        let settled = db.job_run_notifications(job_run.id).await
+            .into_iter()
+            .next()
+            .unwrap();
+
+        assert_eq!(settled.status, JobRunNotificationStatus::Sent);
+        assert!(settled.sent_at.is_some());
+        assert_eq!(settled.error, "");
+
+        assert!(service.select().await.unwrap().is_empty());
+
+        // What arrived is the message built from this run's own rows, rather than
+        // something the service could have posted without reading them.
+        let posts = slack.posts();
+
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].channel, "#oncall");
+        assert_eq!(posts[0].text, format!("[flowlite] Job run {} failed", job_run.id));
+
+        let blocks = posts[0].blocks.to_string();
+
+        assert!(blocks.contains(&task_run.task_id), "{}", blocks);
+        assert!(
+            blocks.contains(&format!("flowlite job-run logs {}", job_run.id)),
+            "{}",
+            blocks,
+        );
+    }
+
     /// The mirror of the failure path: what one row calls news the other calls nothing to
     /// report, and the row is what says which.
+    ///
+    /// A succeeded run reads as one all the way to the transport — the same message shape
+    /// as a failure, with none of a failure's wording.
     #[tokio::test]
     async fn a_succeeded_run_delivers_the_notification_that_asked_for_it() {
 
         let db = TestDb::new().await;
 
-        let notification = success_notification_for_run(&db, JobRunStatus::Succeeded).await;
+        let slack = FakeSlack::start().await;
 
-        let service = db.notification_service();
+        let job_run = db.insert_job_run(JobRunStatus::Succeeded).await;
 
-        // No channel is configured here, so reaching one at all is what this asserts.
-        assert!(service.handle(&notification).await.is_err());
+        db.insert_task_run(job_run.id, TaskRunStatus::Succeeded).await;
 
-        let settled = db.job_run_notifications(notification.job_run_id).await
-            .into_iter()
-            .next()
-            .unwrap();
+        let notification = db.insert_job_run_notification(
+            job_run.id,
+            NotifyOn::Success,
+            NotificationChannel::Slack,
+            &["#data-team"],
+        ).await;
 
-        assert_eq!(settled.status, JobRunNotificationStatus::Failed);
-        assert!(settled.error.contains("[smtp]"), "{}", settled.error);
+        let service = db.notification_service_with_slack(&slack);
 
+        service.handle(&notification).await.unwrap();
+
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Sent);
         assert!(service.select().await.unwrap().is_empty());
+
+        let posts = slack.posts();
+
+        assert_eq!(posts[0].channel, "#data-team");
+        assert_eq!(posts[0].text, format!("[flowlite] Job run {} succeeded", job_run.id));
+        assert!(!posts[0].blocks.to_string().contains("failed"), "{}", posts[0].blocks);
     }
 
     /// A failure is not what a success notification was written for, so it closes as
@@ -479,26 +543,33 @@ mod tests {
         let on_failure = db.insert_job_run_notification(
             job_run.id,
             NotifyOn::Failure,
-            NotificationChannel::Email,
-            &["oncall@example.com"],
+            NotificationChannel::Slack,
+            &["#oncall"],
         ).await;
 
         let on_success = db.insert_job_run_notification(
             job_run.id,
             NotifyOn::Success,
-            NotificationChannel::Email,
-            &["data-team@example.com"],
+            NotificationChannel::Slack,
+            &["#data-team"],
         ).await;
 
-        let service = db.notification_service();
+        let slack = FakeSlack::start().await;
+
+        let service = db.notification_service_with_slack(&slack);
 
         service.handle(&on_failure).await.unwrap();
-
-        // Delivery is what this one is for, and no channel is configured in a test.
-        assert!(service.handle(&on_success).await.is_err());
+        service.handle(&on_success).await.unwrap();
 
         assert_eq!(settled_status(&db, &on_failure).await, JobRunNotificationStatus::Skipped);
-        assert_eq!(settled_status(&db, &on_success).await, JobRunNotificationStatus::Failed);
+        assert_eq!(settled_status(&db, &on_success).await, JobRunNotificationStatus::Sent);
+
+        // Both rows are about the same run ending once, and exactly one of them is a
+        // message anybody receives.
+        let posts = slack.posts();
+
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].channel, "#data-team");
     }
 
     #[tokio::test]
@@ -585,16 +656,33 @@ mod tests {
         assert!(settled.error.contains("[slack]"), "{}", settled.error);
     }
 
+    /// A timeout is a failure as far as a notification is concerned, and it says so in
+    /// its own words rather than in a failed run's.
     #[tokio::test]
     async fn a_timed_out_run_is_worth_telling_somebody_about_too() {
 
         let db = TestDb::new().await;
 
-        let notification = notification_for_run(&db, JobRunStatus::TimedOut).await;
+        let slack = FakeSlack::start().await;
 
-        // No channel is configured here, so reaching one at all is what this asserts.
-        assert!(db.notification_service().handle(&notification).await.is_err());
+        let job_run = db.insert_job_run(JobRunStatus::TimedOut).await;
 
-        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Failed);
+        db.insert_task_run(job_run.id, TaskRunStatus::TimedOut).await;
+
+        let notification = db.insert_job_run_notification(
+            job_run.id,
+            NotifyOn::Failure,
+            NotificationChannel::Slack,
+            &["#oncall"],
+        ).await;
+
+        db.notification_service_with_slack(&slack).handle(&notification).await.unwrap();
+
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Sent);
+
+        assert_eq!(
+            slack.posts()[0].text,
+            format!("[flowlite] Job run {} timed out", job_run.id),
+        );
     }
 }

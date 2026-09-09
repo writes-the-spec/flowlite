@@ -68,6 +68,8 @@ Delivery is a **`match` on that enum, not a registry of trait objects**. The cha
 
 A channel with nothing configured is `None` rather than absent, and asking for it is an error naming what is missing. That is deliberate: `Some`/`None` here is what turns "nobody configured SMTP" into a row you can read instead of a notification that quietly never leaves.
 
+**A send is tested against a Slack that answers on localhost**, not against a mock. `FakeSlack` in [src/test_support.rs](../../../src/test_support.rs) records what was posted and refuses the conversations a test names, and `TestDb::notification_service_with_slack` hands the service a `[slack]` pointing at it — which is what makes the delivered path assertable at all: the message a real run's rows build, the post it becomes, and the `sent` written afterwards. It lives in `test_support` rather than in [slack.rs](../../../src/notifications/slack.rs) because both the channel's tests and the service's use it, and both have to agree with `post_payload` about what a post looks like.
+
 ### Adding a channel
 
 1. A variant on `NotificationChannel`, named as the YAML key, plus its `Display` arm.

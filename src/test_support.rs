@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use axum::Json;
+use axum::extract::State;
+use axum::routing::post;
 use chrono::{DateTime, Utc};
-use crate::app_config::AppConfig;
+use crate::app_config::{AppConfig, AppConfigSlack};
 use crate::crud::CRUD;
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
@@ -89,6 +92,24 @@ impl TestDb {
             self.crud.clone(),
             self.conn_pool.clone(),
             Arc::new(NotificationChannels::from_config(&self.app_config())),
+        )
+    }
+
+    /// The same service over a config whose `[slack]` is a fake Slack the test is
+    /// running, which is what makes the delivered path assertable — the message a real run
+    /// builds, the post it becomes, and the `sent` recorded on the row afterwards — with
+    /// no workspace anywhere near it.
+    pub fn notification_service_with_slack(&self, slack: &FakeSlack) -> NotificationService {
+
+        let app_config = AppConfig {
+            slack: Some(slack.config()),
+            ..self.app_config()
+        };
+
+        NotificationService::new(
+            self.crud.clone(),
+            self.conn_pool.clone(),
+            Arc::new(NotificationChannels::from_config(&app_config)),
         )
     }
 
@@ -563,6 +584,115 @@ impl TestDb {
         panic!("no stdout was recorded for attempt {}", task_run_attempt.id);
     }
 
+}
+
+
+/// One request the fake Slack recorded, in the parts a test asks about.
+#[derive(Clone)]
+pub struct FakeSlackPost {
+    pub authorization: String,
+    pub channel: String,
+    pub text: String,
+    pub blocks: serde_json::Value,
+}
+
+/// A Slack that answers on localhost, so a send is exercised over the transport it really
+/// uses — the header, the JSON body, and the `ok: false` in a 200 — rather than mocked
+/// away.
+///
+/// It lives here rather than in the channel's own tests because the notification service
+/// needs one too, and both have to agree with `post_payload` about what a post looks
+/// like: one fake to keep up with a change in that shape, not two that can drift.
+#[derive(Clone)]
+pub struct FakeSlack {
+    api_url: String,
+    posts: Arc<Mutex<Vec<FakeSlackPost>>>,
+    /// The `error` to refuse with, keyed by conversation. Everything else is accepted.
+    refusals: Arc<Vec<(String, String)>>,
+}
+
+
+impl FakeSlack {
+
+    pub async fn start() -> Self {
+        Self::refusing(&[]).await
+    }
+
+    /// The same Slack, refusing the named conversations the way the real one does: an
+    /// `error` in a 200 that a send trusting the status code would have called delivered.
+    pub async fn refusing(refusals: &[(&str, &str)]) -> Self {
+
+        // Bound before the state is built, since the api_url a caller configures is the
+        // address the OS just chose.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let slack = Self {
+            api_url: format!("http://{}/chat.postMessage", address),
+            posts: Arc::new(Mutex::new(Vec::new())),
+            refusals: Arc::new(
+                refusals
+                    .iter()
+                    .map(|(channel, error)| (channel.to_string(), error.to_string()))
+                    .collect(),
+            ),
+        };
+
+        let router = axum::Router::new()
+            .route("/chat.postMessage", post(fake_slack_post_message))
+            .with_state(slack.clone());
+
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        slack
+    }
+
+    /// The `[slack]` section that reaches this fake, so a test configuring a channel and a
+    /// test configuring the whole service ask for it the same way.
+    pub fn config(&self) -> AppConfigSlack {
+        AppConfigSlack {
+            token: "xoxb-test".to_string(),
+            api_url: self.api_url.clone(),
+            timeout_seconds: 5,
+            max_output_bytes: 2048,
+        }
+    }
+
+    pub fn posts(&self) -> Vec<FakeSlackPost> {
+        self.posts.lock().unwrap().clone()
+    }
+
+}
+
+
+async fn fake_slack_post_message(
+    State(slack): State<FakeSlack>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+
+    let channel = body["channel"].as_str().unwrap().to_string();
+
+    slack.posts.lock().unwrap().push(FakeSlackPost {
+        authorization: headers
+            .get("authorization")
+            .map(|value| value.to_str().unwrap().to_string())
+            .unwrap_or_default(),
+        channel: channel.clone(),
+        text: body["text"].as_str().unwrap().to_string(),
+        blocks: body["blocks"].clone(),
+    });
+
+    let refusal = slack.refusals
+        .iter()
+        .find(|(refused, _)| refused == &channel);
+
+    match refusal {
+        Some((_, error)) => Json(serde_json::json!({ "ok": false, "error": error })),
+        None => Json(serde_json::json!({ "ok": true })),
+    }
 }
 
 
