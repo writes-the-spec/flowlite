@@ -373,6 +373,52 @@ way of creating a run is held to it alike — `flowlite job submit`, a rerun, an
 scheduler. A job that takes longer than its schedule interval will therefore queue up
 pending runs and work through them back to back.
 
+## Runs from the command line
+
+`job submit` returns as soon as the run is written, which is what an unattended scheduler
+should do. A script that submitted the run usually wants the ending instead, so `--wait`
+blocks until the run settles and exits non-zero unless it succeeded:
+
+```bash
+flowlite job submit nightly --wait
+echo $?     # 0 only when the run succeeded
+```
+
+Every ending that is not a success exits 1 — failed, timed out, aborted or skipped — so a
+Makefile, a CI step or a parent job can treat a flowlite run like any other command. The
+wait is a poll of the run's row, so it works from a different process, a different shell
+or a different container to the one running `flowlite serve`.
+
+The run history is readable without opening the dashboard:
+
+```bash
+flowlite job-run list                                  # the 20 newest runs
+flowlite job-run list --job nightly --status failed
+flowlite job-run get 42                                # one run and its task runs
+flowlite job-run stop 42                               # ask a running run to stop
+```
+
+`stop` writes a request rather than killing anything itself — the `serve` process notices
+it on a later pass and kills the task's process group. A run that has already finished is
+refused rather than silently accepted.
+
+### JSON output
+
+Every `job` and `job-run` command takes `--json`, which prints the rows themselves instead
+of a table:
+
+```bash
+flowlite job-run get 42 --json | jq .status
+flowlite job submit nightly --wait --json | jq -r '.id, .status'
+flowlite job-run logs 42 --json | jq -r '.[] | select(.status == "failed") | .stderr'
+```
+
+The payload is the data with no envelope around it: a list command prints an array, a
+single-run command prints an object, and `job submit --json` prints the run either way, so
+`.id` and `.status` read the same with and without `--wait`. Errors are never part of it —
+they go to stderr as text and the exit code carries the failure, which keeps
+`flowlite job-run list --json > runs.json` a file of runs or nothing at all.
+
 ## Task output
 
 Every task's stdout and stderr are captured as it runs and kept per attempt, so a task

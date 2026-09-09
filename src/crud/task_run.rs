@@ -5,6 +5,7 @@ use crate::crud::CRUD;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, sqlx::Type)]
 #[sqlx(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum TaskRunStatus {
     Pending,
     Running,
