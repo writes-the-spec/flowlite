@@ -249,6 +249,34 @@ pub async fn stop_job_run_route(
     Extension(crud): Extension<CRUD>,
     Path(job_run_id): Path<i64>,
 ) -> impl IntoResponse {
+    let job_run = crud.select_job_run(&*state.conn_pool, &SelectJobRunsData {
+        filter: SelectJobRunsDataFilter {
+            id: Some(job_run_id),
+            job_id: None,
+            status: None,
+        },
+        sort: None,
+        limit: Some(1),
+        offset: None,
+    }).await;
+
+    let job_run = match job_run {
+        Ok(Some(job_run)) => job_run,
+        Ok(None) => return Html("Job run not found").into_response(),
+        Err(err) => {
+            eprintln!("Error stopping job run: {}", err);
+            return Html("Error stopping job run").into_response();
+        }
+    };
+
+    // A settled run's stop row would never be read, so none is written. The button only
+    // renders while a run is running, so arriving here means a page that has gone stale -
+    // which is not an error worth a dead end, and the run page the redirect lands on
+    // already says what actually happened.
+    if job_run.status.is_finished() {
+        return Redirect::to(&format!("/job-runs/{}", job_run_id)).into_response();
+    }
+
     let result = crud.insert_job_run_stop(&*state.conn_pool, &InsertJobRunStopData {
         input: InsertJobRunStopDataInput {
             job_run_id,
