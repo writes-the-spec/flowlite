@@ -62,6 +62,11 @@ impl TaskRunDispatcher {
 
     /// Skips the task run if its job run was stopped or a dependency did not succeed,
     /// either of which means it can never run.
+    ///
+    /// `Invalid` counts as not succeeding. Leaving it out would strand every dependent: it
+    /// is finished, so `settle_as_pending` does not hold them, and it did not succeed, so
+    /// `settle_as_running` does not start them — they would reach the bail on every pass,
+    /// and one unreadable row would become an unreadable subtree.
     async fn settle_as_skipped(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
         let must_skip = self.is_job_run_stopped(task_run).await?
@@ -73,6 +78,7 @@ impl TaskRunDispatcher {
                         | TaskRunStatus::Skipped
                         | TaskRunStatus::Aborted
                         | TaskRunStatus::TimedOut
+                        | TaskRunStatus::Invalid
                 ));
 
         if !must_skip {
@@ -263,5 +269,48 @@ impl Service for TaskRunDispatcher {
 
     async fn handle(&self, task_run: &TaskRun) -> anyhow::Result<()> {
         self.handle_pending_task_run(task_run).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crud::job_run::JobRunStatus;
+    use crate::test_support::TestDb;
+
+    /// Without Invalid in the skip list a dependent is neither skipped, nor pending (Invalid
+    /// is finished), nor started (nothing succeeded) — so it hits the bail on every pass and
+    /// one stranded row becomes a stranded subtree.
+    #[tokio::test]
+    async fn a_dependent_of_an_invalid_task_run_is_skipped() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        db.insert_named_task_run(job_run.id, "upstream", TaskRunStatus::Invalid).await;
+
+        let dependent = db.insert_task_run_depending_on(job_run.id, &["upstream"]).await;
+
+        db.task_run_dispatcher().handle(&dependent).await.unwrap();
+
+        assert_eq!(db.task_run(dependent.id).await.status, TaskRunStatus::Skipped);
+    }
+
+    /// The ordinary path is unchanged: a dependency that succeeded still starts the run.
+    #[tokio::test]
+    async fn a_task_run_whose_dependency_succeeded_still_starts() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        db.insert_named_task_run(job_run.id, "upstream", TaskRunStatus::Succeeded).await;
+
+        let dependent = db.insert_task_run_depending_on(job_run.id, &["upstream"]).await;
+
+        db.task_run_dispatcher().handle(&dependent).await.unwrap();
+
+        assert_eq!(db.task_run(dependent.id).await.status, TaskRunStatus::Running);
     }
 }

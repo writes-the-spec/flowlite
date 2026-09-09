@@ -20,6 +20,7 @@ use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRu
 use crate::orchestrator::task_run_attempt_reader::read_task_run_attempt_stream;
 use crate::orchestrator::task_run_attempt_dispatcher::TaskRunAttemptDispatcher;
 use crate::orchestrator::task_run_attempt_monitor::TaskRunAttemptMonitor;
+use crate::orchestrator::task_run_dispatcher::TaskRunDispatcher;
 use crate::orchestrator::task_run_monitor::TaskRunMonitor;
 use crate::poller::Service;
 use crate::signals::Signals;
@@ -110,6 +111,14 @@ impl TestDb {
             self.crud.clone(),
             self.conn_pool.clone(),
             Arc::new(NotificationChannels::from_config(&app_config)),
+        )
+    }
+
+    pub fn task_run_dispatcher(&self) -> TaskRunDispatcher {
+        TaskRunDispatcher::new(
+            self.crud.clone(),
+            self.conn_pool.clone(),
+            self.signals.clone(),
         )
     }
 
@@ -250,6 +259,57 @@ impl TestDb {
                     env,
                     working_dir: working_dir.to_string(),
                     status: TaskRunStatus::Running,
+                },
+            },
+        ).await.unwrap();
+
+        self.task_run(id).await
+    }
+
+    /// A pending task run waiting on the named task ids, which need not have rows - a
+    /// dependency with none is one of the states the dispatcher has to settle.
+    pub async fn insert_task_run_depending_on(&self, job_run_id: i64, depends_on: &[&str]) -> TaskRun {
+
+        let id = self.crud.insert_task_run(
+            &*self.conn_pool,
+            &InsertTaskRunData {
+                input: InsertTaskRunDataInput {
+                    job_run_id,
+                    job_id: "job".to_string(),
+                    task_id: format!("task-{}", uuid::Uuid::new_v4()),
+                    command: "true".to_string(),
+                    depends_on: depends_on.iter().map(|id| id.to_string()).collect(),
+                    timeout: 3600,
+                    max_retries: 0,
+                    retry_delay: 60,
+                    env: BTreeMap::new(),
+                    working_dir: String::new(),
+                    status: TaskRunStatus::Pending,
+                },
+            },
+        ).await.unwrap();
+
+        self.task_run(id).await
+    }
+
+    /// A task run under a given task id, so another can be made to depend on it by name.
+    pub async fn insert_named_task_run(&self, job_run_id: i64, task_id: &str, status: TaskRunStatus) -> TaskRun {
+
+        let id = self.crud.insert_task_run(
+            &*self.conn_pool,
+            &InsertTaskRunData {
+                input: InsertTaskRunDataInput {
+                    job_run_id,
+                    job_id: "job".to_string(),
+                    task_id: task_id.to_string(),
+                    command: "true".to_string(),
+                    depends_on: Vec::new(),
+                    timeout: 3600,
+                    max_retries: 0,
+                    retry_delay: 60,
+                    env: BTreeMap::new(),
+                    working_dir: String::new(),
+                    status,
                 },
             },
         ).await.unwrap();
