@@ -1,16 +1,17 @@
 use std::sync::Arc;
 use anyhow::Context;
 use sqlx::Acquire;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::fs;
 use crate::crud::job::{InsertJobData, InsertJobDataInput};
+use crate::crud::job_run_notification::NotificationChannel;
 use crate::crud::schedule::{InsertScheduleData, InsertScheduleDataInput};
 use crate::crud::schedule_job::{InsertScheduleJobData, InsertScheduleJobDataInput};
 use crate::crud::task::{InsertTaskData, InsertTaskDataInput};
 use crate::crud::task_dependent::{InsertTaskDependentData, InsertTaskDependentDataInput};
 use crate::toolkit::Toolkit;
-use crate::yaml_models::job_yaml::JobYaml;
+use crate::yaml_models::job_yaml::{JobYaml, JobYamlOnFailure};
 use crate::yaml_models::schedule_yaml::ScheduleYaml;
 use crate::cron_trigger::CronTrigger;
 
@@ -18,6 +19,28 @@ use crate::cron_trigger::CronTrigger;
 #[derive(Clone)]
 pub struct CRUD {
     pub toolkit: Arc<Toolkit>,
+}
+
+
+/// Who a job's `on_failure:` tells, keyed by the channel that will tell them.
+///
+/// The one place the YAML's per-channel fields become the shape everything downstream
+/// works in: the job row stores this map, `submit_job` turns it into one notification per
+/// entry, and the startup check walks it to ask whether each channel is configured. A
+/// channel naming nobody is left out entirely rather than carried as an empty list —
+/// there is nothing to decide about later.
+fn job_on_failure_recipients(on_failure: &JobYamlOnFailure) -> BTreeMap<NotificationChannel, Vec<String>> {
+
+    let declared = [
+        (NotificationChannel::Email, &on_failure.email),
+        (NotificationChannel::Slack, &on_failure.slack),
+    ];
+
+    declared
+        .into_iter()
+        .filter(|(_, recipients)| !recipients.is_empty())
+        .map(|(channel, recipients)| (channel, recipients.clone()))
+        .collect()
 }
 
 
@@ -78,7 +101,7 @@ impl CRUD {
                                 .unwrap_or(job_defaults.max_parallel_runs),
                             parameters: job_yaml.parameters.clone(),
                             env: job_yaml.env.clone(),
-                            on_failure_emails: job_yaml.on_failure.email.clone(),
+                            on_failure_recipients: job_on_failure_recipients(&job_yaml.on_failure),
                         }
                     })
                         .await
@@ -215,22 +238,36 @@ impl CRUD {
         Ok(())
     }
 
-    /// Rejects a job that asks to be emailed on a failure when there is nowhere to send
-    /// it. Read here rather than at send time because a notification that silently never
-    /// leaves is the one failure you cannot see from the run afterwards - and by then it
-    /// is 03:00 and the run everyone wanted to hear about has already finished.
+    /// Rejects a job that asks to be told on a failure over a channel this box cannot
+    /// deliver on. Read here rather than at send time because a notification that silently
+    /// never leaves is the one failure you cannot see from the run afterwards - and by
+    /// then it is 03:00 and the run everyone wanted to hear about has already finished.
+    ///
+    /// The match is over the same enum the sender matches on, so a new channel cannot be
+    /// added without saying what config.toml section it needs to work at all.
     fn validate_job_notifications(&self, job_yaml: &JobYaml) -> anyhow::Result<()> {
 
-        if job_yaml.on_failure.email.is_empty() {
-            return Ok(());
-        }
+        for (channel, recipients) in job_on_failure_recipients(&job_yaml.on_failure) {
 
-        if self.toolkit.app_config.smtp.is_none() {
-            anyhow::bail!(
-                "on_failure.email names {} but config.toml has no [smtp] section, so no \
-                 mail can be sent. Add one, or remove the addresses.",
-                job_yaml.on_failure.email.join(", "),
-            );
+            let missing_section = match channel {
+                NotificationChannel::Email => self.toolkit.app_config.smtp
+                    .is_none()
+                    .then_some("[smtp]"),
+                NotificationChannel::Slack => self.toolkit.app_config.slack
+                    .is_none()
+                    .then_some("[slack]"),
+            };
+
+            if let Some(section) = missing_section {
+                anyhow::bail!(
+                    "on_failure.{} names {} but config.toml has no {} section, so nothing \
+                     can be sent by {}. Add one, or remove the recipients.",
+                    channel,
+                    recipients.join(", "),
+                    section,
+                    channel,
+                );
+            }
         }
 
         Ok(())
@@ -387,7 +424,7 @@ impl CRUD {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_config::{AppConfig, AppConfigSmtp, AppConfigSmtpEncryption};
+    use crate::app_config::{AppConfig, AppConfigSlack, AppConfigSmtp, AppConfigSmtpEncryption};
 
     fn smtp() -> AppConfigSmtp {
         AppConfigSmtp {
@@ -401,8 +438,17 @@ mod tests {
         }
     }
 
-    fn crud_with(smtp: Option<AppConfigSmtp>) -> CRUD {
-        CRUD::new(Arc::new(Toolkit::new(AppConfig { smtp, ..AppConfig::default() })))
+    fn slack() -> AppConfigSlack {
+        AppConfigSlack {
+            token: "xoxb-test".to_string(),
+            api_url: "https://slack.example.com/api/chat.postMessage".to_string(),
+            timeout_seconds: 10,
+            max_output_bytes: 2048,
+        }
+    }
+
+    fn crud_with(smtp: Option<AppConfigSmtp>, slack: Option<AppConfigSlack>) -> CRUD {
+        CRUD::new(Arc::new(Toolkit::new(AppConfig { smtp, slack, ..AppConfig::default() })))
     }
 
     fn job_yaml(on_failure: &str) -> JobYaml {
@@ -415,7 +461,7 @@ mod tests {
     #[test]
     fn a_job_naming_an_address_with_no_smtp_section_is_refused() {
 
-        let crud = crud_with(None);
+        let crud = crud_with(None, None);
 
         let error = crud
             .validate_job_notifications(&job_yaml("on_failure:\n  email: [oncall@example.com]\n"))
@@ -429,7 +475,7 @@ mod tests {
     #[test]
     fn a_job_naming_an_address_is_accepted_once_smtp_is_configured() {
 
-        let crud = crud_with(Some(smtp()));
+        let crud = crud_with(Some(smtp()), None);
 
         assert!(crud
             .validate_job_notifications(&job_yaml("on_failure:\n  email: [oncall@example.com]\n"))
@@ -441,8 +487,92 @@ mod tests {
     #[test]
     fn a_job_naming_nobody_needs_no_smtp_section() {
 
-        let crud = crud_with(None);
+        let crud = crud_with(None, None);
 
         assert!(crud.validate_job_notifications(&job_yaml("")).is_ok());
+    }
+
+    /// The same refusal for the second channel, and it names `[slack]` rather than the
+    /// section the first channel happened to need.
+    #[test]
+    fn a_job_naming_a_conversation_with_no_slack_section_is_refused() {
+
+        let crud = crud_with(Some(smtp()), None);
+
+        let error = crud
+            .validate_job_notifications(&job_yaml("on_failure:\n  slack: ['#oncall']\n"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("#oncall"), "{}", error);
+        assert!(error.contains("[slack]"), "{}", error);
+        assert!(!error.contains("[smtp]"), "{}", error);
+    }
+
+    /// A job may name both, and each is checked against its own section — so mail
+    /// configured while Slack is not still refuses, rather than passing on the first
+    /// channel that happened to be fine.
+    #[test]
+    fn a_job_naming_both_channels_needs_both_sections() {
+
+        let both = "on_failure:\n  email: [oncall@example.com]\n  slack: ['#oncall']\n";
+
+        assert!(crud_with(Some(smtp()), None)
+            .validate_job_notifications(&job_yaml(both))
+            .is_err());
+
+        assert!(crud_with(None, Some(slack()))
+            .validate_job_notifications(&job_yaml(both))
+            .is_err());
+
+        assert!(crud_with(Some(smtp()), Some(slack()))
+            .validate_job_notifications(&job_yaml(both))
+            .is_ok());
+    }
+
+    #[test]
+    fn a_job_declaring_both_channels_becomes_one_map_entry_each() {
+
+        let on_failure = &job_yaml(
+            "on_failure:\n  email: [oncall@example.com]\n  slack: ['#oncall', '#data']\n"
+        ).on_failure;
+
+        let recipients = job_on_failure_recipients(on_failure);
+
+        assert_eq!(recipients.len(), 2);
+        assert_eq!(recipients[&NotificationChannel::Email], vec!["oncall@example.com"]);
+        assert_eq!(recipients[&NotificationChannel::Slack], vec!["#oncall", "#data"]);
+    }
+
+    /// A channel the YAML mentions nobody under is left out rather than carried as an
+    /// empty list, so a run is never submitted with a notification addressed to nobody.
+    #[test]
+    fn a_channel_naming_nobody_is_left_out_of_the_map() {
+
+        let on_failure = &job_yaml("on_failure:\n  email: [oncall@example.com]\n").on_failure;
+
+        let recipients = job_on_failure_recipients(on_failure);
+
+        assert_eq!(recipients.len(), 1);
+        assert!(!recipients.contains_key(&NotificationChannel::Slack));
+    }
+
+    /// The map is what the job row stores, so it has to survive the round trip through
+    /// JSON with the channel as the key.
+    #[test]
+    fn the_map_survives_being_written_as_json_and_read_back() {
+
+        let recipients = job_on_failure_recipients(
+            &job_yaml("on_failure:\n  slack: ['#oncall']\n").on_failure
+        );
+
+        let json = serde_json::to_string(&recipients).unwrap();
+
+        assert_eq!(json, r##"{"slack":["#oncall"]}"##);
+
+        let read_back: BTreeMap<NotificationChannel, Vec<String>> =
+            serde_json::from_str(&json).unwrap();
+
+        assert_eq!(read_back, recipients);
     }
 }

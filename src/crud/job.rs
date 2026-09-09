@@ -2,6 +2,7 @@
 use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use crate::crud::CRUD;
+use crate::crud::job_run_notification::NotificationChannel;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InsertJobDataInput {
@@ -12,7 +13,7 @@ pub struct InsertJobDataInput {
     pub max_parallel_runs: u32,
     pub parameters: BTreeMap<String, String>,
     pub env: BTreeMap<String, String>,
-    pub on_failure_emails: Vec<String>,
+    pub on_failure_recipients: BTreeMap<NotificationChannel, Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -48,7 +49,9 @@ pub struct Job {
     pub max_parallel_runs: u32,
     pub parameters: sqlx::types::Json<BTreeMap<String, String>>,
     pub env: sqlx::types::Json<BTreeMap<String, String>>,
-    pub on_failure_emails: sqlx::types::Json<Vec<String>>,
+    /// Who to tell when a run of this job fails, keyed by the channel that tells them. A
+    /// channel the YAML named nobody under is absent rather than empty.
+    pub on_failure_recipients: sqlx::types::Json<BTreeMap<NotificationChannel, Vec<String>>>,
 }
 
 
@@ -58,7 +61,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         sqlx::query(
-            "INSERT INTO mem.job (row_id, job_id, name, description, max_parallel_runs, parameters, env, on_failure_emails) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO mem.job (row_id, job_id, name, description, max_parallel_runs, parameters, env, on_failure_recipients) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(data.input.row_id as i64)
         .bind(&data.input.job_id)
@@ -67,7 +70,7 @@ impl CRUD {
         .bind(data.input.max_parallel_runs)
         .bind(sqlx::types::Json(&data.input.parameters))
         .bind(sqlx::types::Json(&data.input.env))
-        .bind(sqlx::types::Json(&data.input.on_failure_emails))
+        .bind(sqlx::types::Json(&data.input.on_failure_recipients))
         .execute(executor)
         .await?;
 
@@ -78,7 +81,7 @@ impl CRUD {
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
-        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT job_id, name, description, max_parallel_runs, parameters, env, on_failure_emails FROM mem.job WHERE 1=1");
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT job_id, name, description, max_parallel_runs, parameters, env, on_failure_recipients FROM mem.job WHERE 1=1");
 
         if let Some(job_id) = &data.filter.job_id {
             query_builder.push(" AND job_id = ");

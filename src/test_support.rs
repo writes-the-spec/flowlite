@@ -83,7 +83,7 @@ impl TestDb {
     }
 
     /// A notification service over this test's config, which configures no channel at
-    /// all — so it is the service a box with no `[smtp]` runs.
+    /// all — so it is the service a box with neither `[smtp]` nor `[slack]` runs.
     pub fn notification_service(&self) -> NotificationService {
         NotificationService::new(
             self.crud.clone(),
@@ -305,7 +305,12 @@ impl TestDb {
 
     /// An open notification against a run, the way `submit_job` writes one — before
     /// anyone knows whether the run will need it.
-    pub async fn insert_job_run_notification(&self, job_run_id: i64, recipients: &[&str]) -> JobRunNotification {
+    pub async fn insert_job_run_notification(
+        &self,
+        job_run_id: i64,
+        channel: NotificationChannel,
+        recipients: &[&str],
+    ) -> JobRunNotification {
 
         let id = self.crud.insert_job_run_notification(
             &*self.conn_pool,
@@ -313,7 +318,7 @@ impl TestDb {
                 input: InsertJobRunNotificationDataInput {
                     job_run_id,
                     job_id: "job".to_string(),
-                    channel: NotificationChannel::Email,
+                    channel,
                     recipients: recipients.iter().map(|r| r.to_string()).collect(),
                     status: JobRunNotificationStatus::Pending,
                     error: String::new(),

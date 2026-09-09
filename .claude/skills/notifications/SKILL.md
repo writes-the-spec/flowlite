@@ -8,7 +8,8 @@ It is **not** part of the [orchestrator](../orchestrator/SKILL.md). `serve` star
 |---|---|
 | [service.rs](../../../src/notifications/service.rs) | `NotificationService` — the `Service` the `Poller` drives |
 | [channel.rs](../../../src/notifications/channel.rs) | `NotificationChannels` — every channel this process can actually deliver over |
-| [email.rs](../../../src/notifications/email.rs) | `EmailChannel` — the only channel today, and the one place that talks SMTP |
+| [email.rs](../../../src/notifications/email.rs) | `EmailChannel` — the one place that talks SMTP |
+| [slack.rs](../../../src/notifications/slack.rs) | `SlackChannel` — the one place that talks to Slack's API |
 | [message.rs](../../../src/notifications/message.rs) | `NotificationMessage`, and what a failed job run says |
 
 ## The loop
@@ -32,6 +33,8 @@ Its wake-up is registered in `serve` **before any `Poller` is spawned**, for the
 
 The service is started **whatever config.toml configures**. With no channel at all it simply has nothing open to deliver, and a row it cannot deliver is closed as failed with the reason on it — a state you can read, rather than a silence.
 
+A job naming two channels is submitted with **two rows**, and each is selected, delivered and recorded on its own. That is the whole of the isolation between channels: a Slack workspace that is down cannot swallow the mail, and neither row knows the other exists.
+
 ## How it is decoupled
 
 The producer and the deliverer meet through a row and nowhere else, which is the same rule the orchestrator's own services follow.
@@ -48,23 +51,37 @@ Writing the row at submit rather than at failure also removes a problem instead 
 
 `NotificationChannels::from_config` builds every channel `config.toml` configures, once. `NotificationChannel` (the enum, on [the entity](../../../src/crud/job_run_notification.rs) beside the status it sits next to in the table) is the column, so a row says for itself what delivering it means rather than the sender guessing from the recipients.
 
+Two today, `email` and `slack`, and each variant is spelled **exactly as the key a job declares it under** in `on_failure:` — which is what lets an error name the YAML the reader has to go and edit, without a second table mapping one spelling to the other.
+
+| Channel | Config | Addresses | Delivers |
+|---|---|---|---|
+| `email` | `[smtp]` | addresses | one message to all of them |
+| `slack` | `[slack]` | conversations | one `chat.postMessage` each |
+
+Slack is a **bot token, not an incoming webhook**. A webhook URL *is* its destination, so a job naming a second conversation would have to carry a second secret URL in its YAML — and keeping secrets out of the files that sit beside the jobs is the whole reason config.toml and the YAML are split. Two things about its API are worth knowing before touching that file: a refusal comes back as `ok: false` in a **200**, so the status code alone says nothing; and it posts to one conversation per call, so several recipients are several calls — a refusal by one does not stop the rest, since an alert delivered somewhere beats one delivered nowhere.
+
 Delivery is a **`match` on that enum, not a registry of trait objects**. The channels are known at compile time, so adding one is a variant plus an arm the compiler then demands — a better reminder than a `Vec` nobody was told to register in — and it avoids a boxed future per send for a set of two or three. See the [code-style skill](../code-style/SKILL.md) on not reaching for a trait to unify a handful of call sites.
 
 A channel with nothing configured is `None` rather than absent, and asking for it is an error naming what is missing. That is deliberate: `Some`/`None` here is what turns "nobody configured SMTP" into a row you can read instead of a notification that quietly never leaves.
 
 ### Adding a channel
 
-1. A variant on `NotificationChannel`, plus its `Display` arm.
-2. A module beside [email.rs](../../../src/notifications/email.rs) with its own `send` and `max_output_bytes`.
+1. A variant on `NotificationChannel`, named as the YAML key, plus its `Display` arm.
+2. A module beside [slack.rs](../../../src/notifications/slack.rs) with its own `send` and `max_output_bytes`.
 3. Its config section on `AppConfig`, and a field on `NotificationChannels` built in `from_config`.
 4. The arms the compiler now demands in `send` and `max_output_bytes`.
-5. `job_run_notification_definitions` in [misc.rs](../../../src/crud/multistatements/misc.rs), which turns what a job declared into the rows a run is submitted with. **`mem.job.on_failure_emails` and the YAML's `on_failure.email` are still email-shaped**; a second channel is the point at which they want to become a channel-to-recipients map.
+5. A field on `JobYamlOnFailure`, and its line in `job_on_failure_recipients` ([crud.rs](../../../src/crud/crud.rs)) — the one place the YAML's per-channel fields become the `channel -> recipients` map the job row stores. `job_run_notification_definitions` in [misc.rs](../../../src/crud/multistatements/misc.rs) walks that map and needs no change.
+6. The arm the compiler demands in `CRUD::validate_job_notifications`, saying which config section the channel needs to work at all.
+
+Steps 4 and 6 are the point of the enum: a channel cannot be added without saying both how to deliver it and what makes it deliverable, because neither match compiles until it does.
 
 ## Messages
 
-`NotificationMessage` is `{ subject, body }` — the two parts every channel has some form of. `job_run_failure_message` is the only kind there is today, which is why it is a function beside the service rather than a trait.
+`NotificationMessage` is `{ subject, body }` — the two parts every channel has some form of, and each channel renders them the way its transport wants. `job_run_failure_message` is the only kind there is today, which is why it is a function beside the service rather than a trait.
 
-**The cap on quoted output belongs to the channel, not the message.** `NotificationChannels::max_output_bytes` is asked per channel and passed into the builder, because the reason for a cap is the transport's own limit — a relay's maximum message size for email. Truncation has to happen while the body is built, since the output is embedded in formatted text no channel could safely cut afterwards.
+**The cap on quoted output belongs to the channel, not the message.** `NotificationChannels::max_output_bytes` is asked per channel and passed into the builder, because the reason for a cap is the transport's own limit — a relay's maximum message size for email, and for Slack how much of a chat message anybody scrolls through, which is why its default is the smaller of the two. Truncation has to happen while the body is built, since the output is embedded in formatted text no channel could safely cut afterwards.
+
+A channel that needs the message shaped differently does that in its own module, from the same two parts: Slack sends the subject as the line and the body in a code fence, because the body is aligned text that only reads in a monospaced block — and it escapes any fence in the quoted output first, since a command is free to print one.
 
 `stream_tail` keeps the **end** of a stream and cuts the front, on a character boundary: the end is where a command says why it stopped, and that is what makes a capped alert still worth reading.
 

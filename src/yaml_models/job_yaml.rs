@@ -30,13 +30,26 @@ pub struct JobYamlTask {
     pub working_dir: String,
 }
 
-/// What happens when a run of this job does not succeed. `email` is who is told; the
-/// block is a block rather than a bare `notify_email:` so the action to run on a failure
-/// can join it later without the two ways of reacting reading as unrelated keys.
+/// What happens when a run of this job does not succeed. Each key is a channel and holds
+/// who that channel tells — addresses under `email`, conversations under `slack`. A job
+/// may name both, and gets one notification per channel it names.
+///
+/// One field per channel rather than a map keyed by channel name, for the reason
+/// `NotificationChannel` is an enum and not a registry: the channels are known at compile
+/// time, and adding one should be a field the compiler carries through rather than a
+/// string somebody has to spell right. `CRUD::job_on_failure_recipients` is what turns
+/// this into the channel-to-recipients map the job row carries.
+///
+/// The block is a block rather than a bare `notify_email:` so the action to run on a
+/// failure can join it later without the two ways of reacting reading as unrelated keys.
 #[derive(Deserialize, Validate, Debug, Default)]
 pub struct JobYamlOnFailure {
     #[serde(default)]
     pub email: Vec<String>,
+    /// Conversations, as `#channel`, a channel id, or a user id for a direct message —
+    /// whatever the bot can post in.
+    #[serde(default)]
+    pub slack: Vec<String>,
 }
 
 #[derive(Deserialize, Validate, Debug)]
@@ -57,8 +70,9 @@ pub struct JobYaml {
     /// names both of them set.
     #[serde(default, deserialize_with = "deserialize_string_map")]
     pub env: BTreeMap<String, String>,
-    /// Who to tell when a run of this job fails or times out. Declaring an address with
-    /// no `[smtp]` in config.toml is a startup error — see `CRUD::validate_job_notifications`.
+    /// Who to tell when a run of this job fails or times out. Naming a recipient of a
+    /// channel config.toml does not configure is a startup error — see
+    /// `CRUD::validate_job_notifications`.
     #[serde(default)]
     pub on_failure: JobYamlOnFailure,
     #[serde(default)]

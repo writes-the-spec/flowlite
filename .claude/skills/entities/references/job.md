@@ -13,7 +13,7 @@ In-memory config, re-seeded on every startup, so nothing here survives a restart
 | `max_parallel_runs` | How many of this job's runs may be `Running` at once. Defaults to 1; **`0` means no limit** and short-circuits the count entirely. |
 | `parameters` | `NOT NULL`. Declared name to default value, `'{}'` when the job declares none. This table only holds the declaration — resolving it against a caller's overrides happens in `submit_job`, not here. |
 | `env` | `NOT NULL`. Environment variables for every task of the job, `'{}'` when it declares none. Merged with each task's own `env:` by `submit_job` — the task wins a shared name — and only the merged result is stored, on `task_run.env`. |
-| `on_failure_emails` | `NOT NULL`. JSON array from the YAML's `on_failure.email`, `'[]'` when it names nobody. Declaring an address while `config.toml` has no `[smtp]` section fails `CRUD::init` rather than being dropped. |
+| `on_failure_recipients` | `NOT NULL`. JSON object keyed by channel — `{"email": [...], "slack": [...]}` — from the YAML's `on_failure:` block, `'{}'` when it names nobody. A channel the YAML names nobody under is **absent**, not an empty array. Built by `job_on_failure_recipients`, which is the one place the YAML's per-channel fields become this map. Naming a recipient of a channel `config.toml` does not configure fails `CRUD::init` rather than being dropped. |
 
 ## Written by
 
@@ -23,7 +23,7 @@ In-memory config, re-seeded on every startup, so nothing here survives a restart
 
 - `CRUD::submit_job` ([src/crud/multistatements/misc.rs](../../../../src/crud/multistatements/misc.rs)) — copies `name` and `description` onto the `job_run` it inserts as `job_name`/`job_description`, and bails with `Job '<id>' not found` if the row is missing. It also passes `parameters` to `resolve_job_parameters`, which raises if a caller's override names a parameter this row does not declare, and merges `env` under each task's own `env:` via `merge_task_env`.
 - `CRUD::is_job_at_max_parallel_runs` — reads `max_parallel_runs`. **This is the single definition field the orchestrator reads live**, everywhere else it reads the run's snapshot. Deliberate: "may I start another run?" is a question about the job now, so it is not frozen onto `job_run`. See [task_run.md](task_run.md).
-- `CRUD::submit_job` again for `on_failure_emails`, which becomes the run's own [`job_run_notification`](job_run_notification.md) rows. **Who to tell is frozen at submit like the rest of the definition** — not read live the way `max_parallel_runs` is — so a run stays notifiable after its YAML is edited or deleted, and a rerun tells whoever the original run would have told.
+- `CRUD::submit_job` again for `on_failure_recipients`, which becomes the run's own [`job_run_notification`](job_run_notification.md) rows — **one per channel**, so a job naming both email and Slack is submitted with two. **Who to tell is frozen at submit like the rest of the definition** — not read live the way `max_parallel_runs` is — so a run stays notifiable after its YAML is edited or deleted, and a rerun tells whoever the original run would have told.
 - `job list` / `job submit` ([src/cli/commands/job.rs](../../../../src/cli/commands/job.rs)) and the home, jobs and job-detail web routes.
 
 ## Gotchas

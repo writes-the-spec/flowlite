@@ -329,6 +329,7 @@ impl Service for NotificationService {
 mod tests {
     use super::*;
     use crate::crud::job_run::JobRunStatus;
+    use crate::crud::job_run_notification::NotificationChannel;
     use crate::crud::task_run::TaskRunStatus;
     use crate::poller::Service;
     use crate::test_support::TestDb;
@@ -341,7 +342,11 @@ mod tests {
 
         db.insert_task_run(job_run.id, TaskRunStatus::Failed).await;
 
-        db.insert_job_run_notification(job_run.id, &["oncall@example.com"]).await
+        db.insert_job_run_notification(
+            job_run.id,
+            NotificationChannel::Email,
+            &["oncall@example.com"],
+        ).await
     }
 
     async fn settled_status(db: &TestDb, notification: &JobRunNotification) -> JobRunNotificationStatus {
@@ -421,6 +426,35 @@ mod tests {
         assert_eq!(settled.sent_at, None);
 
         assert!(service.select().await.unwrap().is_empty());
+    }
+
+    /// The same for every channel, which is what the `None`-rather-than-absent shape in
+    /// `NotificationChannels` buys: a job that asked for Slack on a box with no `[slack]`
+    /// is told so on the row, naming the section that is missing.
+    #[tokio::test]
+    async fn a_slack_notification_with_no_slack_configured_names_that_section() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Failed).await;
+
+        db.insert_task_run(job_run.id, TaskRunStatus::Failed).await;
+
+        let notification = db.insert_job_run_notification(
+            job_run.id,
+            NotificationChannel::Slack,
+            &["#oncall"],
+        ).await;
+
+        assert!(db.notification_service().handle(&notification).await.is_err());
+
+        let settled = db.job_run_notifications(job_run.id).await
+            .into_iter()
+            .next()
+            .unwrap();
+
+        assert_eq!(settled.status, JobRunNotificationStatus::Failed);
+        assert!(settled.error.contains("[slack]"), "{}", settled.error);
     }
 
     #[tokio::test]

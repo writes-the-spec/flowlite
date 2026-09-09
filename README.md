@@ -187,17 +187,22 @@ Each attempt keeps its own output — see [Task output](#task-output).
 
 ## Failure notifications
 
-A job can name who to email when one of its runs does not succeed:
+A job can name who to tell when one of its runs does not succeed, by email, in Slack, or
+both:
 
 ```yaml
 id: nightly-sync
 name: Nightly Sync
 on_failure:
   email: [oncall@example.com, data-team@example.com]
+  slack: ["#oncall"]
 tasks:
   - id: sync
     command: ./sync.sh
 ```
+
+Each channel a job names is delivered and recorded **separately**, so a Slack workspace
+that is down does not swallow the mail, and each says on its own row whether it landed.
 
 The message carries the run's status and timings, every task and how it ended, and the
 **output of the tasks that broke** — so the mail itself usually says what went wrong,
@@ -229,10 +234,15 @@ psycopg2.OperationalError: connection refused
 Run `flowlite job-run logs 42` for every task and attempt.
 ```
 
-**Only a real failure is mailed** — `failed` and `timed out`, never `aborted`. A run you
+Slack gets the same message: the subject as the line, the body in a code block, because
+it is aligned text that only reads in a monospaced one. The quoted output is capped
+shorter there than in mail by default — a chat message is read in a scroll, and the mail
+is where the long tail belongs.
+
+**Only a real failure is sent** — `failed` and `timed out`, never `aborted`. A run you
 stopped yourself is not news.
 
-### Where the mail server goes
+### Where the mail server and the Slack token go
 
 Who to tell is a property of the job, so it lives in the job's YAML alongside it. *Where
 mail goes out through* is a property of the machine, so it lives in `config.toml`:
@@ -256,15 +266,36 @@ FLOWLITE_SMTP__PASSWORD=... flowlite serve
 That keeps it out of a file that sits beside your jobs in version control — and out of the
 dashboard, which renders `env:` as written on purpose.
 
-**A job that names an address while `config.toml` has no `[smtp]` section refuses to
+Slack is the same split. `[slack]` holds a bot token with `chat:write`, and the token is
+the same kind of secret as the password, so it belongs in the environment too:
+
+```toml
+[slack]
+timeout_seconds = 10                # default; how long one post may take
+max_output_bytes = 2048             # default; the most of one stream a post quotes
+```
+
+```bash
+FLOWLITE_SLACK__TOKEN=xoxb-... flowlite serve
+```
+
+The token alone is enough — with no `[slack]` table in the file at all, that variable
+configures the channel.
+
+It is a bot token rather than an incoming webhook on purpose. A webhook URL *is* its
+destination, so a job naming a second conversation would have to carry a second secret URL
+in its YAML, which is exactly what this split exists to prevent. With a token, a job names
+`#oncall` and nothing else — invite the bot to each conversation you want it to post in.
+
+**A job that names a recipient of a channel `config.toml` does not configure refuses to
 start**, naming the job and the file:
 
 ```
 Invalid notifications of job 'nightly-sync' at /srv/flowlite/jobs/nightly.yaml
 
 Caused by:
-    on_failure.email names oncall@example.com but config.toml has no [smtp] section,
-    so no mail can be sent. Add one, or remove the addresses.
+    on_failure.slack names #oncall but config.toml has no [slack] section, so nothing
+    can be sent by slack. Add one, or remove the recipients.
 ```
 
 A notification that silently never leaves is the one failure you cannot see from the run
@@ -272,7 +303,9 @@ afterwards, so it is a startup error rather than a surprise at 03:00.
 
 Each send is tried **once**. A send that fails is recorded against the run with the
 error, and reported in the server log, rather than being retried against a relay that may
-be down for hours.
+be down for hours. Slack is recorded on what it *said*, not on the status code — it
+refuses an unknown conversation with `ok: false` in a 200, and one conversation refusing
+does not stop the others from getting the alert.
 
 A run records who it will tell **when it is submitted**, alongside the commands and
 parameters it snapshots. So editing `on_failure:` does not change a run already in flight,
@@ -280,8 +313,8 @@ a rerun tells whoever the original run would have told, and a run whose job YAML
 been deleted still reaches somebody.
 
 Delivery runs as its own background service, so a slow or unreachable mail server never
-holds up the runs themselves. Email is the only channel today; each run records which
-channel it is to be told over, so more can join it.
+holds up the runs themselves. Each notification records which channel it is to be told
+over, so a third can join email and Slack without either of them changing.
 
 ## Overlapping runs
 

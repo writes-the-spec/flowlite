@@ -26,6 +26,10 @@ validator = { version = "0.20.0", features = ["derive"] }
 cron = { version = "0.17.0", features = ["serde"] }
 libc = "0.2.186"
 lettre = { version = "0.11.23", default-features = false, features = ["smtp-transport", "builder", "tokio1-rustls-tls"] }
+# rustls-no-provider, plus ring below, so the tree keeps the one crypto provider lettre
+# already brings rather than also building aws-lc-rs and its C toolchain.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json", "http2"] }
+rustls = { version = "0.23.44", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 
 [dev-dependencies]
 tokio = { version = "1.52.3", features = ["test-util"] }

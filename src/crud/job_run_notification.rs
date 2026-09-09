@@ -30,19 +30,27 @@ impl std::fmt::Display for JobRunNotificationStatus {
 }
 
 /// How a notification reaches somebody. A column rather than something the sender infers
-/// from the recipients, so one row says for itself what delivering it means — and a second
+/// from the recipients, so one row says for itself what delivering it means — and a third
 /// channel is a variant here plus an arm the compiler then demands.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, sqlx::Type)]
+///
+/// Each variant is spelled exactly as the key a job declares it under in `on_failure:`,
+/// so an error about a channel can name the YAML the reader has to go and edit.
+///
+/// Ordered because a job's recipients are keyed by it, which is also what fixes the order
+/// a run's notification rows are written in.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, sqlx::Type)]
 #[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum NotificationChannel {
     Email,
+    Slack,
 }
 
 impl std::fmt::Display for NotificationChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             NotificationChannel::Email => write!(f, "email"),
+            NotificationChannel::Slack => write!(f, "slack"),
         }
     }
 }

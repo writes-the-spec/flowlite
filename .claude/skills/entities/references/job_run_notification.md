@@ -7,8 +7,8 @@ One "tell somebody how this run ended" for a [`job_run`](job_run.md), and the re
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`. |
 | `job_run_id` | Foreign key to [`job_run`](job_run.md). |
 | `job_id` | Carried like every other parent id, so a row says which job it is about without a join. |
-| `channel` | How it is delivered — `email` today. A column rather than something the sender infers from `recipients`, so one row says for itself what delivering it means. |
-| `recipients` | JSON array, addressed however `channel` addresses people. For `email`, the `on_failure.email` the job declared, resolved at submit. |
+| `channel` | How it is delivered — `email` or `slack`. A column rather than something the sender infers from `recipients`, so one row says for itself what delivering it means. Spelled exactly as the key under `on_failure:` that declared it. |
+| `recipients` | JSON array, addressed however `channel` addresses people: addresses for `email`, conversations for `slack`. Resolved at submit from what the job declared under that channel's key. |
 | `status` | `pending`, `sent`, `failed` or `skipped` — see below. |
 | `error` | Why a delivery failed; **empty** until one does — a notification nobody has tried has no error, not an unknown one. |
 | `created_at` | Bound from `Toolkit`. |
@@ -26,7 +26,9 @@ The other three are all closed, and only [`NotificationService`](../../notificat
 
 ## Written by
 
-`CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/misc.rs](../../../../src/crud/multistatements/misc.rs)), through `insert_job_run_definition` — the same call that inserts the [`job_run`](job_run.md) and its [`task_run`](task_run.md)s, from the same snapshot. Who to tell is part of a run's definition, exactly like its commands and its parameters, so it is frozen at submit and a rerun replays it: `submit_job` builds it from `mem.job.on_failure_emails`, `rerun_job` from the earlier run's own rows.
+`CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/misc.rs](../../../../src/crud/multistatements/misc.rs)), through `insert_job_run_definition` — the same call that inserts the [`job_run`](job_run.md) and its [`task_run`](task_run.md)s, from the same snapshot. Who to tell is part of a run's definition, exactly like its commands and its parameters, so it is frozen at submit and a rerun replays it: `submit_job` builds it from `mem.job.on_failure_recipients`, `rerun_job` from the earlier run's own rows.
+
+**One row per channel**, so a job naming both email and Slack is submitted with two, delivered and recorded independently — a Slack workspace that is down does not swallow the mail.
 
 **Nothing in the orchestrator writes this table.** `JobRunMonitor` finishes a run and publishes; it does not know notifications exist.
 

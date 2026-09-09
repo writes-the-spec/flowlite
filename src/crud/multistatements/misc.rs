@@ -150,20 +150,19 @@ fn is_valid_parameter_name(name: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// The notifications one run is submitted with, from the addresses the job declared.
-///
-/// One channel today, so one row at most. A job that names nobody gets none at all rather
-/// than an empty one — there is nothing to decide about later.
-fn job_run_notification_definitions(on_failure_emails: &[String]) -> Vec<JobRunNotificationDefinition> {
+/// The notifications one run is submitted with: one per channel the job named somebody
+/// under. A job that names nobody at all gets none.
+fn job_run_notification_definitions(
+    on_failure_recipients: &BTreeMap<NotificationChannel, Vec<String>>,
+) -> Vec<JobRunNotificationDefinition> {
 
-    if on_failure_emails.is_empty() {
-        return Vec::new();
-    }
-
-    vec![JobRunNotificationDefinition {
-        channel: NotificationChannel::Email,
-        recipients: on_failure_emails.to_vec(),
-    }]
+    on_failure_recipients
+        .iter()
+        .map(|(channel, recipients)| JobRunNotificationDefinition {
+            channel: *channel,
+            recipients: recipients.clone(),
+        })
+        .collect()
 }
 
 
@@ -236,7 +235,7 @@ impl CRUD {
                     working_dir: task.working_dir.clone(),
                 })
                 .collect(),
-            notifications: job_run_notification_definitions(&job.on_failure_emails.0),
+            notifications: job_run_notification_definitions(&job.on_failure_recipients.0),
         };
 
         self.insert_job_run_definition(&mut *conn, &definition).await
@@ -635,40 +634,79 @@ mod tests {
         let job_run = db.insert_job_run(JobRunStatus::Failed).await;
 
         db.insert_task_run(job_run.id, TaskRunStatus::Failed).await;
-        db.insert_job_run_notification(job_run.id, &["oncall@example.com"]).await;
+
+        db.insert_job_run_notification(
+            job_run.id,
+            NotificationChannel::Email,
+            &["oncall@example.com"],
+        ).await;
+
+        db.insert_job_run_notification(
+            job_run.id,
+            NotificationChannel::Slack,
+            &["#oncall"],
+        ).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
         let rerun_id = db.crud.rerun_job(&mut conn, job_run.id).await.unwrap();
 
         let notifications = db.job_run_notifications(rerun_id).await;
 
-        assert_eq!(notifications.len(), 1);
-        assert_eq!(notifications[0].recipients.0, vec!["oncall@example.com"]);
+        assert_eq!(notifications.len(), 2);
         assert_eq!(notifications[0].channel, NotificationChannel::Email);
+        assert_eq!(notifications[0].recipients.0, vec!["oncall@example.com"]);
+        assert_eq!(notifications[1].channel, NotificationChannel::Slack);
+        assert_eq!(notifications[1].recipients.0, vec!["#oncall"]);
 
         // Open again, so the rerun is judged on its own outcome rather than inheriting one.
         assert_eq!(notifications[0].status, JobRunNotificationStatus::Pending);
         assert_eq!(notifications[0].sent_at, None);
     }
 
+    fn recipients(pairs: &[(NotificationChannel, &[&str])]) -> BTreeMap<NotificationChannel, Vec<String>> {
+        pairs
+            .iter()
+            .map(|(channel, recipients)| (
+                *channel,
+                recipients.iter().map(|r| r.to_string()).collect(),
+            ))
+            .collect()
+    }
+
     /// A job that names nobody gets no notification at all, rather than an empty one
     /// every pass has to look at and decide about.
     #[test]
     fn a_job_naming_nobody_is_submitted_with_no_notifications() {
-        assert!(job_run_notification_definitions(&[]).is_empty());
+        assert!(job_run_notification_definitions(&recipients(&[])).is_empty());
     }
 
     #[test]
     fn the_addresses_a_job_names_become_one_email_notification() {
 
-        let definitions = job_run_notification_definitions(&[
-            "oncall@example.com".to_string(),
-            "data@example.com".to_string(),
-        ]);
+        let definitions = job_run_notification_definitions(&recipients(&[
+            (NotificationChannel::Email, &["oncall@example.com", "data@example.com"]),
+        ]));
 
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].channel, NotificationChannel::Email);
         assert_eq!(definitions[0].recipients.len(), 2);
+    }
+
+    /// A run is told over every channel its job named, and each channel gets its own row —
+    /// so a Slack post that fails does not take the mail down with it, and each is
+    /// recorded separately.
+    #[test]
+    fn a_job_naming_two_channels_is_submitted_with_one_notification_each() {
+
+        let definitions = job_run_notification_definitions(&recipients(&[
+            (NotificationChannel::Email, &["oncall@example.com"]),
+            (NotificationChannel::Slack, &["#oncall"]),
+        ]));
+
+        assert_eq!(definitions.len(), 2);
+        assert_eq!(definitions[0].channel, NotificationChannel::Email);
+        assert_eq!(definitions[1].channel, NotificationChannel::Slack);
+        assert_eq!(definitions[1].recipients, vec!["#oncall"]);
     }
 
     #[test]
