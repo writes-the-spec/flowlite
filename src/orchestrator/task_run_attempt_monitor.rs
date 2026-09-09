@@ -57,19 +57,13 @@ impl TaskRunAttemptMonitor {
     /// `TaskRunAttemptChildren` hands over — or as `Invalid` when it holds none, which is
     /// a row this program cannot read rather than an outcome it can name.
     ///
-    /// **Order decides precedence**, in the succeeded, failed, timed out, aborted, running
-    /// ladder all three monitors read in: a real outcome outranks a stop, so
-    /// `settle_for_aborted` is the last of the finished ones. A process that has already
-    /// exited reports what it exited with rather than being recorded as killed, and one
-    /// past its timeout reports the timeout. A process still running when its job run is
-    /// stopped is still killed on this same pass, since the three outcomes above it decline.
-    /// `settle_for_running` guards nothing at all, so it has to stay last.
+    /// **Order decides precedence**: a real outcome outranks a stop, so a process that has
+    /// already exited reports its exit status rather than being recorded as killed.
+    /// `settle_for_running` guards nothing, so it has to stay last.
     ///
-    /// **Within the two rungs that kill, the kill comes before the drain.** The readers
-    /// end at EOF and a pipe closes when the process holding it dies, so killing is what
-    /// produces the EOF that lets `finish_reading` return. The reverse order — which is
-    /// what this did while the pass read the pipes itself — would wait out the whole of
-    /// the configured reader EOF timeout on every timeout and every stop.
+    /// **In the two rungs that kill, the kill comes before the drain.** A pipe closes when
+    /// the process holding it dies, and that EOF is what lets `finish_reading` return;
+    /// draining first waits out the whole reader EOF timeout.
     async fn handle_running_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         let Some(mut task_run_attempt_child) = self.children.remove(task_run_attempt.id).await else {
@@ -178,10 +172,9 @@ impl TaskRunAttemptMonitor {
 
     /// Succeeds the attempt once its process has exited zero.
     ///
-    /// Asks `try_wait` for itself, as `settle_for_failed` does rather than the two sharing
-    /// one exit-status call: they are two lines of the ladder every monitor reads in, and
-    /// which of them claimed the attempt should be readable from the chain. `try_wait`
-    /// caches the status it reaped, so asking twice is a repeated question, not a race.
+    /// Asks `try_wait` for itself rather than sharing one call with `settle_for_failed`, so
+    /// each status is its own rung of the ladder. `try_wait` caches the status it reaped,
+    /// so asking twice is a repeated question, not a race.
     async fn settle_for_succeeded(
         &self,
         task_run_attempt: &TaskRunAttempt,
@@ -325,11 +318,8 @@ impl TaskRunAttemptMonitor {
     }
 
     /// Records everything the readers will ever deliver, by waiting for the channel to
-    /// close — which happens when both of them reach EOF and drop their senders.
-    ///
-    /// Waiting for a real EOF is what makes this final drain complete, unlike the 10ms
-    /// timeout it replaces, which could not tell a momentarily empty pipe from a finished
-    /// one.
+    /// close — both of them reaching EOF and dropping their senders. Waiting for a real EOF
+    /// is what makes this final drain complete rather than a guess at one.
     async fn finish_reading(
         &self,
         task_run_attempt: &TaskRunAttempt,
@@ -361,11 +351,8 @@ impl TaskRunAttemptMonitor {
     }
 
     /// Appends one row per stream that has new output, and none for a stream that has not.
-    ///
-    /// One row per pass rather than one per read is what makes the write volume
-    /// proportional to the bytes the task produced. The column pair this replaced rewrote
-    /// the whole of a stream's output on every pass, so storing it cost the square of its
-    /// size.
+    /// One row per pass rather than one per read keeps the write volume proportional to the
+    /// bytes the task produced.
     async fn insert_output(
         &self,
         task_run_attempt: &TaskRunAttempt,
@@ -443,10 +430,9 @@ impl TaskRunAttemptMonitor {
 
     /// Writes the terminal status, and only that: the output already went in.
     ///
-    /// Every caller drains through `finish_reading` first, which is deliberate — output is
-    /// recorded **before** the status that says the attempt is over, so **an attempt that
-    /// reads as terminal has complete output.** Writing the status first would leave a
-    /// window where the page shows Succeeded above a truncated log.
+    /// Every caller drains through `finish_reading` first, so **an attempt that reads as
+    /// terminal has complete output**. Writing the status first would leave a window where
+    /// the page shows Succeeded above a truncated log.
     async fn finish_task_run_attempt(
         &self,
         task_run_attempt: &TaskRunAttempt,
@@ -661,12 +647,10 @@ mod tests {
         );
     }
 
-    /// A command that makes `sh` fork rather than exec leaves a grandchild, which is most
-    /// real commands: anything with a `;`, a pipe or a background job. Killing only the
-    /// process flowlite spawned reports TimedOut while the actual work carries on.
-    ///
-    /// Spawned through the real dispatcher, not the fixture, so it covers both halves of
-    /// the fix: the process group the dispatcher creates, and the group this monitor kills.
+    /// A command that makes `sh` fork rather than exec leaves a grandchild — anything with
+    /// a `;`, a pipe or a background job — and killing only the process flowlite spawned
+    /// reports TimedOut while the work carries on. Spawned through the real dispatcher, so
+    /// it covers both the group created and the group killed.
     #[tokio::test]
     async fn a_timeout_kills_the_whole_process_group() {
         let db = TestDb::new().await;

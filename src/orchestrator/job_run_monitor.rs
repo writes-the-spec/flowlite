@@ -32,18 +32,12 @@ impl JobRunMonitor {
 
     /// Settles a running job run as exactly one outcome, from its task runs alone.
     ///
-    /// **Order decides precedence**: an unknown outranks every named verdict, so
-    /// `settle_for_invalid` is first; a real failure outranks a stop, so `settle_for_aborted`
-    /// is the last of the finished outcomes — a job run with one aborted and one failed task
-    /// run reports the failure, which is the part worth acting on. Failed outranks timed out.
-    /// That ordering is also what makes a skipped task run readable as a stop; see
-    /// `TaskRunStatus::is_stopped`.
+    /// **Order decides precedence**: an unknown outranks every named verdict, and a real
+    /// failure outranks a stop, so `settle_for_aborted` is the last finished outcome.
     ///
-    /// `settle_for_running` is asked last, the succeeded, failed, timed out, aborted, running
-    /// ladder all three monitors read in: it is the outcome that guards nothing of its own,
-    /// so the `all_finished` each failure outcome re-asks is the one thing holding open a job
-    /// run whose work is still going — finishing is irreversible, since this monitor only
-    /// visits Running rows.
+    /// `settle_for_running` is asked last and guards nothing of its own, which leaves the
+    /// `all_finished` each failure outcome re-asks as the only thing holding open a job run
+    /// whose work is still going. Finishing is irreversible.
     ///
     /// Nothing here writes Skipped: a Running job run has started, so a stop aborts it.
     async fn handle_running_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
@@ -166,12 +160,11 @@ impl JobRunMonitor {
         Ok(true)
     }
 
-    /// Aborts the job run that was stopped, which its task runs report in either of two
-    /// ways: one was killed mid-flight, or one was skipped before it could start.
+    /// Aborts the job run that was stopped — a task run killed mid-flight, or skipped
+    /// before it could start.
     ///
-    /// Asked last, so a real failure outranks a stop. A skipped task run means a stop or a
-    /// dependency that did not succeed, and such a dependency would itself be failed or
-    /// timed out — so by the time this is asked, nothing has failed and only a stop is left.
+    /// Asked last, so a real failure outranks a stop: a dependency that did not succeed
+    /// would itself be failed or timed out, leaving only a stop by the time this is asked.
     async fn settle_for_aborted(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
         let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());

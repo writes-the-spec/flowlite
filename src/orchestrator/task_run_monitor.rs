@@ -114,10 +114,8 @@ impl TaskRunMonitor {
     }
 
     /// Keeps the task run running: waits while an attempt is in flight, or inserts the next
-    /// one. Writes no task run status — it stays Running for the whole retry loop.
-    ///
-    /// The retry row goes in immediately; `TaskRunAttemptDispatcher` holds it pending until
-    /// `retry_delay` has passed.
+    /// one. Writes no status — it stays Running for the whole retry loop, and the retry row
+    /// goes in immediately for `TaskRunAttemptDispatcher` to hold until `retry_delay` passes.
     async fn settle_for_running(
         &self,
         task_run: &TaskRun,
@@ -178,11 +176,8 @@ impl TaskRunMonitor {
         Ok(true)
     }
 
-    /// Re-asks whether the attempt has finished, as `settle_for_aborted` does and as
-    /// JobRunMonitor's failure outcomes do: TimedOut implies finished, so this is a second
-    /// lock on the same door, and it is what keeps `settle_for_running` being asked last
-    /// from being the only thing standing between an in-flight attempt and a finished
-    /// task run.
+    /// Re-asks whether the attempt has finished, which TimedOut already implies: a second
+    /// lock on the same door, so `settle_for_running` being last is not the only guard.
     async fn settle_for_timed_out(
         &self,
         task_run: &TaskRun,
@@ -201,12 +196,9 @@ impl TaskRunMonitor {
         Ok(true)
     }
 
-    /// Aborts the task run, where both stop outcomes land: the attempt was killed
-    /// mid-flight, or skipped before its command started.
-    ///
-    /// A skipped attempt does **not** make the task run Skipped. It only ever sees Running
-    /// task runs, which had started and may already have left output, so Skipped would
-    /// claim nothing ran.
+    /// Aborts the task run, where both stop outcomes land: killed mid-flight, or skipped
+    /// before the command started. A skipped attempt does **not** make the task run
+    /// Skipped — it had started and may have left output, so Skipped would claim nothing ran.
     async fn settle_for_aborted(
         &self,
         task_run: &TaskRun,

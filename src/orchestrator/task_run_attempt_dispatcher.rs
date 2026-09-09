@@ -128,12 +128,11 @@ impl TaskRunAttemptDispatcher {
         Ok(true)
     }
 
-    /// Leaves the attempt pending, writing nothing, while the retry_delay the run was
-    /// submitted with has yet to pass since this attempt was created, which is when
-    /// TaskRunMonitor decided to retry. Returns whether this is what happened.
+    /// Leaves the attempt pending while the retry_delay it was submitted with has yet to
+    /// pass since it was created — which is when TaskRunMonitor decided to retry.
     ///
-    /// Only a retry waits. Attempt 1 is inserted by TaskRunDispatcher as it starts the task
-    /// run and has nothing to wait for, so it never reaches the task run query below.
+    /// Only a retry waits: attempt 1 has nothing to wait for, so it never reaches the task
+    /// run query below.
     async fn settle_as_pending(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
 
         if task_run_attempt.attempt <= 1 {
@@ -150,8 +149,8 @@ impl TaskRunAttemptDispatcher {
     /// Spawns the command of the attempt, hands the child process over and sets the
     /// attempt to running, which is what makes TaskRunAttemptMonitor pick it up.
     ///
-    /// The child has to be in TaskRunAttemptChildren before the status is written, or
-    /// the monitor sees a running attempt with no process and aborts it.
+    /// The child has to be in TaskRunAttemptChildren before the status is written, or the
+    /// monitor sees a running attempt with no process and settles it Invalid.
     async fn settle_as_running(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
 
         let task_run = self.get_task_run(task_run_attempt).await?;
@@ -371,11 +370,8 @@ mod tests {
     use crate::test_support::TestDb;
     use crate::test_support::read_command_file;
 
-    /// Asks whether the attempt is still waiting out its retry_delay.
-    ///
     /// Calls `settle_as_pending` rather than the whole chain on purpose: falling through it
-    /// means `settle_as_running` spawns a real process, which is what these tests are about
-    /// avoiding until the delay has passed.
+    /// spawns a real process, which is what these tests are about avoiding.
     async fn is_waiting_to_retry(attempt: u32, retry_delay: u32, created_ago: i64) -> bool {
 
         let db = TestDb::new().await;
@@ -402,8 +398,8 @@ mod tests {
             .unwrap()
     }
 
-    /// Attempt 1 is inserted by TaskRunDispatcher as it starts the task run, so it has no
-    /// failure behind it to wait out however long the retry_delay is.
+    /// Attempt 1 has no failure behind it, so it waits out no retry_delay however long
+    /// the task run's is.
     #[tokio::test]
     async fn the_first_attempt_never_waits() {
         assert!(!is_waiting_to_retry(1, 60, 0).await);

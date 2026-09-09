@@ -30,13 +30,12 @@ impl TaskRunDispatcher {
         }
     }
 
-    /// Settles a pending task run as exactly one outcome. Falling past all three bails
-    /// rather than returning quietly: a row nobody handled looks exactly like one
-    /// legitimately waiting on a dependency.
+    /// Settles a pending task run as exactly one outcome, bailing past the last rather than
+    /// returning quietly: a row nobody handled looks like one legitimately waiting.
     ///
-    /// Each outcome loads the dependencies itself, so a dependency failing mid-pass can
-    /// leave a set that is neither all-succeeded nor still-running and bail on an ordinary
-    /// state. It clears next pass, when `settle_as_skipped` claims the row.
+    /// Each outcome loads the dependencies itself, so one failing mid-pass can leave a set
+    /// that is neither all-succeeded nor still-running and reach that bail on an ordinary
+    /// state. The next pass settles it.
     async fn handle_pending_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         if self.settle_as_skipped(task_run).await? {
@@ -122,11 +121,10 @@ impl TaskRunDispatcher {
     /// every task run it depends on has succeeded.
     ///
     /// Asking whether they all succeeded, rather than starting whatever `settle_as_pending`
-    /// turned down, is what stops a dependency that failed since that guard ran: the two
-    /// load the dependencies separately.
+    /// turned down, is what stops a dependency that failed since that guard ran.
     ///
-    /// It writes one status and nothing else. Attempts are TaskRunMonitor's, the first as
-    /// much as the retries, so no crash can strand a half-started row here.
+    /// It writes one status and nothing else — attempts are TaskRunMonitor's — so no crash
+    /// can strand a half-started row here.
     async fn settle_as_running(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
         let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
@@ -279,11 +277,8 @@ mod tests {
         assert_eq!(db.task_run(dependent.id).await.status, TaskRunStatus::Skipped);
     }
 
-    /// Starting a task run writes one status and nothing else. Inserting attempt 1 here
-    /// too — which this used to do, before the status, so the monitor never saw a Running
-    /// task run without one — left a window a crash could stop inside: the attempt was in,
-    /// the status was not, and every later pass hit the unique index on
-    /// (task_run_id, attempt) and errored instead of starting the row.
+    /// Inserting attempt 1 here too would leave a window a crash could stop inside, after
+    /// which every pass hit the unique index on (task_run_id, attempt) instead of starting.
     #[tokio::test]
     async fn starting_a_task_run_inserts_no_attempt() {
 
