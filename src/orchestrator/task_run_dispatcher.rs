@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use crate::crud::CRUD;
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
-use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, TaskRunAttemptStatus};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRun, TaskRunStatus, UpdateTaskRunsData, UpdateTaskRunsDataFilter, UpdateTaskRunsDataInput};
 use crate::poller::Service;
 use crate::signals::Signals;
@@ -122,16 +121,20 @@ impl TaskRunDispatcher {
     }
 
     /// Sets the task run to running, which is what makes TaskRunMonitor pick it up, once
-    /// every task run it depends on has succeeded, and gives it the first attempt to run.
+    /// every task run it depends on has succeeded.
     ///
     /// Asking whether they all succeeded, rather than starting whatever `settle_as_pending`
     /// turned down, is what stops a dependency that failed since that guard ran: the two
     /// load the dependencies separately.
     ///
-    /// The attempt row is inserted **before** the status, for the same reason the attempt
-    /// dispatcher hands its child over before writing Running: TaskRunMonitor decides from
-    /// the last attempt, so a Running task run without one is a state it cannot act on.
-    /// Every later attempt is a retry, and those are TaskRunMonitor's.
+    /// **It writes one status and nothing else.** Attempts are TaskRunMonitor's, all of
+    /// them — the first as much as the retries. This used to insert attempt 1 here, before
+    /// the status, so the monitor never saw a Running task run without one; the cost was a
+    /// window between the two writes that a crash could stop inside, leaving an attempt
+    /// row against a Pending task run. Every later pass then hit the unique index on
+    /// (task_run_id, attempt) and errored, so the row never started, the job run above it
+    /// stayed Running and held a parallel slot for ever — while the attempt dispatcher ran
+    /// the command anyway and nothing read the result.
     async fn settle_as_running(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
         let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
@@ -141,20 +144,6 @@ impl TaskRunDispatcher {
         if !all_succeeded {
             return Ok(false);
         }
-
-        self.crud.insert_task_run_attempt(
-            &*self.conn_pool,
-            &InsertTaskRunAttemptData {
-                input: InsertTaskRunAttemptDataInput {
-                    task_run_id: task_run.id,
-                    job_run_id: task_run.job_run_id,
-                    job_id: task_run.job_id.clone(),
-                    task_id: task_run.task_id.clone(),
-                    attempt: 1,
-                    status: TaskRunAttemptStatus::Pending,
-                },
-            },
-        ).await?;
 
         self.crud.update_task_runs(
             &*self.conn_pool,
@@ -275,6 +264,7 @@ impl Service for TaskRunDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crud::task_run_attempt::TaskRunAttemptStatus;
     use crate::crud::job_run::JobRunStatus;
     use crate::test_support::TestDb;
 
@@ -295,6 +285,44 @@ mod tests {
         db.task_run_dispatcher().handle(&dependent).await.unwrap();
 
         assert_eq!(db.task_run(dependent.id).await.status, TaskRunStatus::Skipped);
+    }
+
+    /// Starting a task run writes one status and nothing else. Inserting attempt 1 here
+    /// too — which this used to do, before the status, so the monitor never saw a Running
+    /// task run without one — left a window a crash could stop inside: the attempt was in,
+    /// the status was not, and every later pass hit the unique index on
+    /// (task_run_id, attempt) and errored instead of starting the row.
+    #[tokio::test]
+    async fn starting_a_task_run_inserts_no_attempt() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Pending).await;
+
+        db.task_run_dispatcher().handle(&task_run).await.unwrap();
+
+        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Running);
+        assert!(db.task_run_attempts(task_run.id).await.is_empty());
+    }
+
+    /// The state that window left behind, which a database written by the old order can
+    /// still hold: a pending task run that already has attempt 1. Starting it must not
+    /// collide with that row.
+    #[tokio::test]
+    async fn a_pending_task_run_that_already_has_an_attempt_still_starts() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Pending).await;
+
+        db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+
+        db.task_run_dispatcher().handle(&task_run).await.unwrap();
+
+        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Running);
+        assert_eq!(db.task_run_attempts(task_run.id).await.len(), 1);
     }
 
     /// The ordinary path is unchanged: a dependency that succeeded still starts the run.

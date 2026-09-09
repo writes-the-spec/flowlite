@@ -87,10 +87,9 @@ That split is about a stop, so `Invalid` sits outside it: it is not a stop at al
 
 ## Rows flowlite cannot read
 
-`Invalid` is what settles a row whose outcome the program cannot determine — as opposed to one whose command failed, timed out or was stopped. Three things write it:
+`Invalid` is what settles a row whose outcome the program cannot determine — as opposed to one whose command failed, timed out or was stopped. Two things write it:
 
 - **A `Running` attempt with no process in `TaskRunAttemptChildren`.** The map holds only processes *this* run of the program spawned, so this is the restart path: shutdown kills the process groups and leaves the attempt rows `Running` on purpose, because writing statuses there would race the pollers. Every restart with work in flight produces one per running attempt, and a `SIGKILL`ed flowlite produces them with the process tree still alive — which `Invalid` records but does not fix.
-- **A `Running` task run with no attempt at all**, which is the same "nothing to read an ending off" one level up.
 - **The five `settle_unclaimed` fall-throughs** described above.
 
 It then propagates: an invalid attempt makes its task run invalid and is **never retried** — flowlite does not know what that attempt did, so another would be guessing it left nothing behind — and an invalid task run makes its job run invalid and skips everything downstream of it, `TaskRunStatus::Invalid` being in `TaskRunDispatcher::settle_as_skipped`'s failure list.

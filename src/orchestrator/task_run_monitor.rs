@@ -41,14 +41,13 @@ impl TaskRunMonitor {
     /// running ladder only so all three monitors read alike. `settle_for_timed_out` and
     /// `settle_for_aborted` still re-ask whether the attempt has finished, the guard
     /// JobRunMonitor's failure outcomes carry: exclusive statuses already imply it, so it
-    /// is redundant on purpose rather than load-bearing. The bail replaces the
+    /// is redundant on purpose rather than load-bearing. `settle_unclaimed` replaces the
     /// exhaustive match this used to be: a new TaskRunAttemptStatus no longer fails to
-    /// compile, it reaches the bail at runtime and `Poller::run` logs it with the row id.
+    /// compile, it falls to the end at runtime, and the task run settles Invalid with a
+    /// log line saying it is a bug rather than staying Running for ever.
     async fn handle_running_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
-        let Some(last_task_run_attempt) = self.get_last_task_run_attempt(task_run).await? else {
-            return self.settle_for_missing_attempt(task_run).await;
-        };
+        let last_task_run_attempt = self.get_or_start_task_run_attempt(task_run).await?;
 
         if self.settle_for_invalid(task_run, &last_task_run_attempt).await? {
             return Ok(());
@@ -110,20 +109,6 @@ impl TaskRunMonitor {
         Ok(true)
     }
 
-    /// Settles a Running task run that has no attempt at all, which is a row this program
-    /// cannot read: there is nothing to read an ending off. Leaving it Running strands the
-    /// job run above it, which then holds one of its job's parallel slots for ever.
-    async fn settle_for_missing_attempt(&self, task_run: &TaskRun) -> anyhow::Result<()> {
-
-        eprintln!(
-            "Task run {} was running with no attempt to decide from, so its outcome is \
-             unknown and it has been settled invalid",
-            task_run.id,
-        );
-
-        self.update_task_run_status(task_run, TaskRunStatus::Invalid).await
-    }
-
     async fn settle_for_succeeded(
         &self,
         task_run: &TaskRun,
@@ -143,7 +128,10 @@ impl TaskRunMonitor {
     /// one. Writes no task run status — the task run stays Running for the whole retry loop.
     ///
     /// The retry row goes in immediately; `TaskRunAttemptDispatcher` is what holds it
-    /// pending until `retry_delay` has passed.
+    /// pending until `retry_delay` has passed. Written here rather than through a helper
+    /// shared with `get_or_start_task_run_attempt`: those are two different moments in a
+    /// task run's life, not one action written twice, and every other service builds its
+    /// own `Insert*Data` at the call site the same way.
     async fn settle_for_running(
         &self,
         task_run: &TaskRun,
@@ -164,10 +152,21 @@ impl TaskRunMonitor {
             return Ok(false);
         }
 
-        self.start_task_run_attempt(
-            task_run,
-            last_task_run_attempt.attempt + 1,
+        self.crud.insert_task_run_attempt(
+            &*self.conn_pool,
+            &InsertTaskRunAttemptData {
+                input: InsertTaskRunAttemptDataInput {
+                    task_run_id: task_run.id,
+                    job_run_id: task_run.job_run_id,
+                    job_id: task_run.job_id.clone(),
+                    task_id: task_run.task_id.clone(),
+                    attempt: last_task_run_attempt.attempt + 1,
+                    status: TaskRunAttemptStatus::Pending,
+                },
+            },
         ).await?;
+
+        self.signals.publish();
 
         Ok(true)
     }
@@ -240,30 +239,6 @@ impl TaskRunMonitor {
         Ok(true)
     }
 
-    /// Inserts the retry TaskRunAttemptDispatcher clears to run, once its retry_delay has
-    /// passed. Attempt 1 is not inserted here — TaskRunDispatcher creates it as it starts
-    /// the task run.
-    async fn start_task_run_attempt(&self, task_run: &TaskRun, attempt: u32) -> anyhow::Result<()> {
-
-        self.crud.insert_task_run_attempt(
-            &*self.conn_pool,
-            &InsertTaskRunAttemptData {
-                input: InsertTaskRunAttemptDataInput {
-                    task_run_id: task_run.id,
-                    job_run_id: task_run.job_run_id,
-                    job_id: task_run.job_id.clone(),
-                    task_id: task_run.task_id.clone(),
-                    attempt,
-                    status: TaskRunAttemptStatus::Pending,
-                },
-            },
-        ).await?;
-
-        self.signals.publish();
-
-        Ok(())
-    }
-
     async fn get_running_task_runs(&self) -> anyhow::Result<Vec<TaskRun>> {
 
         self.crud.select_task_runs(
@@ -286,11 +261,47 @@ impl TaskRunMonitor {
     /// number: the earlier ones are the retries already accounted for. A task run's attempt
     /// numbers are unique, so the order is total.
     ///
-    /// A Running task run should always have one — TaskRunDispatcher inserts attempt 1
-    /// before it writes Running — so `None` is a broken invariant rather than an ordinary
-    /// state. The caller settles it `Invalid` instead of raising, because a row nothing
-    /// can settle strands the job run above it and holds a parallel slot for ever.
-    async fn get_last_task_run_attempt(&self, task_run: &TaskRun) -> anyhow::Result<Option<TaskRunAttempt>> {
+    /// It starts attempt 1 when the task run has none — a task run TaskRunDispatcher has
+    /// just set Running — and reads it back, so the caller always has an attempt to run the
+    /// ladder against. **Every attempt a task run ever gets is made in this monitor**, the
+    /// first as much as the retries, which is what keeps the unique index on
+    /// (task_run_id, attempt) a concern of one file and stops any other service leaving an
+    /// attempt row against a task run that never started.
+    ///
+    /// A fresh attempt 1 is `Pending`, so the ladder lands on `settle_for_running` and
+    /// leaves the task run Running until TaskRunAttemptDispatcher has run it.
+    async fn get_or_start_task_run_attempt(&self, task_run: &TaskRun) -> anyhow::Result<TaskRunAttempt> {
+
+        if let Some(last_task_run_attempt) = self.select_last_task_run_attempt(task_run).await? {
+            return Ok(last_task_run_attempt);
+        }
+
+        self.crud.insert_task_run_attempt(
+            &*self.conn_pool,
+            &InsertTaskRunAttemptData {
+                input: InsertTaskRunAttemptDataInput {
+                    task_run_id: task_run.id,
+                    job_run_id: task_run.job_run_id,
+                    job_id: task_run.job_id.clone(),
+                    task_id: task_run.task_id.clone(),
+                    attempt: 1,
+                    status: TaskRunAttemptStatus::Pending,
+                },
+            },
+        ).await?;
+
+        self.signals.publish();
+
+        // Read back rather than built here: the row the ladder decides from is the row as
+        // stored, `created_at` and all, which is what a retry_delay is later measured from.
+        self.select_last_task_run_attempt(task_run).await?
+            .ok_or_else(|| anyhow::anyhow!(
+                "Task run {} still has no attempt after one was inserted for it",
+                task_run.id,
+            ))
+    }
+
+    async fn select_last_task_run_attempt(&self, task_run: &TaskRun) -> anyhow::Result<Option<TaskRunAttempt>> {
 
         let task_run_attempts = self.crud.select_task_run_attempts(
             &*self.conn_pool,
@@ -452,11 +463,12 @@ mod tests {
         assert_eq!(status, TaskRunStatus::Aborted);
     }
 
-    /// A Running task run with no attempt at all is a row this program cannot read: it
-    /// cannot say what happened without an attempt to read it off. Settled rather than
-    /// raised on, or it strands the job run above it and holds a parallel slot for ever.
+    /// A Running task run with no attempt is one the dispatcher has just started: creating
+    /// attempts belongs here, so this is the first pass of an ordinary life, not a broken
+    /// invariant. It was Invalid for one commit, which put the parent's status on something
+    /// no child had said.
     #[tokio::test]
-    async fn a_running_task_run_with_no_attempt_is_invalid() {
+    async fn a_running_task_run_with_no_attempt_gets_its_first_one() {
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
@@ -464,7 +476,28 @@ mod tests {
 
         db.task_run_monitor().handle(&task_run).await.unwrap();
 
-        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Invalid);
+        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Running);
+
+        let attempts = db.task_run_attempts(task_run.id).await;
+
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].attempt, 1);
+        assert_eq!(attempts[0].status, TaskRunAttemptStatus::Pending);
+    }
+
+    /// And only one: a second pass finds the attempt it made and reads it, rather than
+    /// making another and colliding with the unique index.
+    #[tokio::test]
+    async fn a_second_pass_does_not_insert_a_second_first_attempt() {
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_retryable_task_run(job_run.id, 0, 60).await;
+
+        db.task_run_monitor().handle(&task_run).await.unwrap();
+        db.task_run_monitor().handle(&task_run).await.unwrap();
+
+        assert_eq!(db.task_run_attempts(task_run.id).await.len(), 1);
     }
 
     #[tokio::test]

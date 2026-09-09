@@ -20,7 +20,7 @@
 
 1. `settle_as_skipped` → `Skipped` if the **job run was stopped**, or if **any dependency finished but didn't succeed** (`Failed`, `Skipped`, `Aborted`, `TimedOut`, `Invalid`). Either way the task run can never run. `Invalid` has to be in that list: it is finished, so step 2 does not hold the dependent, and it did not succeed, so step 3 does not start it — leaving it out sent every dependent to the bail on every pass, turning one unreadable row into an unreadable subtree.
 2. `settle_as_pending` → **any dependency still `Pending` or `Running`** → the row stays `Pending` for the next tick. **It writes nothing, and exists to say so.**
-3. `settle_as_running` → `Running` with `started_at = now`, once **all dependencies have `Succeeded`**. It also inserts **attempt 1** (`Pending`), *before* the status write — `TaskRunMonitor` decides from the last attempt, so a `Running` task run without one is a state it cannot act on. Same ordering rule as the child-before-status hand-off one level down.
+3. `settle_as_running` → `Running` with `started_at = now`, once **all dependencies have `Succeeded`**. **One status write and nothing else** — attempts are `TaskRunMonitor`'s, the first as much as the retries. This used to insert attempt 1 here first, so the monitor never saw a `Running` task run without one; the cost was a window between the two writes that a crash could stop inside, leaving an attempt against a `Pending` task run. Every later pass then hit the unique index on `(task_run_id, attempt)` and errored, so the row never started and the job run above it held a parallel slot for ever — while `TaskRunAttemptDispatcher` ran the command anyway and nothing read the result.
 4. Past all three → `anyhow::bail!`. **This is the one chain that still bails**, and deliberately: steps 2 and 3 load the dependencies separately, so one failing between the two loads reaches it on an ordinary state that the next pass settles. The other five chains settle `Invalid` there instead — see [SKILL.md](../SKILL.md#the-settle-chain-and-why-its-order-matters).
 
 Step 1's two guards short-circuit in order, so a stopped job run costs one query and never loads the dependencies.
@@ -39,7 +39,7 @@ This transition runs **at most once per task run**: a retry keeps the row `Runni
 
 ## Monitor: Running → finished
 
-`TaskRunMonitor` ([src/orchestrator/task_run_monitor.rs](../../../../src/orchestrator/task_run_monitor.rs)) polls `Running` task runs on the same wake-up-or-interval schedule and looks only at their `task_run_attempt` rows — it never touches a process. The **last** attempt (highest `attempt`, which a unique index makes unique per task run) picks the outcome; `get_last_task_run_attempt` returns it or raises, since a `Running` task run always has one:
+`TaskRunMonitor` ([src/orchestrator/task_run_monitor.rs](../../../../src/orchestrator/task_run_monitor.rs)) polls `Running` task runs on the same wake-up-or-interval schedule and looks only at their `task_run_attempt` rows — it never touches a process. The **last** attempt (highest `attempt`, which a unique index makes unique per task run) picks the outcome. `get_or_start_task_run_attempt` returns it, starting **attempt 1** and reading it back when the task run has none — a task run the dispatcher has just set `Running` — so the ladder always has an attempt to decide from. **Every attempt a task run ever gets is made in this monitor**, which is what keeps the unique index a concern of one file:
 
 | Last attempt | Outcome | Task run |
 |---|---|---|
@@ -51,7 +51,7 @@ This transition runs **at most once per task run**: a retry keeps the row `Runni
 | `Pending`, `Running`, or `Failed` with a retry left | `settle_for_running` | left `Running`; inserts the retry row immediately — `TaskRunAttemptDispatcher` holds it `Pending` until `retry_delay` has passed |
 | past all six | `settle_unclaimed` | `Invalid`, logged as a bug — unreachable while the guards above cover every attempt status |
 
-Before the ladder runs at all: **no attempt row whatsoever** → `settle_for_missing_attempt` → `Invalid`. A `Running` task run should always have attempt 1, since `TaskRunDispatcher` inserts it before writing `Running`, so this is a broken invariant — but one settled rather than raised on, because a row nothing can settle strands the job run above it and holds a parallel slot for ever.
+Before the ladder runs at all: **no attempt row whatsoever** → attempt 1 is inserted and read back, and the ladder then runs against it. Being `Pending` it lands on `settle_for_running`, which leaves the task run `Running` until `TaskRunAttemptDispatcher` has run it. That is the ordinary first pass of a task run, not a broken invariant — it was briefly `Invalid` instead, which put the parent's status on something no child had said.
 
 These guards are exclusive, since the last attempt has exactly one status, so **the order here carries nothing** — `settle_for_invalid` is written first to read like `JobRunMonitor`, where the rank is load-bearing — and follows the succeeded, failed, timed out, aborted, running ladder only so all three monitors read alike. `TaskRunAttemptStatus::is_stopped` needs no failure ruled out first, unlike its `TaskRunStatus` namesake: `TaskRunAttemptDispatcher` skips an attempt for one reason only.
 
