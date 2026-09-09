@@ -62,10 +62,8 @@ impl TaskRunDispatcher {
     /// Skips the task run if its job run was stopped or a dependency did not succeed,
     /// either of which means it can never run.
     ///
-    /// `Invalid` counts as not succeeding. Leaving it out would strand every dependent: it
-    /// is finished, so `settle_as_pending` does not hold them, and it did not succeed, so
-    /// `settle_as_running` does not start them — they would reach the bail on every pass,
-    /// and one unreadable row would become an unreadable subtree.
+    /// `Invalid` counts as not succeeding: left out, its dependents are neither held nor
+    /// started, and one unreadable row becomes an unreadable subtree.
     async fn settle_as_skipped(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
         let must_skip = self.is_job_run_stopped(task_run).await?
@@ -127,14 +125,8 @@ impl TaskRunDispatcher {
     /// turned down, is what stops a dependency that failed since that guard ran: the two
     /// load the dependencies separately.
     ///
-    /// **It writes one status and nothing else.** Attempts are TaskRunMonitor's, all of
-    /// them — the first as much as the retries. This used to insert attempt 1 here, before
-    /// the status, so the monitor never saw a Running task run without one; the cost was a
-    /// window between the two writes that a crash could stop inside, leaving an attempt
-    /// row against a Pending task run. Every later pass then hit the unique index on
-    /// (task_run_id, attempt) and errored, so the row never started, the job run above it
-    /// stayed Running and held a parallel slot for ever — while the attempt dispatcher ran
-    /// the command anyway and nothing read the result.
+    /// It writes one status and nothing else. Attempts are TaskRunMonitor's, the first as
+    /// much as the retries, so no crash can strand a half-started row here.
     async fn settle_as_running(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
         let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;

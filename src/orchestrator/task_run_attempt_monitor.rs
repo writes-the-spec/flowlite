@@ -127,14 +127,11 @@ impl TaskRunAttemptMonitor {
         Ok(Settled::Terminal)
     }
 
-    /// Settles a row no outcome claimed. Unreachable while `settle_for_running` claims
-    /// unconditionally; see `JobRunDispatcher::settle_unclaimed` for why it settles rather
-    /// than raises.
+    /// Unreachable while `settle_for_running` claims unconditionally. See
+    /// `JobRunDispatcher::settle_unclaimed` for why it settles rather than raises.
     ///
-    /// Alone among the five, this one holds a live process. Ending the row without killing
-    /// its group would leak the command flowlite has just admitted it cannot account for,
-    /// so it is killed first — and killed before the drain, for the reason
-    /// `settle_for_timed_out` gives.
+    /// Alone among the five it holds a live process, so the group is killed first — before
+    /// the drain, for the reason `settle_for_timed_out` gives — rather than leaked.
     async fn settle_unclaimed(
         &self,
         task_run_attempt: &TaskRunAttempt,
@@ -159,18 +156,12 @@ impl TaskRunAttemptMonitor {
         ).await
     }
 
-    /// Settles an attempt whose process this program does not hold.
+    /// Settles an attempt whose process this program does not hold — the restart path,
+    /// since `TaskRunAttemptChildren` holds only processes this run of the program spawned.
     ///
-    /// `TaskRunAttemptChildren` holds only processes *this* run of the program spawned, so
-    /// a Running row with none belongs to an earlier one — the restart path, since serve's
-    /// shutdown kills the groups and leaves these rows Running on purpose — or lost its
-    /// child to an error mid-pass. There is no exit status to read, no group to kill and
-    /// no reader left to drain, so no outcome can honestly be claimed for it.
-    ///
-    /// It is settled rather than raised on because the status is the only channel between
-    /// the services: a row left Running strands its task run, strands the job run above
-    /// that, and so holds one of the job's parallel slots for ever. Whatever output was
-    /// persisted before stays on the attempt; it is only the ending that is unknown.
+    /// No exit status, no group to kill, nothing left to drain, so no outcome can honestly
+    /// be claimed. Settled rather than raised on: a row left Running strands the task run
+    /// and job run above it, holding a parallel slot for ever.
     async fn settle_for_invalid(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         eprintln!(

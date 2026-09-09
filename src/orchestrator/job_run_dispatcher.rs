@@ -54,15 +54,11 @@ impl JobRunDispatcher {
         self.settle_unclaimed(job_run).await
     }
 
-    /// Settles a row no outcome claimed. Unreachable while the chain above is complete —
-    /// `settle_as_running` claims unconditionally — so this is the day a status is added
-    /// and a rung is not.
+    /// Unreachable while `settle_as_running` claims unconditionally: this is the day a
+    /// status is added and a rung is not.
     ///
-    /// Settled rather than raised on, unlike the raises kept for states an invariant makes
-    /// impossible: those never fire, while this one would fire on every pass, leave the row
-    /// Pending for ever and stop the job scheduling — silently, on a box nobody is reading
-    /// the log of. Ending the run says so out loud, tells whoever the job named, and lets
-    /// the next run through.
+    /// Settled rather than raised on — unlike the raises kept for states an invariant makes
+    /// impossible, this one would fire every pass and stop the job scheduling for ever.
     async fn settle_unclaimed(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         eprintln!(

@@ -92,14 +92,11 @@ impl JobRunMonitor {
         self.update_job_run_status(job_run, JobRunStatus::Invalid).await
     }
 
-    /// Reports a run part of which flowlite cannot account for. First on the ladder: an
-    /// unknown outranks every named verdict, because reporting the failure of a run that is
-    /// partly unexplained presents an explained result, and being loud is the point.
+    /// An unknown outranks every named verdict: reporting the failure of a run that is
+    /// partly unexplained presents an explained result.
     ///
-    /// It still re-asks `all_finished`, as the three failure outcomes below it do.
-    /// Outranking decides which *finished* verdict wins, not whether the run has finished —
-    /// without this the job run would report Invalid while its other task runs still had
-    /// processes going.
+    /// `all_finished` still applies — outranking decides which finished verdict wins, not
+    /// whether the run has finished.
     async fn settle_for_invalid(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
         let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());

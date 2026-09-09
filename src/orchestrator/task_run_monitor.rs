@@ -35,16 +35,8 @@ impl TaskRunMonitor {
 
     /// Settles a running task run as exactly one outcome, from its last attempt.
     ///
-    /// The guards are exclusive — the last attempt has one status, and `settle_for_failed`
-    /// and `settle_for_running` split a failed one on whether an attempt is left — so the
-    /// order here carries nothing, and matches the succeeded, failed, timed out, aborted,
-    /// running ladder only so all three monitors read alike. `settle_for_timed_out` and
-    /// `settle_for_aborted` still re-ask whether the attempt has finished, the guard
-    /// JobRunMonitor's failure outcomes carry: exclusive statuses already imply it, so it
-    /// is redundant on purpose rather than load-bearing. `settle_unclaimed` replaces the
-    /// exhaustive match this used to be: a new TaskRunAttemptStatus no longer fails to
-    /// compile, it falls to the end at runtime, and the task run settles Invalid with a
-    /// log line saying it is a bug rather than staying Running for ever.
+    /// The guards are exclusive — the last attempt has one status — so the order carries
+    /// nothing and follows the other two monitors only so all three read alike.
     async fn handle_running_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         let last_task_run_attempt = self.get_or_start_task_run_attempt(task_run).await?;
@@ -76,9 +68,8 @@ impl TaskRunMonitor {
         self.settle_unclaimed(task_run).await
     }
 
-    /// Settles a row no outcome claimed. Unreachable while the ladder claims every attempt
-    /// status; see `JobRunDispatcher::settle_unclaimed` for why it settles rather than
-    /// raises.
+    /// Unreachable while the ladder claims every attempt status. See
+    /// `JobRunDispatcher::settle_unclaimed` for why it settles rather than raises.
     async fn settle_unclaimed(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         eprintln!(
@@ -90,10 +81,8 @@ impl TaskRunMonitor {
         self.update_task_run_status(task_run, TaskRunStatus::Invalid).await
     }
 
-    /// Carries an unreadable attempt up to the task run. First on the ladder: an unknown
-    /// outranks every named outcome, since the task run cannot claim an ending it does not
-    /// know. Nothing is retried from here — `settle_for_running` only retries `Failed`, and
-    /// this claims the row before it is asked anyway.
+    /// An unknown outranks every named outcome: the task run cannot claim an ending it
+    /// does not know. Never retried — flowlite has no idea what that attempt did.
     async fn settle_for_invalid(
         &self,
         task_run: &TaskRun,
@@ -125,13 +114,10 @@ impl TaskRunMonitor {
     }
 
     /// Keeps the task run running: waits while an attempt is in flight, or inserts the next
-    /// one. Writes no task run status — the task run stays Running for the whole retry loop.
+    /// one. Writes no task run status — it stays Running for the whole retry loop.
     ///
-    /// The retry row goes in immediately; `TaskRunAttemptDispatcher` is what holds it
-    /// pending until `retry_delay` has passed. Written here rather than through a helper
-    /// shared with `get_or_start_task_run_attempt`: those are two different moments in a
-    /// task run's life, not one action written twice, and every other service builds its
-    /// own `Insert*Data` at the call site the same way.
+    /// The retry row goes in immediately; `TaskRunAttemptDispatcher` holds it pending until
+    /// `retry_delay` has passed.
     async fn settle_for_running(
         &self,
         task_run: &TaskRun,
@@ -257,19 +243,11 @@ impl TaskRunMonitor {
 
     }
 
-    /// The attempt that decides what the task run does next, which is the highest attempt
-    /// number: the earlier ones are the retries already accounted for. A task run's attempt
-    /// numbers are unique, so the order is total.
+    /// The attempt the ladder decides from: the task run's last, or a fresh attempt 1 when
+    /// it has none.
     ///
-    /// It starts attempt 1 when the task run has none — a task run TaskRunDispatcher has
-    /// just set Running — and reads it back, so the caller always has an attempt to run the
-    /// ladder against. **Every attempt a task run ever gets is made in this monitor**, the
-    /// first as much as the retries, which is what keeps the unique index on
-    /// (task_run_id, attempt) a concern of one file and stops any other service leaving an
-    /// attempt row against a task run that never started.
-    ///
-    /// A fresh attempt 1 is `Pending`, so the ladder lands on `settle_for_running` and
-    /// leaves the task run Running until TaskRunAttemptDispatcher has run it.
+    /// Every attempt a task run ever gets is made in this monitor, which is what keeps the
+    /// unique index on (task_run_id, attempt) the concern of one file.
     async fn get_or_start_task_run_attempt(&self, task_run: &TaskRun) -> anyhow::Result<TaskRunAttempt> {
 
         if let Some(last_task_run_attempt) = self.select_last_task_run_attempt(task_run).await? {
@@ -292,8 +270,8 @@ impl TaskRunMonitor {
 
         self.signals.publish();
 
-        // Read back rather than built here: the row the ladder decides from is the row as
-        // stored, `created_at` and all, which is what a retry_delay is later measured from.
+        // Read back rather than built here: `created_at` is what a retry_delay is measured
+        // from, so the ladder must decide from the row as stored.
         self.select_last_task_run_attempt(task_run).await?
             .ok_or_else(|| anyhow::anyhow!(
                 "Task run {} still has no attempt after one was inserted for it",
@@ -463,10 +441,8 @@ mod tests {
         assert_eq!(status, TaskRunStatus::Aborted);
     }
 
-    /// A Running task run with no attempt is one the dispatcher has just started: creating
-    /// attempts belongs here, so this is the first pass of an ordinary life, not a broken
-    /// invariant. It was Invalid for one commit, which put the parent's status on something
-    /// no child had said.
+    /// A Running task run with no attempt is one the dispatcher has just started, which is
+    /// an ordinary first pass rather than a broken invariant.
     #[tokio::test]
     async fn a_running_task_run_with_no_attempt_gets_its_first_one() {
         let db = TestDb::new().await;
@@ -485,8 +461,8 @@ mod tests {
         assert_eq!(attempts[0].status, TaskRunAttemptStatus::Pending);
     }
 
-    /// And only one: a second pass finds the attempt it made and reads it, rather than
-    /// making another and colliding with the unique index.
+    /// And only one: a second pass reads the attempt it made rather than colliding with
+    /// the unique index.
     #[tokio::test]
     async fn a_second_pass_does_not_insert_a_second_first_attempt() {
         let db = TestDb::new().await;
@@ -507,9 +483,8 @@ mod tests {
         assert_eq!(status, TaskRunStatus::Invalid);
     }
 
-    /// Never retried, even with retries to spare. Flowlite lost track of what that attempt
-    /// did, so starting another would be guessing that it left nothing behind — and after
-    /// a crash its command may still be running.
+    /// Never retried, even with retries to spare: flowlite does not know what that attempt
+    /// did, and after a crash its command may still be running.
     #[tokio::test]
     async fn an_invalid_attempt_is_not_retried_even_with_retries_left() {
         let (status, attempts) = settle(2, 1, TaskRunAttemptStatus::Invalid).await;
