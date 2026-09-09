@@ -17,6 +17,7 @@ struct JobRunDefinition {
     job_name: String,
     job_description: String,
     parameters: BTreeMap<String, String>,
+    on_failure_emails: Vec<String>,
     scheduled_at: Option<DateTime<Utc>>,
     tasks: Vec<JobRunTaskDefinition>,
 }
@@ -195,6 +196,7 @@ impl CRUD {
             job_name: job.name,
             job_description: job.description,
             parameters,
+            on_failure_emails: job.on_failure_emails.0.clone(),
             scheduled_at,
             tasks: tasks
                 .into_iter()
@@ -230,6 +232,7 @@ impl CRUD {
                     job_name: definition.job_name.clone(),
                     job_description: definition.job_description.clone(),
                     parameters: definition.parameters.clone(),
+                    on_failure_emails: definition.on_failure_emails.clone(),
                     scheduled_at: definition.scheduled_at,
                     status: JobRunStatus::Pending,
                 }
@@ -308,6 +311,7 @@ impl CRUD {
             job_name: job_run.job_name,
             job_description: job_run.job_description,
             parameters: job_run.parameters.0.clone(),
+            on_failure_emails: job_run.on_failure_emails.0.clone(),
             scheduled_at: job_run.scheduled_at,
             tasks: task_runs
                 .into_iter()

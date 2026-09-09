@@ -6,6 +6,8 @@ use crate::router::app::app::create_router;
 use crate::router::app::app_state::AppState;
 use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
+use crate::notifications::NotificationService;
+use crate::notifications::channel::NotificationChannels;
 use crate::orchestrator::Orchestrator;
 use crate::poller::Poller;
 use crate::scheduler::Scheduler;
@@ -41,6 +43,11 @@ impl ServeCmd {
 
         let app_config = toolkit.app_config.clone();
 
+        // Registered before any Poller is spawned, for the reason Orchestrator::start
+        // registers all of its own up front: a poller's first pass runs the moment it is
+        // spawned, and must not publish to a wake-up nobody has registered yet.
+        let notification_service_wakeup = signals.register();
+
         let scheduler = Scheduler::new(
             toolkit.clone(),
             crud.clone(),
@@ -60,10 +67,26 @@ impl ServeCmd {
             crud.clone(),
             conn_pool.clone(),
             signals.clone(),
-            app_config,
+            app_config.clone(),
         );
 
         orchestrator.start();
+
+        // Started alongside the orchestrator rather than inside it, the way the scheduler
+        // is: nothing in the orchestrator calls it, and it calls nothing back. It is
+        // started whatever config.toml configures — with no channel at all it simply has
+        // nothing open to deliver, and says so on the row rather than in a silence.
+        let notification_service = NotificationService::new(
+            crud.clone(),
+            conn_pool.clone(),
+            Arc::new(NotificationChannels::from_config(&app_config)),
+        );
+
+        Poller::new(
+            Arc::new(notification_service),
+            notification_service_wakeup,
+            app_config.clone(),
+        ).start();
 
         let app_state = AppState::new(
             toolkit.clone(),

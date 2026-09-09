@@ -22,6 +22,7 @@ flowlite runs against **two SQLite databases per connection**, and every table b
 | [`task_run_attempt`](references/task_run_attempt.md) | disk | one execution of a task run's command |
 | [`task_run_attempt_output`](references/task_run_attempt_output.md) | disk | the output of one attempt, in append-only chunks |
 | [`job_run_stop`](references/job_run_stop.md) | disk | an insert-only "stop this run" signal |
+| [`job_run_notification`](references/job_run_notification.md) | disk | one failure email to send, and what happened when it was tried |
 
 The disk tables mirror the `mem` ones, but they are not views onto them: **a run carries its own copy of the config it was submitted with.** `submit_job` snapshots `command`, `depends_on`, `timeout`, `max_retries`, `retry_delay`, `env` and `working_dir` from `mem.task` onto each `task_run`, plus a job's resolved `parameters` and, for a scheduled run, `scheduled_at` onto the `job_run` itself, so a run executes what it was submitted with however the YAML has moved since. The orchestrator therefore never reads a `mem` table — with one deliberate exception, `mem.job.max_parallel_runs`, which is a question about the job *now*. See [task_run.md](references/task_run.md).
 

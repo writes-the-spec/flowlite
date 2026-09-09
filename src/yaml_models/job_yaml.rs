@@ -30,6 +30,15 @@ pub struct JobYamlTask {
     pub working_dir: String,
 }
 
+/// What happens when a run of this job does not succeed. `email` is who is told; the
+/// block is a block rather than a bare `notify_email:` so the action to run on a failure
+/// can join it later without the two ways of reacting reading as unrelated keys.
+#[derive(Deserialize, Validate, Debug, Default)]
+pub struct JobYamlOnFailure {
+    #[serde(default)]
+    pub email: Vec<String>,
+}
+
 #[derive(Deserialize, Validate, Debug)]
 pub struct JobYaml {
     pub id: String,
@@ -48,6 +57,10 @@ pub struct JobYaml {
     /// names both of them set.
     #[serde(default, deserialize_with = "deserialize_string_map")]
     pub env: BTreeMap<String, String>,
+    /// Who to tell when a run of this job fails or times out. Declaring an address with
+    /// no `[smtp]` in config.toml is a startup error — see `CRUD::validate_job_notifications`.
+    #[serde(default)]
+    pub on_failure: JobYamlOnFailure,
     #[serde(default)]
     pub tasks: Vec<JobYamlTask>,
 }

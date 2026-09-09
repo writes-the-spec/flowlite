@@ -6,9 +6,12 @@ use crate::app_config::AppConfig;
 use crate::crud::CRUD;
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
+use crate::crud::job_run_notification::{JobRunNotification, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRun, TaskRunStatus};
 use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
 use crate::orchestrator::job_run_monitor::JobRunMonitor;
+use crate::notifications::NotificationService;
+use crate::notifications::channel::NotificationChannels;
 use crate::crud::task_run_attempt_output::{group_task_run_attempt_output, SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort, TaskRunAttemptOutputStream, TaskRunAttemptOutputStreams};
 use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
 use crate::orchestrator::task_run_attempt_reader::read_task_run_attempt_stream;
@@ -79,6 +82,16 @@ impl TestDb {
         )
     }
 
+    /// A notification service over this test's config, which configures no channel at
+    /// all — so it is the service a box with no `[smtp]` runs.
+    pub fn notification_service(&self) -> NotificationService {
+        NotificationService::new(
+            self.crud.clone(),
+            self.conn_pool.clone(),
+            Arc::new(NotificationChannels::from_config(&self.app_config())),
+        )
+    }
+
     pub fn task_run_monitor(&self) -> TaskRunMonitor {
         TaskRunMonitor::new(
             self.crud.clone(),
@@ -122,6 +135,7 @@ impl TestDb {
                     job_name: "Job".to_string(),
                     job_description: String::new(),
                     parameters: BTreeMap::new(),
+                    on_failure_emails: Vec::new(),
                     scheduled_at: None,
                     status,
                 },
@@ -147,6 +161,7 @@ impl TestDb {
                     job_name: "Job".to_string(),
                     job_description: String::new(),
                     parameters,
+                    on_failure_emails: Vec::new(),
                     scheduled_at,
                     status,
                 },
@@ -288,6 +303,50 @@ impl TestDb {
             .execute(&*self.conn_pool)
             .await
             .unwrap();
+    }
+
+    /// A job run that asked to be told when it does not succeed, for the tests that follow
+    /// a failure to the notification it queues.
+    pub async fn insert_job_run_with_on_failure_emails(
+        &self,
+        status: JobRunStatus,
+        on_failure_emails: &[&str],
+    ) -> JobRun {
+
+        let id = self.crud.insert_job_run(
+            &*self.conn_pool,
+            &InsertJobRunData {
+                input: InsertJobRunDataInput {
+                    job_id: "job".to_string(),
+                    job_name: "Job".to_string(),
+                    job_description: String::new(),
+                    parameters: BTreeMap::new(),
+                    on_failure_emails: on_failure_emails.iter().map(|e| e.to_string()).collect(),
+                    scheduled_at: None,
+                    status,
+                },
+            },
+        ).await.unwrap();
+
+        self.job_run(id).await
+    }
+
+    pub async fn job_run_notifications(&self, job_run_id: i64) -> Vec<JobRunNotification> {
+
+        self.crud.select_job_run_notifications(
+            &*self.conn_pool,
+            &SelectJobRunNotificationsData {
+                filter: SelectJobRunNotificationsDataFilter {
+                    id: None,
+                    job_run_id: Some(job_run_id),
+                    channel: None,
+                    status: None,
+                },
+                sort: Some(SelectJobRunNotificationsDataSort::Id),
+                limit: None,
+                offset: None,
+            },
+        ).await.unwrap()
     }
 
     pub async fn job_run(&self, id: i64) -> JobRun {

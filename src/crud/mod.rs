@@ -4,6 +4,7 @@ pub use crate::crud::crud::CRUD;
 pub mod job_run;
 pub mod task_run;
 pub mod job_run_stop;
+pub mod job_run_notification;
 pub mod job;
 pub mod task;
 pub mod task_dependent;

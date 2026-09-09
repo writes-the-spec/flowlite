@@ -6,6 +6,7 @@ CREATE TABLE job (
     max_parallel_runs INTEGER NOT NULL,
     parameters TEXT NOT NULL,
     env TEXT NOT NULL,
+    on_failure_emails TEXT NOT NULL,
 
     PRIMARY KEY (job_id),
     UNIQUE (row_id)

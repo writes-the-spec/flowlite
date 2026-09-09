@@ -36,6 +36,7 @@ pub struct InsertJobRunDataInput {
     pub job_name: String,
     pub job_description: String,
     pub parameters: BTreeMap<String, String>,
+    pub on_failure_emails: Vec<String>,
     pub scheduled_at: Option<DateTime<Utc>>,
     pub status: JobRunStatus,
 }
@@ -93,6 +94,9 @@ pub struct JobRun {
     pub job_name: String,
     pub job_description: String,
     pub parameters: sqlx::types::Json<BTreeMap<String, String>>,
+    /// Who to tell when this run does not succeed, snapshotted from the job at submit so
+    /// a run stays notifiable after its YAML is edited or deleted.
+    pub on_failure_emails: sqlx::types::Json<Vec<String>>,
     pub created_at: DateTime<Utc>,
     pub scheduled_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
@@ -106,12 +110,13 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO job_run (job_id, job_name, job_description, parameters, created_at, scheduled_at, status) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO job_run (job_id, job_name, job_description, parameters, on_failure_emails, created_at, scheduled_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(&data.input.job_id)
             .bind(&data.input.job_name)
             .bind(&data.input.job_description)
             .bind(sqlx::types::Json(&data.input.parameters))
+            .bind(sqlx::types::Json(&data.input.on_failure_emails))
             .bind(self.toolkit.get_current_ts())
             .bind(&data.input.scheduled_at)
             .bind(&data.input.status)
@@ -134,7 +139,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, job_id, job_name, job_description, parameters, created_at, scheduled_at, started_at, finished_at, status FROM job_run WHERE 1=1"
+            "SELECT id, job_id, job_name, job_description, parameters, on_failure_emails, created_at, scheduled_at, started_at, finished_at, status FROM job_run WHERE 1=1"
         );
 
         if let Some(job_id) = &data.filter.job_id {

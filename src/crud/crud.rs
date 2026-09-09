@@ -60,6 +60,13 @@ impl CRUD {
                             job_path.display(),
                         ))?;
 
+                    self.validate_job_notifications(&job_yaml)
+                        .with_context(|| format!(
+                            "Invalid notifications of job '{}' at {}",
+                            job_yaml.id,
+                            job_path.display(),
+                        ))?;
+
                     row_id += 1;
                     self.insert_job(&mut *tx, &InsertJobData {
                         input: InsertJobDataInput {
@@ -71,6 +78,7 @@ impl CRUD {
                                 .unwrap_or(job_defaults.max_parallel_runs),
                             parameters: job_yaml.parameters.clone(),
                             env: job_yaml.env.clone(),
+                            on_failure_emails: job_yaml.on_failure.email.clone(),
                         }
                     })
                         .await
@@ -203,6 +211,27 @@ impl CRUD {
                 "Failed to commit the configuration read from {}",
                 data_dir.display(),
             ))?;
+
+        Ok(())
+    }
+
+    /// Rejects a job that asks to be emailed on a failure when there is nowhere to send
+    /// it. Read here rather than at send time because a notification that silently never
+    /// leaves is the one failure you cannot see from the run afterwards - and by then it
+    /// is 03:00 and the run everyone wanted to hear about has already finished.
+    fn validate_job_notifications(&self, job_yaml: &JobYaml) -> anyhow::Result<()> {
+
+        if job_yaml.on_failure.email.is_empty() {
+            return Ok(());
+        }
+
+        if self.toolkit.app_config.smtp.is_none() {
+            anyhow::bail!(
+                "on_failure.email names {} but config.toml has no [smtp] section, so no \
+                 mail can be sent. Add one, or remove the addresses.",
+                job_yaml.on_failure.email.join(", "),
+            );
+        }
 
         Ok(())
     }
@@ -352,4 +381,68 @@ impl CRUD {
         Ok(paths)
     }
 
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_config::{AppConfig, AppConfigSmtp, AppConfigSmtpEncryption};
+
+    fn smtp() -> AppConfigSmtp {
+        AppConfigSmtp {
+            host: "smtp.example.com".to_string(),
+            port: 587,
+            username: String::new(),
+            password: String::new(),
+            from: "flowlite@example.com".to_string(),
+            encryption: AppConfigSmtpEncryption::StartTls,
+            max_output_bytes: 4096,
+        }
+    }
+
+    fn crud_with(smtp: Option<AppConfigSmtp>) -> CRUD {
+        CRUD::new(Arc::new(Toolkit::new(AppConfig { smtp, ..AppConfig::default() })))
+    }
+
+    fn job_yaml(on_failure: &str) -> JobYaml {
+        serde_yaml::from_str(&format!(
+            "id: nightly\nname: Nightly\n{}tasks:\n  - id: sync\n    command: ./sync.sh\n",
+            on_failure,
+        )).unwrap()
+    }
+
+    #[test]
+    fn a_job_naming_an_address_with_no_smtp_section_is_refused() {
+
+        let crud = crud_with(None);
+
+        let error = crud
+            .validate_job_notifications(&job_yaml("on_failure:\n  email: [oncall@example.com]\n"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("oncall@example.com"), "{}", error);
+        assert!(error.contains("[smtp]"), "{}", error);
+    }
+
+    #[test]
+    fn a_job_naming_an_address_is_accepted_once_smtp_is_configured() {
+
+        let crud = crud_with(Some(smtp()));
+
+        assert!(crud
+            .validate_job_notifications(&job_yaml("on_failure:\n  email: [oncall@example.com]\n"))
+            .is_ok());
+    }
+
+    /// The check is about a job that asked for something it cannot have — a job that asks
+    /// for nothing is fine on a box with no mail at all.
+    #[test]
+    fn a_job_naming_nobody_needs_no_smtp_section() {
+
+        let crud = crud_with(None);
+
+        assert!(crud.validate_job_notifications(&job_yaml("")).is_ok());
+    }
 }

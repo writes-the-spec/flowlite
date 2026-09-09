@@ -16,6 +16,8 @@ tasks:
     timeout: 600
     max_retries: 2
     retry_delay: 30
+on_failure:
+  email: [oncall@example.com]
 ```
 
 ## `JobYaml`
@@ -30,6 +32,7 @@ A `[job_defaults]` default is the data dir's `config.toml` value, falling back t
 | `max_parallel_runs` | no | `[job_defaults]`, `1` | How many runs of this job may be `Running` at once. **`0` means no limit.** Enforced only in `JobRunDispatcher::settle_as_pending`; submitting is never rejected for exceeding it. |
 | `parameters` | no | `{}` | Declared name to default value. A schedule's `jobs[].parameters` or `job submit --param` may override a declared name; naming one this job does not declare is a submit error, not a silent no-op. See the [entities skill](../../entities/references/job.md). |
 | `env` | no | `{}` | Environment variables for **every** task of this job. A task's own `env:` wins the names both of them set; the merge happens in `submit_job`, so `task_run.env` holds the merged result. |
+| `on_failure` | no | `{}` | What happens when a run of this job does not succeed. Today it holds only `email`, a list of addresses told when a run is `Failed` or `TimedOut` — never when it is `Aborted`, which is somebody stopping it on purpose. **Naming an address while `config.toml` has no `[smtp]` section fails startup**, in `CRUD::validate_job_notifications`: a notification that silently never leaves is the one failure you cannot see from the run afterwards. A block rather than a bare `notify_email:` so the action to run on a failure can join it later. |
 | `tasks` | no | `[]` | A job with no tasks is legal; its job runs finish `Succeeded` immediately. |
 
 ## `JobYamlTask`

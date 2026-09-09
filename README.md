@@ -185,6 +185,99 @@ tasks:
 on rarely fixes itself within one second; set it to 0 to retry as soon as possible.
 Each attempt keeps its own output — see [Task output](#task-output).
 
+## Failure notifications
+
+A job can name who to email when one of its runs does not succeed:
+
+```yaml
+id: nightly-sync
+name: Nightly Sync
+on_failure:
+  email: [oncall@example.com, data-team@example.com]
+tasks:
+  - id: sync
+    command: ./sync.sh
+```
+
+The message carries the run's status and timings, every task and how it ended, and the
+**output of the tasks that broke** — so the mail itself usually says what went wrong,
+without opening the dashboard:
+
+```
+Job run 42 of 'Nightly Sync' (nightly-sync) failed.
+
+  Job         nightly-sync
+  Run         42
+  Status      failed
+  Started     2026-09-09 02:00:01
+  Finished    2026-09-09 02:04:37
+  Duration    4m 36s
+
+Tasks
+
+  extract                  succeeded
+  transform                failed
+  load                     skipped
+
+Output of transform, attempt 3 of 3
+
+stdout:
+reading rows
+stderr:
+psycopg2.OperationalError: connection refused
+
+Run `flowlite job-run logs 42` for every task and attempt.
+```
+
+**Only a real failure is mailed** — `failed` and `timed out`, never `aborted`. A run you
+stopped yourself is not news.
+
+### Where the mail server goes
+
+Who to tell is a property of the job, so it lives in the job's YAML alongside it. *Where
+mail goes out through* is a property of the machine, so it lives in `config.toml`:
+
+```toml
+[smtp]
+host = "smtp.example.com"
+port = 587                          # default
+from = "flowlite@example.com"
+username = "flowlite@example.com"   # omit for a relay that authenticates nobody
+encryption = "starttls"             # or "tls" for implicit TLS on 465, "none" for a local MTA
+```
+
+The password is deliberately **not** a key you should write in the file. Every config key
+can be set as an environment variable, so put it in flowlite's own environment:
+
+```bash
+FLOWLITE_SMTP__PASSWORD=... flowlite serve
+```
+
+That keeps it out of a file that sits beside your jobs in version control — and out of the
+dashboard, which renders `env:` as written on purpose.
+
+**A job that names an address while `config.toml` has no `[smtp]` section refuses to
+start**, naming the job and the file:
+
+```
+Invalid notifications of job 'nightly-sync' at /srv/flowlite/jobs/nightly.yaml
+
+Caused by:
+    on_failure.email names oncall@example.com but config.toml has no [smtp] section,
+    so no mail can be sent. Add one, or remove the addresses.
+```
+
+A notification that silently never leaves is the one failure you cannot see from the run
+afterwards, so it is a startup error rather than a surprise at 03:00.
+
+Each send is tried **once**. A send that fails is recorded against the run with the
+error, and reported in the server log, rather than being retried against a relay that may
+be down for hours.
+
+Delivery runs as its own background service, so a slow or unreachable mail server never
+holds up the runs themselves. Email is the only channel today; the run records which
+channel it was told over, so more can join it.
+
 ## Overlapping runs
 
 A job runs one at a time by default. A run created while another one is still going is
@@ -282,6 +375,20 @@ max_parallel_runs = 1           # what a job with no max_parallel_runs: gets
 
 [schedule_defaults]
 timezone = "UTC"                # what a schedule with no timezone: reads its cron in
+```
+
+`[smtp]` is the one section with no defaults, because there is no default mail server:
+leave it out and failure notifications are off entirely. See
+[Failure notifications](#failure-notifications).
+
+```toml
+[smtp]
+host = "smtp.example.com"       # required
+from = "flowlite@example.com"   # required
+port = 587
+username = ""                   # empty for a relay that authenticates nobody
+encryption = "starttls"         # "starttls", "tls" or "none"
+max_output_bytes = 4096         # per stream, per failed task, in the message
 ```
 
 `[job_defaults]` and `[schedule_defaults]` fill in what a job's or schedule's YAML leaves

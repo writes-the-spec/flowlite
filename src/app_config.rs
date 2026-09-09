@@ -117,6 +117,54 @@ impl Default for AppConfigScheduleDefaults {
 }
 
 
+/// How a failure email leaves the box.
+///
+/// The one section with no default, because there is no default mail server: no `[smtp]`
+/// means notifications are off entirely, and a job asking for one is then a startup error
+/// rather than a message nobody gets at 03:00. It is deployment config rather than job
+/// config for the same reason it is not in the YAML — the relay differs per machine, and
+/// `password` belongs in `FLOWLITE_SMTP__PASSWORD`, not in a file that is read out to the
+/// dashboard and committed alongside the jobs.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct AppConfigSmtp {
+    pub host: String,
+    #[serde(default = "default_smtp_port")]
+    pub port: u16,
+    /// Empty for a relay that authenticates nobody, which a local MTA usually doesn't.
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    /// The From: address, which most relays insist on owning.
+    pub from: String,
+    #[serde(default)]
+    pub encryption: AppConfigSmtpEncryption,
+    /// The most of one stream of one failed task a message carries. Past it the end is
+    /// kept and the front cut, since a relay's own size limit is the reason to have one.
+    #[serde(default = "default_smtp_max_output_bytes")]
+    pub max_output_bytes: usize,
+}
+
+fn default_smtp_port() -> u16 {
+    587
+}
+
+fn default_smtp_max_output_bytes() -> usize {
+    4096
+}
+
+/// What the connection to the relay is wrapped in: STARTTLS on the submission port,
+/// implicit TLS on 465, or nothing at all for an MTA on localhost.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum AppConfigSmtpEncryption {
+    #[default]
+    StartTls,
+    Tls,
+    None,
+}
+
+
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct AppConfig {
     pub data_dir: String,
@@ -128,6 +176,11 @@ pub struct AppConfig {
     pub job_defaults: AppConfigJobDefaults,
     #[serde(default)]
     pub schedule_defaults: AppConfigScheduleDefaults,
+    /// None is "no `[smtp]` section", so it is skipped when the defaults are serialized
+    /// into figment: a null default provider would otherwise be the thing a real `[smtp]`
+    /// table has to merge over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smtp: Option<AppConfigSmtp>,
 }
 
 impl Default for AppConfig {
@@ -138,6 +191,7 @@ impl Default for AppConfig {
             ui: AppConfigUi::default(),
             job_defaults: AppConfigJobDefaults::default(),
             schedule_defaults: AppConfigScheduleDefaults::default(),
+            smtp: None,
         }
     }
 }
@@ -244,6 +298,44 @@ mod tests {
         std::fs::write(
             dir.join("config.toml"),
             "[schedule_defaults]\ntimezone = \"Mars/Olympus\"\n",
+        ).unwrap();
+
+        assert!(AppConfig::load(Some(dir)).is_err());
+    }
+
+    #[test]
+    fn a_directory_with_no_config_file_has_no_smtp_and_so_no_notifications() {
+        let dir = temp_dir();
+
+        let config = AppConfig::load(Some(dir)).unwrap();
+
+        assert!(config.smtp.is_none());
+    }
+
+    #[test]
+    fn an_smtp_section_naming_only_what_it_must_takes_the_rest_by_default() {
+        let dir = temp_dir();
+        std::fs::write(
+            dir.join("config.toml"),
+            "[smtp]\nhost = \"smtp.example.com\"\nfrom = \"flowlite@example.com\"\n",
+        ).unwrap();
+
+        let smtp = AppConfig::load(Some(dir)).unwrap().smtp.unwrap();
+
+        assert_eq!(smtp.host, "smtp.example.com");
+        assert_eq!(smtp.from, "flowlite@example.com");
+        assert_eq!(smtp.port, 587);
+        assert_eq!(smtp.encryption, AppConfigSmtpEncryption::StartTls);
+        assert_eq!(smtp.username, "");
+        assert_eq!(smtp.password, "");
+    }
+
+    #[test]
+    fn an_smtp_section_missing_a_host_is_an_error_rather_than_a_silent_default() {
+        let dir = temp_dir();
+        std::fs::write(
+            dir.join("config.toml"),
+            "[smtp]\nfrom = \"flowlite@example.com\"\n",
         ).unwrap();
 
         assert!(AppConfig::load(Some(dir)).is_err());
