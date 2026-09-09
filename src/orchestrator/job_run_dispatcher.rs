@@ -51,11 +51,41 @@ impl JobRunDispatcher {
             return Ok(());
         }
 
-        anyhow::bail!(
-            "Job run {} settled as nothing: it was not stopped, is not waiting on \
-             max_parallel_runs, and was not started",
+        self.settle_unclaimed(job_run).await
+    }
+
+    /// Settles a row no outcome claimed. Unreachable while the chain above is complete —
+    /// `settle_as_running` claims unconditionally — so this is the day a status is added
+    /// and a rung is not.
+    ///
+    /// Settled rather than raised on, unlike the raises kept for states an invariant makes
+    /// impossible: those never fire, while this one would fire on every pass, leave the row
+    /// Pending for ever and stop the job scheduling — silently, on a box nobody is reading
+    /// the log of. Ending the run says so out loud, tells whoever the job named, and lets
+    /// the next run through.
+    async fn settle_unclaimed(&self, job_run: &JobRun) -> anyhow::Result<()> {
+
+        eprintln!(
+            "Job run {} was claimed by no outcome: it was not stopped, is not waiting on \
+             max_parallel_runs, and was not started. Settling it invalid. This is a bug.",
             job_run.id,
-        )
+        );
+
+        self.crud.update_job_runs(
+            &*self.conn_pool,
+            &UpdateJobRunsData {
+                filter: UpdateJobRunsDataFilter { id: Some(job_run.id) },
+                input: UpdateJobRunsDataInput {
+                    status: Some(JobRunStatus::Invalid),
+                    started_at: None,
+                    finished_at: Some(Some(Utc::now())),
+                },
+            }
+        ).await?;
+
+        self.signals.publish();
+
+        Ok(())
     }
 
     /// Skips the job run, and with it all of its task runs, none of which ever started.
@@ -194,5 +224,27 @@ impl Service for JobRunDispatcher {
 
     async fn handle(&self, job_run: &JobRun) -> anyhow::Result<()> {
         self.handle_pending_job_run(job_run).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestDb;
+
+    /// Unreachable while every rung of the chain is complete - `settle_as_running` claims
+    /// unconditionally - so it is called directly. It exists for the day a status is added
+    /// and a rung is not, which is exactly what happened to the monitors while `Invalid`
+    /// was being wired up.
+    #[tokio::test]
+    async fn an_unclaimed_job_run_is_settled_invalid() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Pending).await;
+
+        db.job_run_dispatcher().settle_unclaimed(&job_run).await.unwrap();
+
+        assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Invalid);
     }
 }

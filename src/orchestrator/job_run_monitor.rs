@@ -74,11 +74,22 @@ impl JobRunMonitor {
             return Ok(());
         }
 
-        anyhow::bail!(
-            "Job run {} settled as nothing: all of its task runs finished, none of them \
-             timed out, failed, was aborted or was skipped, and they did not all succeed",
+        self.settle_unclaimed(job_run).await
+    }
+
+    /// Settles a row no outcome claimed. Unreachable while the ladder covers every
+    /// combination of task run statuses; see `JobRunDispatcher::settle_unclaimed` for why
+    /// it settles rather than raises.
+    async fn settle_unclaimed(&self, job_run: &JobRun) -> anyhow::Result<()> {
+
+        eprintln!(
+            "Job run {} was claimed by no outcome: all of its task runs finished, none of \
+             them timed out, failed, was aborted, was skipped or was invalid, and they did \
+             not all succeed. Settling it invalid. This is a bug.",
             job_run.id,
-        )
+        );
+
+        self.update_job_run_status(job_run, JobRunStatus::Invalid).await
     }
 
     /// Reports a run part of which flowlite cannot account for. First on the ladder: an
@@ -404,5 +415,19 @@ mod tests {
             settled_job_run_status(&[TaskRunStatus::Invalid, TaskRunStatus::Running]).await,
             JobRunStatus::Running,
         );
+    }
+
+    /// Unreachable while the ladder covers every combination of task run statuses, so it is
+    /// called directly. See `JobRunDispatcher`'s equivalent for why it is settled at all.
+    #[tokio::test]
+    async fn an_unclaimed_job_run_is_settled_invalid() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        db.job_run_monitor().settle_unclaimed(&job_run).await.unwrap();
+
+        assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Invalid);
     }
 }

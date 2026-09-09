@@ -12,6 +12,7 @@ use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput}
 use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotification, JobRunNotificationStatus, NotificationChannel, NotifyOn, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRun, TaskRunStatus};
 use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
+use crate::orchestrator::job_run_dispatcher::JobRunDispatcher;
 use crate::orchestrator::job_run_monitor::JobRunMonitor;
 use crate::notifications::NotificationService;
 use crate::notifications::channel::NotificationChannels;
@@ -76,6 +77,14 @@ impl TestDb {
     /// The temp directory this test owns, for a command that needs somewhere to write.
     pub fn data_dir(&self) -> &std::path::Path {
         &self.data_dir
+    }
+
+    pub fn job_run_dispatcher(&self) -> JobRunDispatcher {
+        JobRunDispatcher::new(
+            self.crud.clone(),
+            self.conn_pool.clone(),
+            self.signals.clone(),
+        )
     }
 
     pub fn job_run_monitor(&self) -> JobRunMonitor {

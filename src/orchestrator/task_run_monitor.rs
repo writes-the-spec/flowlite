@@ -74,11 +74,21 @@ impl TaskRunMonitor {
             return Ok(());
         }
 
-        anyhow::bail!(
-            "Task run {} settled as nothing: no outcome claimed the status of its last \
-             attempt",
+        self.settle_unclaimed(task_run).await
+    }
+
+    /// Settles a row no outcome claimed. Unreachable while the ladder claims every attempt
+    /// status; see `JobRunDispatcher::settle_unclaimed` for why it settles rather than
+    /// raises.
+    async fn settle_unclaimed(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+
+        eprintln!(
+            "Task run {} was claimed by no outcome: nothing on the ladder knew the status \
+             of its last attempt. Settling it invalid. This is a bug.",
             task_run.id,
-        )
+        );
+
+        self.update_task_run_status(task_run, TaskRunStatus::Invalid).await
     }
 
     /// Carries an unreadable attempt up to the task run. First on the ladder: an unknown
@@ -473,5 +483,19 @@ mod tests {
 
         assert_eq!(status, TaskRunStatus::Invalid);
         assert_eq!(attempts, vec![1]);
+    }
+
+    /// Unreachable while the ladder claims every attempt status, so it is called directly.
+    #[tokio::test]
+    async fn an_unclaimed_task_run_is_settled_invalid() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
+
+        db.task_run_monitor().settle_unclaimed(&task_run).await.unwrap();
+
+        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Invalid);
     }
 }

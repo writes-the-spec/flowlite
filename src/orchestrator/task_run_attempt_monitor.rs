@@ -122,12 +122,41 @@ impl TaskRunAttemptMonitor {
             return Ok(Settled::Running);
         }
 
-        anyhow::bail!(
-            "Task run attempt {} settled as nothing: its process had neither succeeded nor \
-             failed, it was not past its timeout, its job run was not stopped, and it was \
-             not kept running",
+        self.settle_unclaimed(task_run_attempt, task_run_attempt_child).await?;
+
+        Ok(Settled::Terminal)
+    }
+
+    /// Settles a row no outcome claimed. Unreachable while `settle_for_running` claims
+    /// unconditionally; see `JobRunDispatcher::settle_unclaimed` for why it settles rather
+    /// than raises.
+    ///
+    /// Alone among the five, this one holds a live process. Ending the row without killing
+    /// its group would leak the command flowlite has just admitted it cannot account for,
+    /// so it is killed first — and killed before the drain, for the reason
+    /// `settle_for_timed_out` gives.
+    async fn settle_unclaimed(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        task_run_attempt_child: &mut TaskRunAttemptChild,
+    ) -> anyhow::Result<()> {
+
+        eprintln!(
+            "Task run attempt {} was claimed by no outcome: its process had neither \
+             succeeded nor failed, it was not past its timeout, its job run was not \
+             stopped, and it was not kept running. Killing it and settling it invalid. \
+             This is a bug.",
             task_run_attempt.id,
-        )
+        );
+
+        task_run_attempt_child.kill_process_group().await;
+
+        self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
+
+        self.finish_task_run_attempt(
+            task_run_attempt,
+            TaskRunAttemptStatus::Invalid,
+        ).await
     }
 
     /// Settles an attempt whose process this program does not hold.
@@ -484,6 +513,7 @@ impl Service for TaskRunAttemptMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{has_exited, read_pid_file};
     use std::time::Duration;
     use crate::crud::job_run::JobRunStatus;
     use crate::crud::task_run::TaskRunStatus;
@@ -975,5 +1005,37 @@ mod tests {
 
         assert_eq!(streams.stdout, "out\n");
         assert_eq!(streams.stderr, "err\n");
+    }
+
+    /// Unreachable while `settle_for_running` claims unconditionally, so it is called
+    /// directly. Unlike the other four this one holds a live process, so settling the row
+    /// terminal without killing its group would leak the command it can no longer account
+    /// for - the pid file proves the kill happened.
+    #[tokio::test]
+    async fn an_unclaimed_attempt_is_killed_and_settled_invalid() {
+
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        let pid_file = db.data_dir().join("pid");
+
+        db.spawn_running_child(
+            &task_run_attempt,
+            &format!("echo $$ > {}; exec sleep 30", pid_file.display()),
+            Utc::now() + TimeDelta::seconds(3600),
+        ).await;
+
+        let pid = read_pid_file(&pid_file).await;
+
+        let mut child = db.children.remove(task_run_attempt.id).await.unwrap();
+
+        db.task_run_attempt_monitor().settle_unclaimed(&task_run_attempt, &mut child).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Invalid,
+        );
+
+        assert!(has_exited(pid).await, "the process was left running");
     }
 }

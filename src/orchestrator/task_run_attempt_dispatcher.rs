@@ -64,11 +64,39 @@ impl TaskRunAttemptDispatcher {
             return Ok(());
         }
 
-        anyhow::bail!(
-            "Task run attempt {} settled as nothing: its job run was not stopped and it \
-             was not started",
+        self.settle_unclaimed(task_run_attempt).await
+    }
+
+    /// Settles a row no outcome claimed. Unreachable while `settle_as_running` claims
+    /// unconditionally; see `JobRunDispatcher::settle_unclaimed` for why it settles rather
+    /// than raises. Nothing has been spawned by the time the chain falls this far, so there
+    /// is no process to account for.
+    async fn settle_unclaimed(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
+
+        eprintln!(
+            "Task run attempt {} was claimed by no outcome: its job run was not stopped and \
+             it was not started. Settling it invalid. This is a bug.",
             task_run_attempt.id,
-        )
+        );
+
+        self.crud.update_task_run_attempts(
+            &*self.conn_pool,
+            &UpdateTaskRunAttemptsData {
+                filter: UpdateTaskRunAttemptsDataFilter {
+                    id: Some(task_run_attempt.id),
+                    task_run_id: None,
+                },
+                input: UpdateTaskRunAttemptsDataInput {
+                    status: Some(TaskRunAttemptStatus::Invalid),
+                    started_at: None,
+                    finished_at: Some(Some(Utc::now())),
+                },
+            },
+        ).await?;
+
+        self.signals.publish();
+
+        Ok(())
     }
 
     /// Skips the attempt if its job run was stopped, so its command never started.
@@ -572,5 +600,25 @@ mod tests {
 
         assert!(error.contains(&task_run.task_id), "{error}");
         assert!(error.contains("/nope/does/not/exist"), "{error}");
+    }
+
+    /// Unreachable while `settle_as_running` claims unconditionally, so it is called
+    /// directly. Nothing has been spawned by the time the chain falls this far, so there is
+    /// no process to account for.
+    #[tokio::test]
+    async fn an_unclaimed_attempt_is_settled_invalid() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, crate::crud::task_run::TaskRunStatus::Running).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+
+        db.task_run_attempt_dispatcher().settle_unclaimed(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Invalid,
+        );
     }
 }
