@@ -54,10 +54,8 @@ impl TaskRunAttemptMonitor {
     }
 
     /// Settles a running attempt as exactly one outcome, from the process
-    /// `take_task_run_attempt_child` hands over — which raises when there is none, as
-    /// TaskRunMonitor's `get_last_task_run_attempt` does for a running task run with no
-    /// attempt: both are rows this program cannot read. Raising settles nothing, so such a
-    /// row keeps its status and strands the task run and job run above it.
+    /// `TaskRunAttemptChildren` hands over — or as `Invalid` when it holds none, which is
+    /// a row this program cannot read rather than an outcome it can name.
     ///
     /// **Order decides precedence**, in the succeeded, failed, timed out, aborted, running
     /// ladder all three monitors read in: a real outcome outranks a stop, so
@@ -74,7 +72,9 @@ impl TaskRunAttemptMonitor {
     /// the configured reader EOF timeout on every timeout and every stop.
     async fn handle_running_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
-        let mut task_run_attempt_child = self.take_task_run_attempt_child(task_run_attempt).await?;
+        let Some(mut task_run_attempt_child) = self.children.remove(task_run_attempt.id).await else {
+            return self.settle_for_invalid(task_run_attempt).await;
+        };
 
         match self.settle_task_run_attempt(task_run_attempt, &mut task_run_attempt_child).await {
             Ok(Settled::Terminal) => Ok(()),
@@ -84,8 +84,8 @@ impl TaskRunAttemptMonitor {
             },
             // Put the process back rather than dropping it. A dropped Child is not killed,
             // so it would keep running unowned, whatever it had written would be lost, and
-            // the row would stay Running with `take_task_run_attempt_child` raising on it
-            // every pass from here on.
+            // the next pass would find the row Running with no process and settle it
+            // Invalid — an unknown ending for an attempt that was merely interrupted.
             Err(e) => {
                 self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
                 Err(e)
@@ -130,24 +130,30 @@ impl TaskRunAttemptMonitor {
         )
     }
 
-    /// Takes the attempt's process out of TaskRunAttemptChildren, raising when there is
-    /// none. The map holds only processes *this* program spawned, so a Running row without
-    /// one belongs to an earlier run of it — the restart path — or lost its child to an
-    /// error mid-pass. Neither is something this monitor can settle from: it has no exit
-    /// status, no group to kill, and only whatever output was persisted before.
-    async fn take_task_run_attempt_child(
-        &self,
-        task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<TaskRunAttemptChild> {
+    /// Settles an attempt whose process this program does not hold.
+    ///
+    /// `TaskRunAttemptChildren` holds only processes *this* run of the program spawned, so
+    /// a Running row with none belongs to an earlier one — the restart path, since serve's
+    /// shutdown kills the groups and leaves these rows Running on purpose — or lost its
+    /// child to an error mid-pass. There is no exit status to read, no group to kill and
+    /// no reader left to drain, so no outcome can honestly be claimed for it.
+    ///
+    /// It is settled rather than raised on because the status is the only channel between
+    /// the services: a row left Running strands its task run, strands the job run above
+    /// that, and so holds one of the job's parallel slots for ever. Whatever output was
+    /// persisted before stays on the attempt; it is only the ending that is unknown.
+    async fn settle_for_invalid(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
-        self.children
-            .remove(task_run_attempt.id)
-            .await
-            .ok_or_else(|| anyhow::anyhow!(
-                "Task run attempt {} is running with no process to wait on",
-                task_run_attempt.id,
-            ))
+        eprintln!(
+            "Task run attempt {} was running with no process to wait on, so its outcome is \
+             unknown and it has been settled invalid. Its command may still be running.",
+            task_run_attempt.id,
+        );
 
+        self.finish_task_run_attempt(
+            task_run_attempt,
+            TaskRunAttemptStatus::Invalid,
+        ).await
     }
 
     /// Succeeds the attempt once its process has exited zero.
@@ -723,11 +729,53 @@ mod tests {
     /// Raises, as TaskRunMonitor does for a running task run with no attempt, and leaves
     /// the row Running: nothing else settles it.
     #[tokio::test]
-    async fn a_running_attempt_with_no_process_raises() {
+    async fn a_running_attempt_with_no_process_is_invalid() {
         let db = TestDb::new().await;
         let task_run_attempt = running_attempt(&db).await;
 
-        assert!(db.task_run_attempt_monitor().handle(&task_run_attempt).await.is_err());
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Invalid,
+        );
+    }
+
+    /// Terminal means terminal: the row carries an end instant like any other settled
+    /// attempt, so the run's timeline does not show it still going.
+    #[tokio::test]
+    async fn an_invalid_attempt_is_given_a_finished_instant() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert!(db.task_run_attempt(task_run_attempt.id).await.finished_at.is_some());
+    }
+
+    /// Settling it is the point: a second pass finds nothing left to handle, where the
+    /// raise this replaces came back every pass for as long as serve lived.
+    #[tokio::test]
+    async fn a_settled_invalid_attempt_is_not_picked_up_again() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        let running = db.crud.select_task_run_attempts(
+            &*db.conn_pool,
+            &SelectTaskRunAttemptsData {
+                filter: SelectTaskRunAttemptsDataFilter {
+                    task_run_id: None,
+                    job_run_id: None,
+                    task_id: None,
+                    status: Some(TaskRunAttemptStatus::Running),
+                },
+                sort: None,
+            },
+        ).await.unwrap();
+
+        assert!(running.is_empty());
     }
 
     /// The child is out of TaskRunAttemptChildren for the length of a pass, so an error in
