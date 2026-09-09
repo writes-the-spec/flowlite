@@ -32,7 +32,8 @@ impl JobRunMonitor {
 
     /// Settles a running job run as exactly one outcome, from its task runs alone.
     ///
-    /// **Order decides precedence**: a real failure outranks a stop, so `settle_for_aborted`
+    /// **Order decides precedence**: an unknown outranks every named verdict, so
+    /// `settle_for_invalid` is first; a real failure outranks a stop, so `settle_for_aborted`
     /// is the last of the finished outcomes — a job run with one aborted and one failed task
     /// run reports the failure, which is the part worth acting on. Failed outranks timed out.
     /// That ordering is also what makes a skipped task run readable as a stop; see
@@ -48,6 +49,10 @@ impl JobRunMonitor {
     async fn handle_running_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         let task_runs = self.get_task_runs(job_run).await?;
+
+        if self.settle_for_invalid(job_run, &task_runs).await? {
+            return Ok(());
+        }
 
         if self.settle_for_succeeded(job_run, &task_runs).await? {
             return Ok(());
@@ -74,6 +79,28 @@ impl JobRunMonitor {
              timed out, failed, was aborted or was skipped, and they did not all succeed",
             job_run.id,
         )
+    }
+
+    /// Reports a run part of which flowlite cannot account for. First on the ladder: an
+    /// unknown outranks every named verdict, because reporting the failure of a run that is
+    /// partly unexplained presents an explained result, and being loud is the point.
+    ///
+    /// It still re-asks `all_finished`, as the three failure outcomes below it do.
+    /// Outranking decides which *finished* verdict wins, not whether the run has finished —
+    /// without this the job run would report Invalid while its other task runs still had
+    /// processes going.
+    async fn settle_for_invalid(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
+
+        let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());
+        let any_invalid = task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Invalid);
+
+        if !all_finished || !any_invalid {
+            return Ok(false);
+        }
+
+        self.update_job_run_status(job_run, JobRunStatus::Invalid).await?;
+
+        Ok(true)
     }
 
     /// Succeeds the job run once every task run has succeeded — including a job run with
@@ -341,4 +368,41 @@ mod tests {
         assert_eq!(status, JobRunStatus::Aborted);
     }
 
+    /// An unknown contaminates the verdict: reporting the failure would present an
+    /// explained result for a run that is part unexplained, and being loud is the whole
+    /// point of the status.
+    #[tokio::test]
+    async fn an_invalid_task_run_outranks_a_failed_one() {
+        assert_eq!(
+            settled_job_run_status(&[TaskRunStatus::Failed, TaskRunStatus::Invalid]).await,
+            JobRunStatus::Invalid,
+        );
+    }
+
+    #[tokio::test]
+    async fn an_invalid_task_run_outranks_a_succeeded_one() {
+        assert_eq!(
+            settled_job_run_status(&[TaskRunStatus::Succeeded, TaskRunStatus::Invalid]).await,
+            JobRunStatus::Invalid,
+        );
+    }
+
+    #[tokio::test]
+    async fn an_invalid_task_run_outranks_a_timed_out_one() {
+        assert_eq!(
+            settled_job_run_status(&[TaskRunStatus::TimedOut, TaskRunStatus::Invalid]).await,
+            JobRunStatus::Invalid,
+        );
+    }
+
+    /// Outranking decides which *finished* verdict wins, not whether the run has finished.
+    /// Without the all_finished guard a job run would report Invalid while its other task
+    /// runs still had processes going.
+    #[tokio::test]
+    async fn an_invalid_task_run_still_waits_for_the_others_to_finish() {
+        assert_eq!(
+            settled_job_run_status(&[TaskRunStatus::Invalid, TaskRunStatus::Running]).await,
+            JobRunStatus::Running,
+        );
+    }
 }

@@ -46,7 +46,13 @@ impl TaskRunMonitor {
     /// compile, it reaches the bail at runtime and `Poller::run` logs it with the row id.
     async fn handle_running_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
-        let last_task_run_attempt = self.get_last_task_run_attempt(task_run).await?;
+        let Some(last_task_run_attempt) = self.get_last_task_run_attempt(task_run).await? else {
+            return self.settle_for_missing_attempt(task_run).await;
+        };
+
+        if self.settle_for_invalid(task_run, &last_task_run_attempt).await? {
+            return Ok(());
+        }
 
         if self.settle_for_succeeded(task_run, &last_task_run_attempt).await? {
             return Ok(());
@@ -73,6 +79,39 @@ impl TaskRunMonitor {
              attempt",
             task_run.id,
         )
+    }
+
+    /// Carries an unreadable attempt up to the task run. First on the ladder: an unknown
+    /// outranks every named outcome, since the task run cannot claim an ending it does not
+    /// know. Nothing is retried from here — `settle_for_running` only retries `Failed`, and
+    /// this claims the row before it is asked anyway.
+    async fn settle_for_invalid(
+        &self,
+        task_run: &TaskRun,
+        last_task_run_attempt: &TaskRunAttempt,
+    ) -> anyhow::Result<bool> {
+
+        if last_task_run_attempt.status != TaskRunAttemptStatus::Invalid {
+            return Ok(false);
+        }
+
+        self.update_task_run_status(task_run, TaskRunStatus::Invalid).await?;
+
+        Ok(true)
+    }
+
+    /// Settles a Running task run that has no attempt at all, which is a row this program
+    /// cannot read: there is nothing to read an ending off. Leaving it Running strands the
+    /// job run above it, which then holds one of its job's parallel slots for ever.
+    async fn settle_for_missing_attempt(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+
+        eprintln!(
+            "Task run {} was running with no attempt to decide from, so its outcome is \
+             unknown and it has been settled invalid",
+            task_run.id,
+        );
+
+        self.update_task_run_status(task_run, TaskRunStatus::Invalid).await
     }
 
     async fn settle_for_succeeded(
@@ -237,10 +276,11 @@ impl TaskRunMonitor {
     /// number: the earlier ones are the retries already accounted for. A task run's attempt
     /// numbers are unique, so the order is total.
     ///
-    /// A Running task run always has one — TaskRunDispatcher inserts attempt 1 before it
-    /// writes Running — so none at all is a broken invariant rather than a state to handle,
-    /// and this says so instead of leaving the caller an Option to interpret.
-    async fn get_last_task_run_attempt(&self, task_run: &TaskRun) -> anyhow::Result<TaskRunAttempt> {
+    /// A Running task run should always have one — TaskRunDispatcher inserts attempt 1
+    /// before it writes Running — so `None` is a broken invariant rather than an ordinary
+    /// state. The caller settles it `Invalid` instead of raising, because a row nothing
+    /// can settle strands the job run above it and holds a parallel slot for ever.
+    async fn get_last_task_run_attempt(&self, task_run: &TaskRun) -> anyhow::Result<Option<TaskRunAttempt>> {
 
         let task_run_attempts = self.crud.select_task_run_attempts(
             &*self.conn_pool,
@@ -255,14 +295,7 @@ impl TaskRunMonitor {
             }
         ).await?;
 
-        task_run_attempts
-            .into_iter()
-            .last()
-            .ok_or_else(|| anyhow::anyhow!(
-                "Task run {} is running with no attempt to decide from",
-                task_run.id,
-            ))
-
+        Ok(task_run_attempts.into_iter().last())
     }
 
     async fn update_task_run_status(&self, task_run: &TaskRun, status: TaskRunStatus) -> anyhow::Result<()> {
@@ -409,13 +442,36 @@ mod tests {
         assert_eq!(status, TaskRunStatus::Aborted);
     }
 
+    /// A Running task run with no attempt at all is a row this program cannot read: it
+    /// cannot say what happened without an attempt to read it off. Settled rather than
+    /// raised on, or it strands the job run above it and holds a parallel slot for ever.
     #[tokio::test]
-    async fn a_running_task_run_with_no_attempt_raises() {
+    async fn a_running_task_run_with_no_attempt_is_invalid() {
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_retryable_task_run(job_run.id, 0, 60).await;
 
-        assert!(db.task_run_monitor().handle(&task_run).await.is_err());
+        db.task_run_monitor().handle(&task_run).await.unwrap();
+
+        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Invalid);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_attempt_makes_the_task_run_invalid() {
+        let (status, _) = settle(0, 1, TaskRunAttemptStatus::Invalid).await;
+
+        assert_eq!(status, TaskRunStatus::Invalid);
+    }
+
+    /// Never retried, even with retries to spare. Flowlite lost track of what that attempt
+    /// did, so starting another would be guessing that it left nothing behind — and after
+    /// a crash its command may still be running.
+    #[tokio::test]
+    async fn an_invalid_attempt_is_not_retried_even_with_retries_left() {
+        let (status, attempts) = settle(2, 1, TaskRunAttemptStatus::Invalid).await;
+
+        assert_eq!(status, TaskRunStatus::Invalid);
+        assert_eq!(attempts, vec![1]);
     }
 }
