@@ -14,6 +14,7 @@ pub enum TaskRunStatus {
     Skipped,
     Aborted,
     TimedOut,
+    Invalid,
 }
 
 impl TaskRunStatus {
@@ -29,7 +30,8 @@ impl TaskRunStatus {
             | TaskRunStatus::Failed
             | TaskRunStatus::Skipped
             | TaskRunStatus::Aborted
-            | TaskRunStatus::TimedOut => true,
+            | TaskRunStatus::TimedOut
+            | TaskRunStatus::Invalid => true,
         }
     }
 
@@ -40,6 +42,10 @@ impl TaskRunStatus {
     /// `Aborted` always means a stop. `Skipped` means one only once a failure has been
     /// ruled out, since a dependency that did not succeed skips its dependents too — so
     /// ask this after the failure cases, not before them.
+    ///
+    /// `Invalid` is deliberately not a stop. `JobRunMonitor::settle_for_aborted` reads
+    /// this as its abort signal, and nobody stopped a run flowlite merely lost track of —
+    /// reporting it as `Aborted` is the exact conflation `Invalid` exists to end.
     pub fn is_stopped(&self) -> bool {
         match self {
             TaskRunStatus::Aborted
@@ -48,7 +54,8 @@ impl TaskRunStatus {
             | TaskRunStatus::Running
             | TaskRunStatus::Succeeded
             | TaskRunStatus::Failed
-            | TaskRunStatus::TimedOut => false,
+            | TaskRunStatus::TimedOut
+            | TaskRunStatus::Invalid => false,
         }
     }
 
@@ -64,6 +71,7 @@ impl std::fmt::Display for TaskRunStatus {
             TaskRunStatus::Skipped => write!(f, "skipped"),
             TaskRunStatus::Aborted => write!(f, "aborted"),
             TaskRunStatus::TimedOut => write!(f, "timedout"),
+            TaskRunStatus::Invalid => write!(f, "invalid"),
         }
     }
 }
@@ -278,5 +286,23 @@ impl CRUD {
         query.execute(executor).await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_invalid_task_run_is_finished() {
+        assert!(TaskRunStatus::Invalid.is_finished());
+    }
+
+    /// Not a stop: JobRunMonitor reads is_stopped as its abort signal, and reporting the
+    /// job run as Aborted is exactly the conflation Invalid exists to end. Nobody stopped
+    /// this - flowlite lost track of it.
+    #[test]
+    fn an_invalid_task_run_does_not_report_a_stop() {
+        assert!(!TaskRunStatus::Invalid.is_stopped());
     }
 }

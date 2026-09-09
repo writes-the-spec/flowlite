@@ -685,4 +685,57 @@ mod tests {
             format!("[flowlite] Job run {} timed out", job_run.id),
         );
     }
+
+    /// The one ending nobody chose. Aborted and Skipped are news to nobody because
+    /// somebody stopped the run and knows it; an Invalid run is flowlite admitting it
+    /// lost track, which is the case least likely to be noticed by anyone watching and
+    /// may leave a command still running - so it is told, on the failure block.
+    #[tokio::test]
+    async fn an_invalid_run_is_worth_telling_somebody_about() {
+
+        let db = TestDb::new().await;
+
+        let slack = FakeSlack::start().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Invalid).await;
+
+        db.insert_task_run(job_run.id, TaskRunStatus::Invalid).await;
+
+        let notification = db.insert_job_run_notification(
+            job_run.id,
+            NotifyOn::Failure,
+            NotificationChannel::Slack,
+            &["#oncall"],
+        ).await;
+
+        db.notification_service_with_slack(&slack).handle(&notification).await.unwrap();
+
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Sent);
+
+        assert_eq!(
+            slack.posts()[0].text,
+            format!("[flowlite] Job run {} invalid", job_run.id),
+        );
+    }
+
+    /// The counterpart: a success block has nothing to say about a run whose outcome is
+    /// unknown, so its row closes rather than delivering.
+    #[tokio::test]
+    async fn an_invalid_run_closes_its_success_notification_as_skipped() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Invalid).await;
+
+        let notification = db.insert_job_run_notification(
+            job_run.id,
+            NotifyOn::Success,
+            NotificationChannel::Email,
+            &["team@example.com"],
+        ).await;
+
+        db.notification_service().handle(&notification).await.unwrap();
+
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Skipped);
+    }
 }

@@ -13,6 +13,7 @@ pub enum TaskRunAttemptStatus {
     Skipped,
     Aborted,
     TimedOut,
+    Invalid,
 }
 
 impl TaskRunAttemptStatus {
@@ -27,7 +28,8 @@ impl TaskRunAttemptStatus {
             | TaskRunAttemptStatus::Failed
             | TaskRunAttemptStatus::Skipped
             | TaskRunAttemptStatus::Aborted
-            | TaskRunAttemptStatus::TimedOut => true,
+            | TaskRunAttemptStatus::TimedOut
+            | TaskRunAttemptStatus::Invalid => true,
         }
     }
 
@@ -37,6 +39,9 @@ impl TaskRunAttemptStatus {
     /// Both are only ever written for a stopped job run — TaskRunAttemptDispatcher skips an
     /// attempt for no other reason — so unlike `TaskRunStatus::is_stopped` this needs no
     /// failure ruled out first.
+    ///
+    /// `Invalid` is deliberately not a stop: nobody stopped an attempt flowlite merely
+    /// lost track of, and its process may well still be running.
     pub fn is_stopped(&self) -> bool {
         match self {
             TaskRunAttemptStatus::Aborted
@@ -45,7 +50,8 @@ impl TaskRunAttemptStatus {
             | TaskRunAttemptStatus::Running
             | TaskRunAttemptStatus::Succeeded
             | TaskRunAttemptStatus::Failed
-            | TaskRunAttemptStatus::TimedOut => false,
+            | TaskRunAttemptStatus::TimedOut
+            | TaskRunAttemptStatus::Invalid => false,
         }
     }
 
@@ -61,6 +67,7 @@ impl std::fmt::Display for TaskRunAttemptStatus {
             TaskRunAttemptStatus::Skipped => write!(f, "skipped"),
             TaskRunAttemptStatus::Aborted => write!(f, "aborted"),
             TaskRunAttemptStatus::TimedOut => write!(f, "timedout"),
+            TaskRunAttemptStatus::Invalid => write!(f, "invalid"),
         }
     }
 }
@@ -244,5 +251,20 @@ impl CRUD {
         query.execute(executor).await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_invalid_attempt_is_finished() {
+        assert!(TaskRunAttemptStatus::Invalid.is_finished());
+    }
+
+    #[test]
+    fn an_invalid_attempt_does_not_report_a_stop() {
+        assert!(!TaskRunAttemptStatus::Invalid.is_stopped());
     }
 }

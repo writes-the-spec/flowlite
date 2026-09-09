@@ -42,6 +42,7 @@ pub fn job_run_word(status: JobRunStatus) -> &'static str {
         JobRunStatus::Skipped => "skipped",
         JobRunStatus::Aborted => "aborted",
         JobRunStatus::TimedOut => "timed out",
+        JobRunStatus::Invalid => "invalid",
     }
 }
 
@@ -54,6 +55,7 @@ pub fn task_run_word(status: TaskRunStatus) -> &'static str {
         TaskRunStatus::Skipped => "skipped",
         TaskRunStatus::Aborted => "aborted",
         TaskRunStatus::TimedOut => "timed out",
+        TaskRunStatus::Invalid => "invalid",
     }
 }
 
@@ -66,5 +68,6 @@ pub fn task_run_attempt_word(status: TaskRunAttemptStatus) -> &'static str {
         TaskRunAttemptStatus::Skipped => "skipped",
         TaskRunAttemptStatus::Aborted => "aborted",
         TaskRunAttemptStatus::TimedOut => "timed out",
+        TaskRunAttemptStatus::Invalid => "invalid",
     }
 }

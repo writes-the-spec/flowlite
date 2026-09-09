@@ -396,6 +396,7 @@ fn job_run_emoji(status: JobRunStatus) -> &'static str {
         JobRunStatus::Skipped => ":heavy_minus_sign:",
         JobRunStatus::Aborted => ":octagonal_sign:",
         JobRunStatus::TimedOut => ":alarm_clock:",
+        JobRunStatus::Invalid => ":warning:",
     }
 }
 
@@ -408,6 +409,7 @@ fn task_run_emoji(status: TaskRunStatus) -> &'static str {
         TaskRunStatus::Skipped => ":heavy_minus_sign:",
         TaskRunStatus::Aborted => ":octagonal_sign:",
         TaskRunStatus::TimedOut => ":alarm_clock:",
+        TaskRunStatus::Invalid => ":warning:",
     }
 }
 
@@ -509,6 +511,7 @@ fn job_run_accent(status: JobRunStatus) -> &'static str {
         JobRunStatus::Skipped => "#6a737d",
         JobRunStatus::Aborted => "#b54708",
         JobRunStatus::TimedOut => "#b42318",
+        JobRunStatus::Invalid => "#6f42c1",
     }
 }
 
@@ -521,6 +524,7 @@ fn task_run_accent(status: TaskRunStatus) -> &'static str {
         TaskRunStatus::Skipped => "#6a737d",
         TaskRunStatus::Aborted => "#b54708",
         TaskRunStatus::TimedOut => "#b42318",
+        TaskRunStatus::Invalid => "#6f42c1",
     }
 }
 

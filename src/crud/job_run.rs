@@ -14,9 +14,26 @@ pub enum JobRunStatus {
     Skipped,
     Aborted,
     TimedOut,
+    Invalid,
 }
 
 impl JobRunStatus {
+
+    /// Every status a run can hold, in the order the dashboard offers them as filters.
+    ///
+    /// It lives beside the enum so the surfaces that need to enumerate statuses - the
+    /// filter chips and the CLI's `--status` parser - read one list rather than each
+    /// keeping its own copy to forget to update.
+    pub const ALL: [JobRunStatus; 8] = [
+        JobRunStatus::Pending,
+        JobRunStatus::Running,
+        JobRunStatus::Succeeded,
+        JobRunStatus::Failed,
+        JobRunStatus::Skipped,
+        JobRunStatus::Aborted,
+        JobRunStatus::TimedOut,
+        JobRunStatus::Invalid,
+    ];
 
     /// Whether the run has settled and will not change again. Matched exhaustively on
     /// purpose: a new status has to say which side of this line it falls on, or it stops
@@ -29,7 +46,8 @@ impl JobRunStatus {
             | JobRunStatus::Failed
             | JobRunStatus::Skipped
             | JobRunStatus::Aborted
-            | JobRunStatus::TimedOut => true,
+            | JobRunStatus::TimedOut
+            | JobRunStatus::Invalid => true,
         }
     }
 
@@ -45,6 +63,7 @@ impl std::fmt::Display for JobRunStatus {
             JobRunStatus::Skipped => write!(f, "skipped"),
             JobRunStatus::Aborted => write!(f, "aborted"),
             JobRunStatus::TimedOut => write!(f, "timedout"),
+            JobRunStatus::Invalid => write!(f, "invalid"),
         }
     }
 }
@@ -247,4 +266,16 @@ impl CRUD {
         Ok(())
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Nothing will ever wait on it again, so it must count as settled - a run left
+    /// unfinished is the exact condition Invalid exists to end.
+    #[test]
+    fn an_invalid_run_is_finished() {
+        assert!(JobRunStatus::Invalid.is_finished());
+    }
 }

@@ -501,20 +501,27 @@ fn print_task_run_attempt(
 
 /// The words a run's status is stored and filtered by, so `--status` accepts exactly what
 /// the UI's own filter does rather than a second spelling of the same set.
+///
+/// Derived from `JobRunStatus::ALL` rather than matched by hand: a status added to the
+/// enum reaches this parser and its error message without anyone remembering to come here.
 fn parse_job_run_status(raw: &str) -> Result<JobRunStatus, String> {
-    match raw {
-        "pending" => Ok(JobRunStatus::Pending),
-        "running" => Ok(JobRunStatus::Running),
-        "succeeded" => Ok(JobRunStatus::Succeeded),
-        "failed" => Ok(JobRunStatus::Failed),
-        "skipped" => Ok(JobRunStatus::Skipped),
-        "aborted" => Ok(JobRunStatus::Aborted),
-        "timedout" => Ok(JobRunStatus::TimedOut),
-        _ => Err(format!(
-            "unknown status '{}', expected one of pending, running, succeeded, failed, skipped, aborted, timedout",
-            raw,
-        )),
+
+    let status = JobRunStatus::ALL
+        .into_iter()
+        .find(|status| status.to_string() == raw);
+
+    match status {
+        Some(status) => Ok(status),
+        None => Err(format!("unknown status '{}', expected one of {}", raw, accepted_statuses())),
     }
+}
+
+fn accepted_statuses() -> String {
+    JobRunStatus::ALL
+        .iter()
+        .map(|status| status.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -534,6 +541,21 @@ mod tests {
     #[test]
     fn a_timed_out_run_is_spelled_the_way_it_is_stored() {
         assert_eq!(parse_job_run_status("timedout").unwrap(), JobRunStatus::TimedOut);
+    }
+
+    /// The parser reads the same list the UI's filter chips are built from, so a status
+    /// added to the enum cannot reach one surface and not the other - which it did when
+    /// `Invalid` was added and this parser still refused the word.
+    #[test]
+    fn every_status_the_ui_can_filter_by_parses() {
+        for status in JobRunStatus::ALL {
+            assert_eq!(parse_job_run_status(&status.to_string()).unwrap(), status);
+        }
+    }
+
+    #[test]
+    fn an_invalid_status_parses() {
+        assert_eq!(parse_job_run_status("invalid").unwrap(), JobRunStatus::Invalid);
     }
 
     #[test]

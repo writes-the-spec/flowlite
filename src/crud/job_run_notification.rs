@@ -54,12 +54,15 @@ impl NotifyOn {
     /// means for a failure notification *and* for a success one, or it stops compiling.
     ///
     /// `Aborted` and `Skipped` are news to nobody either way: both mean somebody stopped
-    /// the run, and they already know what they did.
+    /// the run, and they already know what they did. `Invalid` is the opposite case and
+    /// counts as a failure: nobody chose it, it may have left a command running, and it is
+    /// the ending least likely to be noticed by anyone watching.
     pub fn wants(&self, status: JobRunStatus) -> bool {
         match self {
             NotifyOn::Failure => match status {
                 JobRunStatus::Failed
-                | JobRunStatus::TimedOut => true,
+                | JobRunStatus::TimedOut
+                | JobRunStatus::Invalid => true,
                 JobRunStatus::Pending
                 | JobRunStatus::Running
                 | JobRunStatus::Succeeded
@@ -73,7 +76,8 @@ impl NotifyOn {
                 | JobRunStatus::Failed
                 | JobRunStatus::Skipped
                 | JobRunStatus::Aborted
-                | JobRunStatus::TimedOut => false,
+                | JobRunStatus::TimedOut
+                | JobRunStatus::Invalid => false,
             },
         }
     }

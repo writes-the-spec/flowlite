@@ -11,15 +11,7 @@ use crate::crud::job_run::JobRunStatus;
 use crate::router::app::app_state::AppState;
 use crate::router::app::format;
 
-pub const ALL_STATUSES: [JobRunStatus; 7] = [
-    JobRunStatus::Pending,
-    JobRunStatus::Running,
-    JobRunStatus::Succeeded,
-    JobRunStatus::Failed,
-    JobRunStatus::Skipped,
-    JobRunStatus::Aborted,
-    JobRunStatus::TimedOut,
-];
+pub const ALL_STATUSES: [JobRunStatus; 8] = JobRunStatus::ALL;
 
 
 #[derive(Deserialize)]

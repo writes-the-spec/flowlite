@@ -219,7 +219,8 @@ fn run_outcome_error(job_run_id: i64, status: JobRunStatus) -> Option<String> {
         | JobRunStatus::Failed
         | JobRunStatus::Skipped
         | JobRunStatus::Aborted
-        | JobRunStatus::TimedOut => Some(format!(
+        | JobRunStatus::TimedOut
+        | JobRunStatus::Invalid => Some(format!(
             "Job run {} {}",
             job_run_id,
             format::job_run_word(status),
