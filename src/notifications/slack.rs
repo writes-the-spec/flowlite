@@ -214,6 +214,9 @@ mod tests {
         NotificationMessage {
             subject: "[flowlite] Nightly Sync run 42 failed".to_string(),
             body: "Job run 42 of 'Nightly Sync' (nightly-sync) failed.".to_string(),
+            // Slack shapes its post from the subject and the body, so a message with no
+            // HTML rendering has to post exactly the same as one that has one.
+            html: None,
         }
     }
 

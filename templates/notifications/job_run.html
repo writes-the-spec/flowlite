@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>{{ lead }}</title>
+</head>
+
+{# Table layout and inline styles throughout: a mail client fetches no stylesheet and
+   several still ignore anything but presentational HTML. #}
+<body style="margin:0; padding:0; background-color:#f4f5f7;">
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f5f7;">
+<tr>
+<td align="center" style="padding:24px 12px;">
+
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="640" style="width:100%; max-width:640px; background-color:#ffffff; border:1px solid #d8dce2; border-radius:8px; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; color:#1c2024;">
+
+    <tr>
+        <td style="padding:20px 24px 18px 24px; border-bottom:1px solid #e6e9ed;">
+            <div style="font-size:11px; font-weight:600; letter-spacing:0.09em; text-transform:uppercase; color:#8a929b;">flowlite</div>
+            <div style="margin-top:10px;">
+                <span style="display:inline-block; padding:4px 11px; border-radius:999px; font-size:12px; font-weight:600; color:#ffffff; background-color:{{ accent }};">{{ status_word }}</span>
+            </div>
+            <div style="margin-top:12px; font-size:17px; line-height:1.45; font-weight:600;">{{ lead }}</div>
+        </td>
+    </tr>
+
+    <tr>
+        <td style="padding:18px 24px 4px 24px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                {% for row in summary %}
+                <tr>
+                    <td width="120" style="padding:4px 0; font-size:13px; color:#6a737d; vertical-align:top; white-space:nowrap;">{{ row.label }}</td>
+                    <td style="padding:4px 0; font-size:13px; color:#1c2024; vertical-align:top;">{{ row.value }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </td>
+    </tr>
+
+    {% if !tasks.is_empty() %}
+    <tr>
+        <td style="padding:18px 24px 4px 24px;">
+            <div style="font-size:11px; font-weight:600; letter-spacing:0.09em; text-transform:uppercase; color:#8a929b; padding-bottom:6px;">Tasks</div>
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-top:1px solid #e6e9ed;">
+                {% for task in tasks %}
+                <tr>
+                    <td style="padding:8px 8px 8px 0; font-size:13px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#1c2024; border-bottom:1px solid #f0f2f4;">{{ task.task_id }}</td>
+                    <td align="right" style="padding:8px 0; font-size:12px; font-weight:600; color:{{ task.accent }}; border-bottom:1px solid #f0f2f4; white-space:nowrap;">{{ task.status_word }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </td>
+    </tr>
+    {% endif %}
+
+    {# A run that succeeded has no failures, so this is where the two endings differ and
+       the only place they do. #}
+    {% for failure in failures %}
+    <tr>
+        <td style="padding:18px 24px 0 24px;">
+            <div style="font-size:13px; font-weight:600; color:#1c2024; padding-bottom:8px;">{{ failure.title }}</div>
+            {% if let Some(streams) = failure.streams %}
+            <div style="font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:#8a929b; padding-bottom:4px;">stdout</div>
+            <pre style="margin:0 0 12px 0; padding:12px; background-color:#f6f8fa; border:1px solid #e6e9ed; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; line-height:1.5; color:#1c2024; white-space:pre-wrap; word-break:break-word;">{{ streams.stdout }}</pre>
+            <div style="font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:#8a929b; padding-bottom:4px;">stderr</div>
+            <pre style="margin:0; padding:12px; background-color:#fff5f4; border:1px solid #f4d3ce; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; line-height:1.5; color:#1c2024; white-space:pre-wrap; word-break:break-word;">{{ streams.stderr }}</pre>
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+
+    <tr>
+        <td style="padding:20px 24px;">
+            <div style="padding-top:16px; border-top:1px solid #e6e9ed; font-size:13px; color:#6a737d;">
+                Every task and attempt:
+                <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; color:#1c2024; background-color:#f6f8fa; border:1px solid #e6e9ed; border-radius:4px; padding:2px 6px; white-space:nowrap;">{{ logs_command }}</span>
+            </div>
+        </td>
+    </tr>
+
+</table>
+
+</td>
+</tr>
+</table>
+
+</body>
+</html>

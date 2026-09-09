@@ -10,7 +10,8 @@ It is **not** part of the [orchestrator](../orchestrator/SKILL.md). `serve` star
 | [channel.rs](../../../src/notifications/channel.rs) | `NotificationChannels` — every channel this process can actually deliver over |
 | [email.rs](../../../src/notifications/email.rs) | `EmailChannel` — the one place that talks SMTP |
 | [slack.rs](../../../src/notifications/slack.rs) | `SlackChannel` — the one place that talks to Slack's API |
-| [message.rs](../../../src/notifications/message.rs) | `NotificationMessage`, and what a finished job run says |
+| [message.rs](../../../src/notifications/message.rs) | `NotificationMessage`, and what a finished job run says — as text and as HTML |
+| [templates/notifications/job_run.html](../../../templates/notifications/job_run.html) | the HTML rendering of a finished job run |
 
 ## The loop
 
@@ -80,13 +81,17 @@ Steps 4 and 6 are the point of the enum: a channel cannot be added without sayin
 
 ## Messages
 
-`NotificationMessage` is `{ subject, body }` — the two parts every channel has some form of, and each channel renders them the way its transport wants. `job_run_message` is the only kind there is today, which is why it is a function beside the service rather than a trait.
+`NotificationMessage` is `{ subject, body, html }` — the two parts every channel has some form of, plus the same message rendered as HTML for the channels whose transport can show one, and each channel renders what it can use the way its transport wants. `job_run_message` is the only kind there is today, which is why it is a function beside the service rather than a trait.
 
 **One message shape for both endings, not one per ending.** A success and a failure answer the same question — what did this run do, and what did each of its tasks do — and the run's status supplies the wording throughout, so a succeeded run reads as one rather than as a failure notice with the word swapped. The only difference is the quoted output, and that falls out on its own: the failures a success has none of are an empty list, so the section that quotes them is simply not written.
 
 **The cap on quoted output belongs to the channel, not the message.** `NotificationChannels::max_output_bytes` is asked per channel and passed into the builder, because the reason for a cap is the transport's own limit — a relay's maximum message size for email, and for Slack how much of a chat message anybody scrolls through, which is why its default is the smaller of the two. Truncation has to happen while the body is built, since the output is embedded in formatted text no channel could safely cut afterwards.
 
-A channel that needs the message shaped differently does that in its own module, from the same two parts: Slack sends the subject as the line and the body in a code fence, because the body is aligned text that only reads in a monospaced block — and it escapes any fence in the quoted output first, since a command is free to print one.
+A channel that needs the message shaped differently does that in its own module, from the same parts: Slack sends the subject as the line and the body in a code fence, because the body is aligned text that only reads in a monospaced block — and it escapes any fence in the quoted output first, since a command is free to print one. Slack ignores `html` entirely.
+
+**`html` is `Option`, and email degrades to the text part rather than failing.** A message kind need not have an HTML rendering, and a template that will not render costs the formatting rather than the notification — so `message_html` logs and returns `None`. `EmailChannel::build` then sends `multipart/alternative` when there is one, both parts on the same message, and the body alone when there is not: a client that renders HTML shows the formatted message, and a reader who prefers plain text loses nothing.
+
+**Both renderings are built in [message.rs](../../../src/notifications/message.rs), from one set of facts.** `summary_rows`, `message_lead`, `failure_title`, `logs_command` and `stream_tail` are each called by the text builder and by the template builder, so a fact added to one rendering cannot go missing from the other — which is why the HTML lives beside the text rather than in a module of its own. The template itself is [templates/notifications/job_run.html](../../../templates/notifications/job_run.html): **one template for both endings**, for the same reason there is one message shape, and table layout with inline styles throughout because a mail client fetches no stylesheet. Askama escapes every value it writes, which is what makes it safe to quote a command's own output in it.
 
 `stream_tail` keeps the **end** of a stream and cuts the front, on a character boundary: the end is where a command says why it stopped, and that is what makes a capped alert still worth reading.
 
