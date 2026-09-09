@@ -28,6 +28,7 @@ It is **not** part of the [orchestrator](../orchestrator/SKILL.md). `serve` star
 | `Failed`, `TimedOut` | message built and delivered, then `sent` or `failed` | closed as `skipped` |
 | `Succeeded` | closed as `skipped` | message built and delivered, then `sent` or `failed` |
 | `Aborted`, `Skipped` | closed as `skipped` — somebody stopped it, and they know | closed as `skipped` |
+| `Invalid` | message built and delivered, then `sent` or `failed` — nobody chose this ending, so it is the one most worth telling | closed as `skipped` |
 
 The two questions live in different places on purpose. "Has it ended?" is about the run, so it is `JobRunStatus::is_finished` ([src/crud/job_run.rs](../../../src/crud/job_run.rs)). "Is this ending mine?" is about the notification, so it is `NotifyOn::wants` ([src/crud/job_run_notification.rs](../../../src/crud/job_run_notification.rs)) — the service never decides it, because a run whose job asked to hear either way carries **a row for each**, and one run ending has to settle them differently.
 

@@ -18,10 +18,10 @@
 
 `TaskRunDispatcher` ([src/orchestrator/task_run_dispatcher.rs](../../../../src/orchestrator/task_run_dispatcher.rs)) polls **all** `Pending` task runs, whatever their job run's status, on a signal wake-up or its one-second interval, whichever comes first. It settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened:
 
-1. `settle_as_skipped` → `Skipped` if the **job run was stopped**, or if **any dependency finished but didn't succeed** (`Failed`, `Skipped`, `Aborted`, `TimedOut`). Either way the task run can never run.
+1. `settle_as_skipped` → `Skipped` if the **job run was stopped**, or if **any dependency finished but didn't succeed** (`Failed`, `Skipped`, `Aborted`, `TimedOut`, `Invalid`). Either way the task run can never run. `Invalid` has to be in that list: it is finished, so step 2 does not hold the dependent, and it did not succeed, so step 3 does not start it — leaving it out sent every dependent to the bail on every pass, turning one unreadable row into an unreadable subtree.
 2. `settle_as_pending` → **any dependency still `Pending` or `Running`** → the row stays `Pending` for the next tick. **It writes nothing, and exists to say so.**
 3. `settle_as_running` → `Running` with `started_at = now`, once **all dependencies have `Succeeded`**. It also inserts **attempt 1** (`Pending`), *before* the status write — `TaskRunMonitor` decides from the last attempt, so a `Running` task run without one is a state it cannot act on. Same ordering rule as the child-before-status hand-off one level down.
-4. Past all three → `anyhow::bail!`.
+4. Past all three → `anyhow::bail!`. **This is the one chain that still bails**, and deliberately: steps 2 and 3 load the dependencies separately, so one failing between the two loads reaches it on an ordinary state that the next pass settles. The other five chains settle `Invalid` there instead — see [SKILL.md](../SKILL.md#the-settle-chain-and-why-its-order-matters).
 
 Step 1's two guards short-circuit in order, so a stopped job run costs one query and never loads the dependencies.
 
@@ -43,14 +43,17 @@ This transition runs **at most once per task run**: a retry keeps the row `Runni
 
 | Last attempt | Outcome | Task run |
 |---|---|---|
+| `Invalid` | `settle_for_invalid` | `Invalid` — asked first, and **never retried**: flowlite does not know what that attempt did |
 | `Succeeded` | `settle_for_succeeded` | `Succeeded` |
 | `Failed`, no retry left | `settle_for_failed` | `Failed` |
 | `TimedOut` | `settle_for_timed_out` | `TimedOut` |
 | `is_stopped` — `Aborted` or `Skipped` | `settle_for_aborted` | `Aborted` — the task run had started, so a stop aborts it |
 | `Pending`, `Running`, or `Failed` with a retry left | `settle_for_running` | left `Running`; inserts the retry row immediately — `TaskRunAttemptDispatcher` holds it `Pending` until `retry_delay` has passed |
-| past all five | `anyhow::bail!` | — |
+| past all six | `settle_unclaimed` | `Invalid`, logged as a bug — unreachable while the guards above cover every attempt status |
 
-These guards are exclusive, since the last attempt has exactly one status, so **the order here carries nothing** and follows the succeeded, failed, timed out, aborted, running ladder only so all three monitors read alike. `TaskRunAttemptStatus::is_stopped` needs no failure ruled out first, unlike its `TaskRunStatus` namesake: `TaskRunAttemptDispatcher` skips an attempt for one reason only.
+Before the ladder runs at all: **no attempt row whatsoever** → `settle_for_missing_attempt` → `Invalid`. A `Running` task run should always have attempt 1, since `TaskRunDispatcher` inserts it before writing `Running`, so this is a broken invariant — but one settled rather than raised on, because a row nothing can settle strands the job run above it and holds a parallel slot for ever.
+
+These guards are exclusive, since the last attempt has exactly one status, so **the order here carries nothing** — `settle_for_invalid` is written first to read like `JobRunMonitor`, where the rank is load-bearing — and follows the succeeded, failed, timed out, aborted, running ladder only so all three monitors read alike. `TaskRunAttemptStatus::is_stopped` needs no failure ruled out first, unlike its `TaskRunStatus` namesake: `TaskRunAttemptDispatcher` skips an attempt for one reason only.
 
 `Failed` is the only retried status. A retry inserts attempt `last.attempt + 1` and leaves the task run `Running`. Attempts count from 1, so total executions are `1 + max_retries` and `max_retries: 0` means one attempt. Both the count and the delay are read off the `task_run` row, so a run retries on the policy it was submitted with rather than on whatever the YAML says now.
 
@@ -60,7 +63,7 @@ Because the decision comes from the attempt rows alone, a stop landing *between*
 
 - **A `Pending` or `Running` task run keeps its job run `Running`.** A task run that is never visited again strands its whole job run — see [job_run.md](job_run.md).
 - **A `Running` task run must always have either an unfinished attempt or a finished last attempt to decide on.** An attempt row that never finishes stalls the task run, and through it the job run.
-- **A new `TaskRunAttemptStatus` needs an outcome** in `handle_running_task_run`. This used to be an exhaustive `match`, so the compiler caught the omission; the `settle_for_*` chain replaced that check with the bail, which catches it at runtime instead — the row is logged with its id on every pass rather than silently staying `Running` forever. `settle_for_failed` and `settle_for_running` split a `Failed` last attempt between them on the same inlined comparison — `last.attempt` against `task_run.max_retries + 1`, in opposite directions — so the two cannot both claim it or both pass it by.
-- **A new terminal `TaskRunStatus` needs three edits**: the failure list in `TaskRunDispatcher::settle_as_skipped` (or downstream task runs wait forever), a transition in `JobRunMonitor::handle_running_job_run`, at the right rank, and a badge arm in `templates/routes/job_runs/job_run_id/route.html`.
+- **A new `TaskRunAttemptStatus` needs an outcome** in `handle_running_task_run`. This used to be an exhaustive `match`, so the compiler caught the omission; the `settle_for_*` chain replaced that check with `settle_unclaimed`, which catches it at runtime instead — the task run settles `Invalid` with a log line saying it is a bug, rather than staying `Running` for ever. `Invalid` itself is what this guards against: between being added to the enum and being given a rung, it reached exactly this fall-through. `settle_for_failed` and `settle_for_running` split a `Failed` last attempt between them on the same inlined comparison — `last.attempt` against `task_run.max_retries + 1`, in opposite directions — so the two cannot both claim it or both pass it by.
+- **A new terminal `TaskRunStatus` needs three edits**: the failure list in `TaskRunDispatcher::settle_as_skipped` (or downstream task runs wait forever), a transition in `JobRunMonitor::handle_running_job_run`, at the right rank, and a badge arm in `templates/routes/job_runs/job_run_id/route.html`. The exhaustive matches on the enum — `is_finished`, `is_stopped`, `Display`, `format::task_run_word` — force the rest, and `JobRunStatus::ALL` is what the dashboard's filter chips and the CLI's `--status` parser both read.
 - **This monitor never writes `Skipped`.** It only ever visits `Running` task runs, which have started; a stop therefore aborts them. Only `TaskRunDispatcher` skips a task run, and only one that never started.
 - **Terminal statuses set `finished_at`** — `TaskRunMonitor::update_task_run_status` for the ones it derives, `TaskRunDispatcher::settle_as_skipped` for a skip.

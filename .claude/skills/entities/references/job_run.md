@@ -12,7 +12,7 @@ One execution of a [`job`](job.md). Created `Pending`, driven to a terminal stat
 | `created_at` | Bound from `Toolkit::get_current_ts()`, like every timestamp here. |
 | `started_at` | Nullable. Written exactly once, by `JobRunDispatcher::settle_as_running`. Task run retries never touch it. |
 | `finished_at` | Nullable. Written with every terminal status. |
-| `status` | `JobRunStatus` — see the [orchestrator skill](../../orchestrator/references/job_run.md) for the seven variants and how task run statuses add up to one. |
+| `status` | `JobRunStatus` — see the [orchestrator skill](../../orchestrator/references/job_run.md) for the eight variants and how task run statuses add up to one. `JobRunStatus::ALL` lists them in dashboard-filter order, and is what both that filter and the CLI's `--status` read. |
 
 ## Written by
 

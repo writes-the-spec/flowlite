@@ -21,6 +21,7 @@
 1. `settle_as_skipped` — **stopped?** (a `job_run_stop` row exists) → the job run goes `Skipped`, and so do all of its task runs in one update. It never runs.
 2. `settle_as_pending` — **is its job at `max_parallel_runs`?** (`CRUD::is_job_at_max_parallel_runs`, counting that job's `Running` job runs) → the row stays `Pending`, to be reconsidered next pass. **It writes nothing, and exists to say so.**
 3. `settle_as_running` — otherwise → `status = Running`, `started_at = now`.
+4. Past all three → `settle_unclaimed` → `Invalid`. Unreachable while step 3 claims unconditionally; see [SKILL.md](../SKILL.md#the-settle-chain-and-why-its-order-matters).
 4. Past all three → `anyhow::bail!`.
 
 Step 4 is the point of step 2. A pending job run left alone on purpose and one left alone because nobody handled it look identical from the outside — the row just sits there, indistinguishable from a job legitimately queued behind its limit. Naming the deliberate case makes the accidental one an error the `Poller` logs with the row id, instead of a run that never moves and never explains why. It is unreachable today: step 3 starts whatever step 2 declined, unconditionally. Give it a guard of its own without adding an outcome and the bail is what tells you.
@@ -39,18 +40,19 @@ Only `Running` runs count against the limit. Counting `Pending` ones too would d
 
 `JobRunMonitor` ([src/orchestrator/job_run_monitor.rs](../../../../src/orchestrator/job_run_monitor.rs)) polls `Running` job runs on the same wake-up-or-interval schedule, loads all task runs of each, and settles each row as exactly one outcome:
 
-1. `settle_for_succeeded` — every task run `Succeeded`
-2. `settle_for_failed` — any `Failed`
-3. `settle_for_timed_out` — any `TimedOut`
-4. `settle_for_aborted` — any task run `is_stopped`, meaning `Aborted` or `Skipped`, the two ways task runs report a stop
-5. `settle_for_running` — any task run not finished → writes nothing
+1. `settle_for_invalid` — any `Invalid`, once they have all finished → the whole run is `Invalid`
+2. `settle_for_succeeded` — every task run `Succeeded`
+3. `settle_for_failed` — any `Failed`
+4. `settle_for_timed_out` — any `TimedOut`
+5. `settle_for_aborted` — any task run `is_stopped`, meaning `Aborted` or `Skipped`, the two ways task runs report a stop
+6. `settle_for_running` — any task run not finished → writes nothing
 6. Past all five → `anyhow::bail!`
 
 **Steps 2–4 each ask for every task run having finished** as well as for their own status, so none of them can finish a job run whose work is still going. With step 5 asked last, that guard is the only thing holding such a job run open — and finishing is irreversible, since this monitor only ever visits `Running` rows.
 
 **Order decides precedence.** A real failure outranks a stop, so step 4 is the last of the finished outcomes: a job run with one aborted and one failed task run reports the failure, which is the part worth acting on. Between the two failures, failed outranks timed out.
 
-Step 1 is exclusive with everything (it needs *every* task run succeeded) and could sit anywhere. Step 5 comes last because it guards nothing of its own, the ladder every monitor reads in — see [SKILL.md](../SKILL.md).
+Step 1 comes first because an unknown outranks every named verdict: naming the failure of a run that is partly unexplained presents an explained result. It re-asks `all_finished` like steps 3–5, so it decides which *finished* verdict wins rather than finishing the run early. Step 2 is exclusive with everything (it needs *every* task run succeeded) and could sit anywhere. Step 6 comes last because it guards nothing of its own, the ladder every monitor reads in — see [SKILL.md](../SKILL.md).
 
 Step 4 folds both stop signals into one outcome, and does not require *all* task runs to be skipped. A skip means a stop or a dependency that didn't succeed, and in the second case that dependency is itself `Failed`/`TimedOut`/`Aborted` or skipped — so once steps 2–3 have not matched, a skip can only mean the run was stopped. Its `Aborted` half needs no such argument: a task run is only aborted by a stop.
 
@@ -67,5 +69,5 @@ Every guard is an `any(...)`/`all(...)`, so a job run with no task runs settles 
 - **The precedence among steps 2–4 is covered by tests, and is the whole of what the call order carries here.** Steps 1 and 5 are position-independent — step 1 because it is exclusive with everything, step 5 because the three above it re-ask `all_finished` themselves, so it claims the same rows wherever it sits below step 1. Every guard is inlined in its own outcome, so there is no pure function left to reach; the tests in [src/orchestrator/job_run_monitor.rs](../../../../src/orchestrator/job_run_monitor.rs) instead insert task runs, run `handle` and read the settled status back, so reordering steps 2–4 fails two of them rather than silently changing what a stopped or mixed-outcome run reports. Add a case there when you add an outcome. Those `all_finished` guards are now the only thing holding an unfinished job run open, which is what makes them testable: dropping one from a single failure outcome fails `a_failure_does_not_finish_a_job_run_whose_work_is_still_going`, where it passed while step 5 was asked first.
 - **This monitor never writes `Skipped`.** It only ever visits `Running` rows, and a job run that reached `Running` has started — its earlier task runs may well have executed — so a stop aborts it. `Skipped` here would claim nothing ran while the logs showed output.
 - **Terminal statuses set `finished_at`**, via `update_job_run_status`, which also queues the run's failure notification in the same transaction when the status is `Failed` or `TimedOut` and the run names anyone — see [`job_run_notification`](../../entities/references/job_run_notification.md).
-- **A new terminal `TaskRunStatus` needs an outcome here**, placed at the right rank. Nothing in the compiler catches the omission, but the bail does at runtime: `settle_for_succeeded` needs *every* task run succeeded, so an unclaimed status no longer slips out as `Succeeded`.
+- **A new terminal `TaskRunStatus` needs an outcome here**, placed at the right rank. Nothing in the compiler catches the omission. `settle_unclaimed` catches it at runtime: the run settles `Invalid` with a log line saying it is a bug, rather than staying `Running` for ever — and `settle_for_succeeded` needs *every* task run succeeded, so an unclaimed status cannot slip out as `Succeeded` either.
 - **A new `JobRunStatus` needs a badge** in `templates/routes/home/job_run_table/route.html` and `templates/routes/job_runs/job_run_id/route.html`, plus an entry in the home route's `all_statuses` filter list.

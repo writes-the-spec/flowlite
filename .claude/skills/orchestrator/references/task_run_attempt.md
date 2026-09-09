@@ -14,7 +14,7 @@ Two services insert these rows, but never the same one: the dispatcher only visi
 | `Aborted` | The process was killed because the job run was stopped — or there was no process left to wait for. |
 | `Skipped` | The job run was stopped between the insert and the dispatch, so the command never started. |
 
-Same seven variants as `TaskRunStatus`, because both levels have the same dispatcher/monitor shape — but a separate enum, and `TaskRunMonitor` maps one onto the other explicitly. The `Pending` state is what makes an attempt skippable: a stop arriving in the one tick before it is cleared to run finds nothing to kill.
+Same eight variants as `TaskRunStatus`, because both levels have the same dispatcher/monitor shape — but a separate enum, and `TaskRunMonitor` maps one onto the other explicitly. The `Pending` state is what makes an attempt skippable: a stop arriving in the one tick before it is cleared to run finds nothing to kill.
 
 ## Dispatcher: Pending → Running / Skipped
 
@@ -34,7 +34,7 @@ Step 1 before step 2 is what makes a stop beat a waiting retry: a job run stoppe
 
 `TaskRunAttemptMonitor` ([src/orchestrator/task_run_attempt_monitor.rs](../../../../src/orchestrator/task_run_attempt_monitor.rs)) polls `Running` attempts on the same wake-up-or-interval schedule and takes their child out of `TaskRunAttemptChildren`:
 
-- **No child** → `take_task_run_attempt_child` **raises**, exactly as `TaskRunMonitor::get_last_task_run_attempt` does for a `Running` task run with no attempt: both are rows the program cannot read. The map holds only processes *this* program spawned, so a `Running` row without one belongs to an earlier run of it — the restart path — or lost its child to an error mid-pass. The row is **not settled**: it stays `Running`, `Poller::run` logs it, and the next pass raises again — which strands the task run and job run above it, since a `Running` job run holds one of its job's parallel slots. That is a known gap, not a design; settling such rows needs a status that means "flowlite cannot read this row", which no enum has yet.
+- **No child** → `settle_for_invalid` → `Invalid`, exactly as `TaskRunMonitor` does for a `Running` task run with no attempt: both are rows the program cannot read. The map holds only processes *this* run of the program spawned, so a `Running` row without one belongs to an earlier one — the restart path — or lost its child to an error mid-pass. There is no exit status to read, no group to kill and no reader left to drain, so no outcome can honestly be claimed; output persisted before the crash stays on the attempt, and only the ending is unknown. It is **settled**, not raised on, and logged once: leaving it `Running` stranded the task run and job run above it, and a `Running` job run holds one of its job's parallel slots for ever. The log line says the command may still be running, which after a `SIGKILL` it is — see [Rows flowlite cannot read](../SKILL.md#rows-flowlite-cannot-read).
 - **Child present** → each outcome owns its guard, drains the output itself and returns whether it fired, tried in this order:
   1. `settle_for_succeeded` — **exited zero?** → `Succeeded`.
   2. `settle_for_failed` — **exited non-zero?** → `Failed`. Asks `try_wait` for itself rather than sharing step 1's answer, so each status is its own line of the ladder; `try_wait` caches the status it reaped.

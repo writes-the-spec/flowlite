@@ -266,8 +266,10 @@ Tasks
 Run `flowlite job-run logs 43` for every task and attempt.
 ```
 
-**`on_failure:` means a real failure** — `failed` and `timed out`, never `aborted`. A run
-you stopped yourself is not news, and neither block is told about one.
+**`on_failure:` means a real failure** — `failed`, `timed out` and `invalid`, never
+`aborted`. A run you stopped yourself is not news, and neither block is told about one.
+An `invalid` run is the opposite case: nobody chose it, so it is the ending most worth
+being told about — see [When flowlite loses track of a run](#when-flowlite-loses-track-of-a-run).
 
 ### Where the mail server and the Slack token go
 
@@ -384,7 +386,8 @@ flowlite job submit nightly --wait
 echo $?     # 0 only when the run succeeded
 ```
 
-Every ending that is not a success exits 1 — failed, timed out, aborted or skipped — so a
+Every ending that is not a success exits 1 — failed, timed out, aborted, skipped or
+invalid — so a
 Makefile, a CI step or a parent job can treat a flowlite run like any other command. The
 wait is a poll of the run's row, so it works from a different process, a different shell
 or a different container to the one running `flowlite serve`.
@@ -454,6 +457,40 @@ as it is defined now, submit it instead:
 ```bash
 flowlite job submit hello-world
 ```
+
+## When flowlite loses track of a run
+
+Most statuses say what happened to your command: it succeeded, it failed, it ran past its
+timeout, you stopped it. `invalid` says something different — that flowlite cannot account
+for the row at all.
+
+The case that actually happens is a restart with work in flight. Shutting `serve` down
+kills the process groups it spawned and leaves those attempts marked running on purpose,
+and a crashed or `kill -9`ed flowlite does the same with the processes still alive. On the
+next start there is no exit status to read and no process left to wait on, so no honest
+outcome can be claimed:
+
+```bash
+flowlite job-run list --status invalid
+```
+
+An invalid attempt makes its task run invalid, that makes the job run invalid, and
+everything downstream of it is skipped. It is **never retried** — flowlite does not know
+what that attempt did, so running it again would be guessing that it left nothing behind.
+Rerun it yourself once you have checked:
+
+```bash
+flowlite job-run rerun 42
+```
+
+Before this existed those rows never settled at all: they stayed running, logged an error
+once a second for as long as `serve` lived, and — because a running job run holds one of
+its job's `max_parallel_runs` slots — a single crashed attempt could stop that job from
+ever running again.
+
+**One thing it does not fix.** After a crash the command's process may still be running:
+the process group id lives only in memory, so nothing killed it. The log line says so.
+`invalid` records the uncertainty, it does not resolve it.
 
 ## UI
 
