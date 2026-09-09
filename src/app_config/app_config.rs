@@ -1,219 +1,19 @@
 use std::path::PathBuf;
-use std::time::Duration;
-use chrono_tz::Tz;
-use anyhow::{Result};
+use anyhow::Result;
 use figment::Figment;
 use figment::providers::{Toml, Env, Format, Serialized};
 use serde::{Deserialize, Serialize};
 
-
-/// What the orchestrator's loops and readers are timed and sized by.
-#[derive(Deserialize, Serialize, Clone, Debug)]
-pub struct AppConfigOrchestrator {
-    /// The safety net rather than the driver — signals do the waking — but it cannot be
-    /// turned off: `job submit` writes from another process and so cannot publish, and
-    /// this interval is the only thing that notices.
-    pub poll_interval_seconds: u64,
-    /// How long a poller waits before restarting after an error.
-    pub error_backoff_seconds: u64,
-    /// How long the attempt monitor waits for the readers to reach EOF after the process
-    /// has gone, per timeout and per stop.
-    pub reader_eof_timeout_seconds: u64,
-    /// The most output one stream of one attempt records. Past it the reader keeps
-    /// reading and stops recording, which bounds both the table and the memory in flight.
-    pub max_stream_bytes: usize,
-    /// One read from a child's pipe.
-    pub read_buffer_bytes: usize,
-}
-
-impl Default for AppConfigOrchestrator {
-    fn default() -> Self {
-        Self {
-            poll_interval_seconds: 1,
-            error_backoff_seconds: 5,
-            reader_eof_timeout_seconds: 2,
-            max_stream_bytes: 1024 * 1024,
-            read_buffer_bytes: 8192,
-        }
-    }
-}
-
-impl AppConfigOrchestrator {
-    pub fn poll_interval(&self) -> Duration {
-        Duration::from_secs(self.poll_interval_seconds)
-    }
-
-    pub fn error_backoff(&self) -> Duration {
-        Duration::from_secs(self.error_backoff_seconds)
-    }
-
-    pub fn reader_eof_timeout(&self) -> Duration {
-        Duration::from_secs(self.reader_eof_timeout_seconds)
-    }
-}
+use crate::app_config::job_defaults::AppConfigJobDefaults;
+use crate::app_config::orchestrator::AppConfigOrchestrator;
+use crate::app_config::schedule_defaults::AppConfigScheduleDefaults;
+use crate::app_config::slack::AppConfigSlack;
+use crate::app_config::smtp::AppConfigSmtp;
+use crate::app_config::ui::AppConfigUi;
 
 
-/// What the web UI pages and refreshes by.
-#[derive(Deserialize, Serialize, Clone, Debug)]
-pub struct AppConfigUi {
-    /// Rows per page on the run, job and schedule lists.
-    pub page_size: u32,
-    /// The largest `page_size` the run list accepts from its query string.
-    pub max_page_size: u32,
-    /// How often a page that is watching a live run asks for itself again.
-    pub refresh_interval_seconds: u32,
-}
-
-impl Default for AppConfigUi {
-    fn default() -> Self {
-        Self {
-            page_size: 25,
-            max_page_size: 100,
-            refresh_interval_seconds: 3,
-        }
-    }
-}
-
-
-/// What a job or task gets for a field its YAML leaves out.
-#[derive(Deserialize, Serialize, Clone, Debug)]
-pub struct AppConfigJobDefaults {
-    /// Seconds one attempt may run for.
-    pub timeout_seconds: u32,
-    /// Retries *after* the first attempt, so executions total `1 + max_retries`.
-    pub max_retries: u32,
-    /// Seconds to wait after a failed attempt before the next one starts.
-    pub retry_delay_seconds: u32,
-    /// How many runs of one job may run at once, 0 for no limit.
-    pub max_parallel_runs: u32,
-}
-
-impl Default for AppConfigJobDefaults {
-    fn default() -> Self {
-        Self {
-            timeout_seconds: 3600,
-            max_retries: 0,
-            retry_delay_seconds: 60,
-            max_parallel_runs: 1,
-        }
-    }
-}
-
-
-/// What a schedule gets for a field its YAML leaves out.
-#[derive(Deserialize, Serialize, Clone, Debug)]
-pub struct AppConfigScheduleDefaults {
-    /// The zone a schedule's cron expression is read in. An IANA name, so a schedule that
-    /// says nothing follows this zone's daylight saving rather than a fixed offset.
-    pub timezone: Tz,
-}
-
-impl Default for AppConfigScheduleDefaults {
-    fn default() -> Self {
-        Self {
-            timezone: chrono_tz::UTC,
-        }
-    }
-}
-
-
-/// How a failure email leaves the box.
-///
-/// The one section with no default, because there is no default mail server: no `[smtp]`
-/// means notifications are off entirely, and a job asking for one is then a startup error
-/// rather than a message nobody gets at 03:00. It is deployment config rather than job
-/// config for the same reason it is not in the YAML — the relay differs per machine, and
-/// `password` belongs in `FLOWLITE_SMTP__PASSWORD`, not in a file that is read out to the
-/// dashboard and committed alongside the jobs.
-#[derive(Deserialize, Serialize, Clone, Debug)]
-pub struct AppConfigSmtp {
-    pub host: String,
-    #[serde(default = "default_smtp_port")]
-    pub port: u16,
-    /// Empty for a relay that authenticates nobody, which a local MTA usually doesn't.
-    #[serde(default)]
-    pub username: String,
-    #[serde(default)]
-    pub password: String,
-    /// The From: address, which most relays insist on owning.
-    pub from: String,
-    #[serde(default)]
-    pub encryption: AppConfigSmtpEncryption,
-    /// The most of one stream of one failed task a message carries. Past it the end is
-    /// kept and the front cut, since a relay's own size limit is the reason to have one.
-    #[serde(default = "default_smtp_max_output_bytes")]
-    pub max_output_bytes: usize,
-}
-
-fn default_smtp_port() -> u16 {
-    587
-}
-
-fn default_smtp_max_output_bytes() -> usize {
-    4096
-}
-
-/// How a failure message reaches Slack.
-///
-/// No default, for the reason `[smtp]` has none: there is no default workspace. Absent
-/// means the channel is unconfigured, and a job asking for it is a startup error rather
-/// than a message nobody gets at 03:00.
-///
-/// It is a bot token and `chat.postMessage` rather than an incoming webhook on purpose.
-/// A webhook URL *is* its destination, so a job naming a second channel would have to
-/// carry a second secret URL in its YAML — which is the one thing the split between
-/// config.toml and the job files exists to prevent. A token here addresses any
-/// conversation the bot is in, so the YAML names `#oncall` and nothing else.
-#[derive(Deserialize, Serialize, Clone, Debug)]
-pub struct AppConfigSlack {
-    /// A bot token, `xoxb-...`, with `chat:write`. Belongs in `FLOWLITE_SLACK__TOKEN`
-    /// rather than in the file, like the SMTP password.
-    pub token: String,
-    /// Overridable so a test — or a Slack-compatible relay — can be pointed at instead.
-    #[serde(default = "default_slack_api_url")]
-    pub api_url: String,
-    /// How long one post may take before it is recorded as failed. A hung request would
-    /// otherwise hold the notification service's whole pass.
-    #[serde(default = "default_slack_timeout_seconds")]
-    pub timeout_seconds: u64,
-    /// Smaller than the mail cap by default: `chat.postMessage` takes far more than this,
-    /// but a chat message is read in a scroll rather than opened, and the mail is where
-    /// the long tail belongs.
-    #[serde(default = "default_slack_max_output_bytes")]
-    pub max_output_bytes: usize,
-}
-
-fn default_slack_api_url() -> String {
-    "https://slack.com/api/chat.postMessage".to_string()
-}
-
-fn default_slack_timeout_seconds() -> u64 {
-    10
-}
-
-fn default_slack_max_output_bytes() -> usize {
-    2048
-}
-
-impl AppConfigSlack {
-    pub fn timeout(&self) -> Duration {
-        Duration::from_secs(self.timeout_seconds)
-    }
-}
-
-
-/// What the connection to the relay is wrapped in: STARTTLS on the submission port,
-/// implicit TLS on 465, or nothing at all for an MTA on localhost.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum AppConfigSmtpEncryption {
-    #[default]
-    StartTls,
-    Tls,
-    None,
-}
-
-
+/// Everything `config.toml` can say, and the only thing that reads it. One field per
+/// section, each declared in a file of its own beside this one.
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct AppConfig {
     pub data_dir: String,
@@ -276,7 +76,10 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+    use crate::app_config::smtp::AppConfigSmtpEncryption;
 
     fn temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("flowlite-config-{}", uuid::Uuid::new_v4()));

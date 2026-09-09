@@ -12,7 +12,7 @@ Everything flowlite knows before it runs comes from YAML files under the **data 
 | [`JobYaml`](references/job_yaml.md) | `<data_dir>/jobs/*.yml` | `mem.job`, `mem.task`, `mem.task_dependent` |
 | [`ScheduleYaml`](references/schedule_yaml.md) | `<data_dir>/schedules/*.yml` | `mem.schedule`, `mem.schedule_job` |
 
-`<data_dir>/config.toml` is *not* part of this layer — it is app config, read by `AppConfig::load` ([src/app_config.rs](../../../src/app_config.rs)) through figment. It does reach this layer in one place: `timeout`, `max_retries`, `retry_delay`, `max_parallel_runs` and a schedule's `timezone` are `Option` on the models, and `CRUD::init` resolves a `None` against `[job_defaults]` or `[schedule_defaults]` as it inserts — so "the default" for those five is the data dir's, not a value in `#[serde(default = ...)]`.
+`<data_dir>/config.toml` is *not* part of this layer — it is app config, read by `AppConfig::load` ([src/app_config/](../../../src/app_config/), one file per `config.toml` section) through figment. It does reach this layer in one place: `timeout`, `max_retries`, `retry_delay`, `max_parallel_runs` and a schedule's `timezone` are `Option` on the models, and `CRUD::init` resolves a `None` against `[job_defaults]` or `[schedule_defaults]` as it inserts — so "the default" for those five is the data dir's, not a value in `#[serde(default = ...)]`.
 
 ## Where they are read
 
