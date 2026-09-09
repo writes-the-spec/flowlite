@@ -68,7 +68,6 @@ mod tests {
             job_name: "Daily ETL".to_string(),
             job_description: String::new(),
             parameters: sqlx::types::Json(parameters),
-            on_failure_emails: sqlx::types::Json(Vec::new()),
             created_at: Utc::now(),
             scheduled_at,
             started_at: None,

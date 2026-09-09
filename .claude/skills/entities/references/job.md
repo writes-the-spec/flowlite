@@ -23,7 +23,7 @@ In-memory config, re-seeded on every startup, so nothing here survives a restart
 
 - `CRUD::submit_job` ([src/crud/multistatements/misc.rs](../../../../src/crud/multistatements/misc.rs)) — copies `name` and `description` onto the `job_run` it inserts as `job_name`/`job_description`, and bails with `Job '<id>' not found` if the row is missing. It also passes `parameters` to `resolve_job_parameters`, which raises if a caller's override names a parameter this row does not declare, and merges `env` under each task's own `env:` via `merge_task_env`.
 - `CRUD::is_job_at_max_parallel_runs` — reads `max_parallel_runs`. **This is the single definition field the orchestrator reads live**, everywhere else it reads the run's snapshot. Deliberate: "may I start another run?" is a question about the job now, so it is not frozen onto `job_run`. See [task_run.md](task_run.md).
-- `CRUD::submit_job` again for `on_failure_emails`, which it snapshots onto the `job_run`. **Who to tell is frozen at submit like the rest of the definition** — not read live the way `max_parallel_runs` is — so a run stays notifiable after its YAML is edited or deleted, and a rerun tells whoever the original run would have told.
+- `CRUD::submit_job` again for `on_failure_emails`, which becomes the run's own [`job_run_notification`](job_run_notification.md) rows. **Who to tell is frozen at submit like the rest of the definition** — not read live the way `max_parallel_runs` is — so a run stays notifiable after its YAML is edited or deleted, and a rerun tells whoever the original run would have told.
 - `job list` / `job submit` ([src/cli/commands/job.rs](../../../../src/cli/commands/job.rs)) and the home, jobs and job-detail web routes.
 
 ## Gotchas

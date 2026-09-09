@@ -6,7 +6,7 @@ use crate::app_config::AppConfig;
 use crate::crud::CRUD;
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
-use crate::crud::job_run_notification::{JobRunNotification, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
+use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotification, JobRunNotificationStatus, NotificationChannel, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRun, TaskRunStatus};
 use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
 use crate::orchestrator::job_run_monitor::JobRunMonitor;
@@ -135,7 +135,6 @@ impl TestDb {
                     job_name: "Job".to_string(),
                     job_description: String::new(),
                     parameters: BTreeMap::new(),
-                    on_failure_emails: Vec::new(),
                     scheduled_at: None,
                     status,
                 },
@@ -161,7 +160,6 @@ impl TestDb {
                     job_name: "Job".to_string(),
                     job_description: String::new(),
                     parameters,
-                    on_failure_emails: Vec::new(),
                     scheduled_at,
                     status,
                 },
@@ -305,30 +303,28 @@ impl TestDb {
             .unwrap();
     }
 
-    /// A job run that asked to be told when it does not succeed, for the tests that follow
-    /// a failure to the notification it queues.
-    pub async fn insert_job_run_with_on_failure_emails(
-        &self,
-        status: JobRunStatus,
-        on_failure_emails: &[&str],
-    ) -> JobRun {
+    /// An open notification against a run, the way `submit_job` writes one — before
+    /// anyone knows whether the run will need it.
+    pub async fn insert_job_run_notification(&self, job_run_id: i64, recipients: &[&str]) -> JobRunNotification {
 
-        let id = self.crud.insert_job_run(
+        let id = self.crud.insert_job_run_notification(
             &*self.conn_pool,
-            &InsertJobRunData {
-                input: InsertJobRunDataInput {
+            &InsertJobRunNotificationData {
+                input: InsertJobRunNotificationDataInput {
+                    job_run_id,
                     job_id: "job".to_string(),
-                    job_name: "Job".to_string(),
-                    job_description: String::new(),
-                    parameters: BTreeMap::new(),
-                    on_failure_emails: on_failure_emails.iter().map(|e| e.to_string()).collect(),
-                    scheduled_at: None,
-                    status,
+                    channel: NotificationChannel::Email,
+                    recipients: recipients.iter().map(|r| r.to_string()).collect(),
+                    status: JobRunNotificationStatus::Pending,
+                    error: String::new(),
                 },
             },
         ).await.unwrap();
 
-        self.job_run(id).await
+        self.job_run_notifications(job_run_id).await
+            .into_iter()
+            .find(|notification| notification.id == id)
+            .unwrap()
     }
 
     pub async fn job_run_notifications(&self, job_run_id: i64) -> Vec<JobRunNotification> {

@@ -200,7 +200,6 @@ mod tests {
             job_name: "Nightly Sync".to_string(),
             job_description: String::new(),
             parameters: sqlx::types::Json(BTreeMap::new()),
-            on_failure_emails: sqlx::types::Json(vec!["oncall@example.com".to_string()]),
             created_at: Utc::now(),
             scheduled_at: None,
             started_at: Some(Utc::now()),

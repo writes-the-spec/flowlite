@@ -16,7 +16,17 @@ It is **not** part of the [orchestrator](../orchestrator/SKILL.md). `serve` star
 `NotificationService` is an ordinary [`Service`](../../../src/poller.rs), so it gets the same loop, wake-ups and per-row error handling as every orchestrator service:
 
 - **`select`** returns every **open** [`job_run_notification`](../entities/references/job_run_notification.md) — `status = 'pending'` — oldest first, whatever channel it names and whatever run it is about. A backlog after a restart therefore goes out in the order it built up in.
-- **`handle`** builds the message, asks `NotificationChannels` to deliver it, and records the outcome on the row.
+- **`handle`** decides what one deserves, and does it.
+
+**Open does not mean ready.** A notification is written when its run is *submitted*, long before anyone knows whether it will be needed, so most passes over one are about a run still going. `handle` asks the run's status first:
+
+| The run | The notification |
+|---|---|
+| not finished | left open, asked again next pass |
+| `Succeeded`, `Aborted`, `Skipped` | closed as `skipped` — nobody needs telling |
+| `Failed`, `TimedOut` | message built and delivered, then `sent` or `failed` |
+
+Both questions live on `JobRunStatus` — `is_finished` and `is_worth_notifying` ([src/crud/job_run.rs](../../../src/crud/job_run.rs)) — matched exhaustively, so a new run status has to say which side of each line it falls on or it stops compiling.
 
 Its wake-up is registered in `serve` **before any `Poller` is spawned**, for the reason `Orchestrator::start` registers all of its own up front: a poller's first pass runs the moment it is spawned, and must not publish to a wake-up nobody has registered yet.
 
@@ -26,11 +36,13 @@ The service is started **whatever config.toml configures**. With no channel at a
 
 The producer and the deliverer meet through a row and nowhere else, which is the same rule the orchestrator's own services follow.
 
-`JobRunMonitor` inserts the notification as it finishes a failed run, in the same transaction as the status write, and then never thinks about it again. It does not call this service, hold a handle to it, or wait on a channel. This service never calls back into the orchestrator.
+`CRUD::submit_job` and `CRUD::rerun_job` write the open row as part of a run's definition, in the same call that writes the run and its task runs — who to tell is snapshotted exactly like the commands and the parameters. **The orchestrator writes nothing at all here**: `JobRunMonitor` finishes a run and publishes, and does not know this table exists. This service never calls back into it either. The only thing that crosses between them is the run's status column, which this service reads.
 
 That is the whole point: delivery is slow and sometimes fails for hours. A monitor that waited on a relay would stop finishing everyone else's runs while it did.
 
-**To notify about something new**, insert an open row from whatever knows the news — do not call the service.
+Writing the row at submit rather than at failure also removes a problem instead of guarding one. When the monitor wrote it, the insert had to share a transaction with the status write — a monitor only visits `Running` rows, so a status write that committed alone would leave a finished run nothing ever looks at again. By the time a run can fail, the row is already there.
+
+**To notify about something new**, insert an open row from whatever creates the thing being watched — do not call the service, and do not reach for the moment of failure.
 
 ## Channels
 
@@ -46,7 +58,7 @@ A channel with nothing configured is `None` rather than absent, and asking for i
 2. A module beside [email.rs](../../../src/notifications/email.rs) with its own `send` and `max_output_bytes`.
 3. Its config section on `AppConfig`, and a field on `NotificationChannels` built in `from_config`.
 4. The arms the compiler now demands in `send` and `max_output_bytes`.
-5. Whatever writes the rows has to name the new channel — today that is `JobRunMonitor`, from `job_run.on_failure_emails`. **That column is still email-shaped**; a second channel is the point at which it wants to become a channel-to-recipients map on the run, rather than one list per channel.
+5. `job_run_notification_definitions` in [misc.rs](../../../src/crud/multistatements/misc.rs), which turns what a job declared into the rows a run is submitted with. **`mem.job.on_failure_emails` and the YAML's `on_failure.email` are still email-shaped**; a second channel is the point at which they want to become a channel-to-recipients map.
 
 ## Messages
 
@@ -58,6 +70,6 @@ A channel with nothing configured is `None` rather than absent, and asking for i
 
 ## What it does not do
 
-**No retries.** Every path through `handle` writes the row, which is what stops a channel that is down from being hammered every second. There is deliberately no delay or attempt count — an alert nobody can see failed is worse than one that failed loudly. If retries are wanted, this table is the right shape for them: add `attempts` and `next_attempt_at`, and select on the latter.
+**No retries.** Every path that reaches a channel writes the row, which is what stops a channel that is down from being hammered every second. There is deliberately no delay or attempt count — an alert nobody can see failed is worse than one that failed loudly. If retries are wanted, this table is the right shape for them: add `attempts` and `next_attempt_at`, and select on the latter.
 
-**No decision about *whether* something is worth telling anyone.** That belongs to whatever writes the row — `JobRunMonitor` decides that `Failed` and `TimedOut` are news and `Aborted` is not.
+**No opinion about what a run *should* do.** It reads the status and decides what to do with a notification; it never writes a run status, and nothing it does can change how a run ends.

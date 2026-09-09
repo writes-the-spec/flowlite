@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use crate::crud::CRUD;
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, UpdateJobRunsData, UpdateJobRunsDataFilter, UpdateJobRunsDataInput};
-use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotificationStatus, NotificationChannel};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRun, TaskRunStatus};
 use crate::poller::Service;
 use crate::signals::Signals;
@@ -188,18 +187,10 @@ impl JobRunMonitor {
 
     }
 
-    /// Finishes the job run, and queues its failure notification in the same transaction.
-    ///
-    /// One transaction because this monitor only ever visits Running rows: a status write
-    /// that landed without its notification would leave a finished run nothing ever looks
-    /// at again, which is a failure nobody is told about.
     async fn update_job_run_status(&self, job_run: &JobRun, status: JobRunStatus) -> anyhow::Result<()> {
-
-        let mut tx = self.conn_pool.begin().await?;
-
         self.crud
             .update_job_runs(
-                &mut *tx,
+                &*self.conn_pool,
                 &UpdateJobRunsData {
                     filter: UpdateJobRunsDataFilter { id: Some(job_run.id) },
                     input: UpdateJobRunsDataInput {
@@ -211,37 +202,12 @@ impl JobRunMonitor {
             )
             .await?;
 
-        // Left open for the NotificationService to deliver. This monitor writes the row
-        // and nothing else - it never talks to that service, and never waits on a channel.
-        if Self::is_worth_notifying(status) && !job_run.on_failure_emails.0.is_empty() {
-            self.crud
-                .insert_job_run_notification(
-                    &mut *tx,
-                    &InsertJobRunNotificationData {
-                        input: InsertJobRunNotificationDataInput {
-                            job_run_id: job_run.id,
-                            job_id: job_run.job_id.clone(),
-                            channel: NotificationChannel::Email,
-                            recipients: job_run.on_failure_emails.0.clone(),
-                            status: JobRunNotificationStatus::Pending,
-                            error: String::new(),
-                        }
-                    },
-                )
-                .await?;
-        }
-
-        tx.commit().await?;
-
+        // Telling somebody is not this service's business: the run's notifications were
+        // written when it was submitted, and the NotificationService reads the status
+        // this just wrote to decide what to do with them.
         self.signals.publish();
 
         Ok(())
-    }
-
-    /// Which outcomes are worth an email. Aborted is not one of them: a stop is somebody
-    /// at a keyboard, who already knows what they did.
-    fn is_worth_notifying(status: JobRunStatus) -> bool {
-        matches!(status, JobRunStatus::Failed | JobRunStatus::TimedOut)
     }
 
 }
@@ -273,7 +239,6 @@ impl Service for JobRunMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crud::job_run_notification::JobRunNotification;
     use crate::test_support::TestDb;
 
     /// Runs the monitor over a running job run whose task runs have the given statuses,
@@ -376,111 +341,4 @@ mod tests {
         assert_eq!(status, JobRunStatus::Aborted);
     }
 
-    /// Runs the monitor over a job run that asked to be emailed, and reports the
-    /// notifications it queued alongside the status it settled.
-    async fn settled_with_notifications(
-        task_run_statuses: &[TaskRunStatus],
-        on_failure_emails: &[&str],
-    ) -> (JobRunStatus, Vec<JobRunNotification>) {
-
-        let db = TestDb::new().await;
-
-        let job_run = db.insert_job_run_with_on_failure_emails(
-            JobRunStatus::Running,
-            on_failure_emails,
-        ).await;
-
-        for status in task_run_statuses {
-            db.insert_task_run(job_run.id, *status).await;
-        }
-
-        db.job_run_monitor().handle(&job_run).await.unwrap();
-
-        (
-            db.job_run(job_run.id).await.status,
-            db.job_run_notifications(job_run.id).await,
-        )
-    }
-
-    #[tokio::test]
-    async fn a_failed_job_run_queues_a_notification_to_everyone_it_names() {
-        let (status, notifications) = settled_with_notifications(
-            &[TaskRunStatus::Failed],
-            &["oncall@example.com", "data@example.com"],
-        ).await;
-
-        assert_eq!(status, JobRunStatus::Failed);
-        assert_eq!(notifications.len(), 1);
-        assert_eq!(notifications[0].status, JobRunNotificationStatus::Pending);
-        assert_eq!(notifications[0].recipients.0, vec!["oncall@example.com", "data@example.com"]);
-        assert_eq!(notifications[0].channel, NotificationChannel::Email);
-        assert_eq!(notifications[0].sent_at, None);
-    }
-
-    #[tokio::test]
-    async fn a_timed_out_job_run_queues_a_notification_too() {
-        let (status, notifications) = settled_with_notifications(
-            &[TaskRunStatus::TimedOut],
-            &["oncall@example.com"],
-        ).await;
-
-        assert_eq!(status, JobRunStatus::TimedOut);
-        assert_eq!(notifications.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn a_succeeded_job_run_queues_nothing() {
-        let (status, notifications) = settled_with_notifications(
-            &[TaskRunStatus::Succeeded],
-            &["oncall@example.com"],
-        ).await;
-
-        assert_eq!(status, JobRunStatus::Succeeded);
-        assert!(notifications.is_empty());
-    }
-
-    /// A stop is somebody at a keyboard, who already knows what they did.
-    #[tokio::test]
-    async fn an_aborted_job_run_queues_nothing() {
-        let (status, notifications) = settled_with_notifications(
-            &[TaskRunStatus::Aborted],
-            &["oncall@example.com"],
-        ).await;
-
-        assert_eq!(status, JobRunStatus::Aborted);
-        assert!(notifications.is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_failed_job_run_naming_nobody_queues_nothing() {
-        let (status, notifications) = settled_with_notifications(
-            &[TaskRunStatus::Failed],
-            &[],
-        ).await;
-
-        assert_eq!(status, JobRunStatus::Failed);
-        assert!(notifications.is_empty());
-    }
-
-    /// The monitor only ever visits Running rows, so a job run it has already finished is
-    /// never settled twice — which is what stops one failure becoming two emails.
-    #[tokio::test]
-    async fn a_finished_job_run_is_no_longer_selected() {
-
-        let db = TestDb::new().await;
-
-        let job_run = db.insert_job_run_with_on_failure_emails(
-            JobRunStatus::Running,
-            &["oncall@example.com"],
-        ).await;
-
-        db.insert_task_run(job_run.id, TaskRunStatus::Failed).await;
-
-        let monitor = db.job_run_monitor();
-
-        monitor.handle(&job_run).await.unwrap();
-
-        assert!(monitor.select().await.unwrap().is_empty());
-        assert_eq!(db.job_run_notifications(job_run.id).await.len(), 1);
-    }
 }

@@ -274,9 +274,14 @@ Each send is tried **once**. A send that fails is recorded against the run with 
 error, and reported in the server log, rather than being retried against a relay that may
 be down for hours.
 
+A run records who it will tell **when it is submitted**, alongside the commands and
+parameters it snapshots. So editing `on_failure:` does not change a run already in flight,
+a rerun tells whoever the original run would have told, and a run whose job YAML has since
+been deleted still reaches somebody.
+
 Delivery runs as its own background service, so a slow or unreachable mail server never
-holds up the runs themselves. Email is the only channel today; the run records which
-channel it was told over, so more can join it.
+holds up the runs themselves. Email is the only channel today; each run records which
+channel it is to be told over, so more can join it.
 
 ## Overlapping runs
 

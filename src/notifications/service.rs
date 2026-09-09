@@ -49,16 +49,32 @@ impl NotificationService {
         }
     }
 
-    /// Delivers one open notification and records what happened to it.
+    /// Decides what one open notification deserves, and does it.
     ///
-    /// **Every path writes the row**, which is what stops a channel that is down from
-    /// being hammered every second: a delivery that fails is recorded as failed, with the
-    /// error on the row, and is not tried again. There is deliberately no retry policy
-    /// here — one would need its own delay and attempt count, and an alert nobody can see
-    /// failed is worse than one that failed loudly.
+    /// **Open does not mean ready.** A notification is written when its run is submitted,
+    /// long before anyone knows whether it will be needed, so the first question is how
+    /// the run ended:
+    ///
+    /// - still going — leave it open, and ask again on the next pass;
+    /// - ended in a way nobody needs telling about — close it as skipped;
+    /// - ended badly — build the message and deliver it.
+    ///
+    /// **Every path that reaches a channel writes the row**, which is what stops a
+    /// channel that is down from being hammered every second: a delivery that fails is
+    /// recorded as failed, with the error on the row, and is not tried again. There is
+    /// deliberately no retry policy here — one would need its own delay and attempt
+    /// count, and an alert nobody can see failed is worse than one that failed loudly.
     async fn handle_open_notification(&self, notification: &JobRunNotification) -> anyhow::Result<()> {
 
         let job_run = self.get_job_run(notification.job_run_id).await?;
+
+        if !job_run.status.is_finished() {
+            return Ok(());
+        }
+
+        if !job_run.status.is_worth_notifying() {
+            return self.record_skipped(notification).await;
+        }
 
         let task_runs = self.get_task_runs(job_run.id).await?;
 
@@ -211,6 +227,9 @@ impl NotificationService {
     /// Every notification still open, whatever channel it wants and whatever run it is
     /// about — oldest first, so a backlog after a restart goes out in the order it built
     /// up in.
+    ///
+    /// These include the runs still going: a notification is open from the moment its run
+    /// is submitted, and `handle` is what decides whether its run has ended and how.
     async fn get_open_notifications(&self) -> anyhow::Result<Vec<JobRunNotification>> {
 
         self.crud.select_job_run_notifications(
@@ -239,6 +258,24 @@ impl NotificationService {
                     status: Some(JobRunNotificationStatus::Sent),
                     error: None,
                     sent_at: Some(Some(Utc::now())),
+                },
+            },
+        ).await
+    }
+
+    /// Closes a notification whose run ended in a way nobody needs telling about. It was
+    /// written before that was knowable, so this is an ordinary outcome rather than a
+    /// failure — and closing it is what keeps it out of the next pass.
+    async fn record_skipped(&self, notification: &JobRunNotification) -> anyhow::Result<()> {
+
+        self.crud.update_job_run_notifications(
+            &*self.conn_pool,
+            &UpdateJobRunNotificationsData {
+                filter: UpdateJobRunNotificationsDataFilter { id: Some(notification.id) },
+                input: UpdateJobRunNotificationsDataInput {
+                    status: Some(JobRunNotificationStatus::Skipped),
+                    error: None,
+                    sent_at: None,
                 },
             },
         ).await
@@ -296,42 +333,79 @@ mod tests {
     use crate::poller::Service;
     use crate::test_support::TestDb;
 
-    /// The two services meet through the row and nowhere else: the monitor leaves one
-    /// open, this one picks it up on its own pass.
-    async fn open_notification(db: &TestDb) -> JobRunNotification {
+    /// A run in the given state, with the open notification `submit_job` would have
+    /// written for it when it was submitted.
+    async fn notification_for_run(db: &TestDb, status: JobRunStatus) -> JobRunNotification {
 
-        let job_run = db.insert_job_run_with_on_failure_emails(
-            JobRunStatus::Running,
-            &["oncall@example.com"],
-        ).await;
+        let job_run = db.insert_job_run(status).await;
 
         db.insert_task_run(job_run.id, TaskRunStatus::Failed).await;
 
-        db.job_run_monitor().handle(&job_run).await.unwrap();
-
-        db.job_run_notifications(job_run.id).await.into_iter().next().unwrap()
+        db.insert_job_run_notification(job_run.id, &["oncall@example.com"]).await
     }
 
+    async fn settled_status(db: &TestDb, notification: &JobRunNotification) -> JobRunNotificationStatus {
+        db.job_run_notifications(notification.job_run_id).await
+            .into_iter()
+            .find(|settled| settled.id == notification.id)
+            .unwrap()
+            .status
+    }
+
+    /// Open does not mean ready: the notification exists from submit, so most passes over
+    /// it are about a run that has not ended yet.
     #[tokio::test]
-    async fn a_failed_run_leaves_exactly_one_open_notification_to_pick_up() {
+    async fn a_run_still_going_leaves_its_notification_open() {
 
         let db = TestDb::new().await;
 
-        let notification = open_notification(&db).await;
+        let notification = notification_for_run(&db, JobRunStatus::Running).await;
 
-        assert_eq!(notification.status, JobRunNotificationStatus::Pending);
-        assert_eq!(db.notification_service().select().await.unwrap().len(), 1);
+        let service = db.notification_service();
+
+        service.handle(&notification).await.unwrap();
+
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Pending);
+        assert_eq!(service.select().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_succeeded_run_closes_its_notification_as_skipped() {
+
+        let db = TestDb::new().await;
+
+        let notification = notification_for_run(&db, JobRunStatus::Succeeded).await;
+
+        let service = db.notification_service();
+
+        service.handle(&notification).await.unwrap();
+
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Skipped);
+        assert!(service.select().await.unwrap().is_empty());
+    }
+
+    /// A stop is somebody at a keyboard, who already knows what they did.
+    #[tokio::test]
+    async fn an_aborted_run_closes_its_notification_as_skipped() {
+
+        let db = TestDb::new().await;
+
+        let notification = notification_for_run(&db, JobRunStatus::Aborted).await;
+
+        db.notification_service().handle(&notification).await.unwrap();
+
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Skipped);
     }
 
     /// The whole point of recording every outcome: a notification whose channel this box
     /// cannot deliver over is closed as failed, with the reason on the row, rather than
     /// being selected again on every pass forever.
     #[tokio::test]
-    async fn a_channel_with_nothing_configured_closes_the_notification_as_failed() {
+    async fn a_failed_run_with_no_channel_configured_closes_it_as_failed() {
 
         let db = TestDb::new().await;
 
-        let notification = open_notification(&db).await;
+        let notification = notification_for_run(&db, JobRunStatus::Failed).await;
 
         let service = db.notification_service();
 
@@ -346,7 +420,19 @@ mod tests {
         assert!(settled.error.contains("[smtp]"), "{}", settled.error);
         assert_eq!(settled.sent_at, None);
 
-        // And so it is no longer open.
         assert!(service.select().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_run_is_worth_telling_somebody_about_too() {
+
+        let db = TestDb::new().await;
+
+        let notification = notification_for_run(&db, JobRunStatus::TimedOut).await;
+
+        // No channel is configured here, so reaching one at all is what this asserts.
+        assert!(db.notification_service().handle(&notification).await.is_err());
+
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Failed);
     }
 }

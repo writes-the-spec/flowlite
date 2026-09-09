@@ -2,9 +2,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use crate::crud::CRUD;
 
-/// Where one notification has got to. `JobRunMonitor` writes Pending as it finishes a run
-/// that asked to be told about a failure, and `NotificationService` moves it to Sent or Failed
-/// once it has tried to send it.
+/// Where one notification has got to.
+///
+/// It is written Pending when the run is submitted, long before anyone knows whether it
+/// will be needed — so Pending means "open", not "ready to send". `NotificationService`
+/// is what decides: Skipped once the run ends in a way not worth telling anyone about,
+/// otherwise Sent or Failed once it has tried.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, sqlx::Type)]
 #[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
@@ -12,6 +15,7 @@ pub enum JobRunNotificationStatus {
     Pending,
     Sent,
     Failed,
+    Skipped,
 }
 
 impl std::fmt::Display for JobRunNotificationStatus {
@@ -20,6 +24,7 @@ impl std::fmt::Display for JobRunNotificationStatus {
             JobRunNotificationStatus::Pending => write!(f, "pending"),
             JobRunNotificationStatus::Sent => write!(f, "sent"),
             JobRunNotificationStatus::Failed => write!(f, "failed"),
+            JobRunNotificationStatus::Skipped => write!(f, "skipped"),
         }
     }
 }

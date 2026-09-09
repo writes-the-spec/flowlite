@@ -5,6 +5,7 @@ use sqlx::SqliteConnection;
 use crate::crud::CRUD;
 use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
+use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotificationStatus, NotificationChannel, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
 use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort};
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRunStatus};
 
@@ -17,9 +18,17 @@ struct JobRunDefinition {
     job_name: String,
     job_description: String,
     parameters: BTreeMap<String, String>,
-    on_failure_emails: Vec<String>,
     scheduled_at: Option<DateTime<Utc>>,
     tasks: Vec<JobRunTaskDefinition>,
+    notifications: Vec<JobRunNotificationDefinition>,
+}
+
+/// Somebody to tell about this run, written when the run is created rather than when it
+/// fails. Nothing here knows yet whether it will be needed — that is the notification
+/// service's question, once the run has ended.
+struct JobRunNotificationDefinition {
+    channel: NotificationChannel,
+    recipients: Vec<String>,
 }
 
 struct JobRunTaskDefinition {
@@ -141,6 +150,23 @@ fn is_valid_parameter_name(name: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// The notifications one run is submitted with, from the addresses the job declared.
+///
+/// One channel today, so one row at most. A job that names nobody gets none at all rather
+/// than an empty one — there is nothing to decide about later.
+fn job_run_notification_definitions(on_failure_emails: &[String]) -> Vec<JobRunNotificationDefinition> {
+
+    if on_failure_emails.is_empty() {
+        return Vec::new();
+    }
+
+    vec![JobRunNotificationDefinition {
+        channel: NotificationChannel::Email,
+        recipients: on_failure_emails.to_vec(),
+    }]
+}
+
+
 /// Operations that span more than one entity, and so belong to no single entity file.
 impl CRUD {
 
@@ -196,7 +222,6 @@ impl CRUD {
             job_name: job.name,
             job_description: job.description,
             parameters,
-            on_failure_emails: job.on_failure_emails.0.clone(),
             scheduled_at,
             tasks: tasks
                 .into_iter()
@@ -211,13 +236,14 @@ impl CRUD {
                     working_dir: task.working_dir.clone(),
                 })
                 .collect(),
+            notifications: job_run_notification_definitions(&job.on_failure_emails.0),
         };
 
         self.insert_job_run_definition(&mut *conn, &definition).await
     }
 
-    /// Inserts a pending job run and one pending task run per task. This is the only
-    /// place a run's config is written.
+    /// Inserts a pending job run, one pending task run per task, and one open notification
+    /// per channel the job named. This is the only place a run's config is written.
     async fn insert_job_run_definition(
         &self,
         conn: &mut SqliteConnection,
@@ -232,7 +258,6 @@ impl CRUD {
                     job_name: definition.job_name.clone(),
                     job_description: definition.job_description.clone(),
                     parameters: definition.parameters.clone(),
-                    on_failure_emails: definition.on_failure_emails.clone(),
                     scheduled_at: definition.scheduled_at,
                     status: JobRunStatus::Pending,
                 }
@@ -255,6 +280,22 @@ impl CRUD {
                         env: task.env.clone(),
                         working_dir: task.working_dir.clone(),
                         status: TaskRunStatus::Pending,
+                    }
+                }
+            ).await?;
+        }
+
+        for notification in definition.notifications.iter() {
+            self.insert_job_run_notification(
+                &mut *conn,
+                &InsertJobRunNotificationData {
+                    input: InsertJobRunNotificationDataInput {
+                        job_run_id,
+                        job_id: definition.job_id.clone(),
+                        channel: notification.channel,
+                        recipients: notification.recipients.clone(),
+                        status: JobRunNotificationStatus::Pending,
+                        error: String::new(),
                     }
                 }
             ).await?;
@@ -306,12 +347,26 @@ impl CRUD {
             }
         ).await?;
 
+        let notifications = self.select_job_run_notifications(
+            &mut *conn,
+            &SelectJobRunNotificationsData {
+                filter: SelectJobRunNotificationsDataFilter {
+                    id: None,
+                    job_run_id: Some(job_run_id),
+                    channel: None,
+                    status: None,
+                },
+                sort: Some(SelectJobRunNotificationsDataSort::Id),
+                limit: None,
+                offset: None,
+            }
+        ).await?;
+
         let definition = JobRunDefinition {
             job_id: job_run.job_id,
             job_name: job_run.job_name,
             job_description: job_run.job_description,
             parameters: job_run.parameters.0.clone(),
-            on_failure_emails: job_run.on_failure_emails.0.clone(),
             scheduled_at: job_run.scheduled_at,
             tasks: task_runs
                 .into_iter()
@@ -324,6 +379,13 @@ impl CRUD {
                     retry_delay: task_run.retry_delay,
                     env: task_run.env.0.clone(),
                     working_dir: task_run.working_dir.clone(),
+                })
+                .collect(),
+            notifications: notifications
+                .into_iter()
+                .map(|notification| JobRunNotificationDefinition {
+                    channel: notification.channel,
+                    recipients: notification.recipients.0.clone(),
                 })
                 .collect(),
         };
@@ -560,6 +622,53 @@ mod tests {
         assert_eq!(task_runs[0].env.0.get("PYTHONUNBUFFERED").unwrap(), "1");
         assert_eq!(task_runs[0].working_dir, "/tmp");
         assert_eq!(task_runs[0].status, TaskRunStatus::Pending);
+    }
+
+    /// A rerun replays who to tell along with everything else it replays: the original
+    /// run's own notifications, not whatever the job's YAML says now — which is what
+    /// keeps a rerun of a deleted job notifiable at all.
+    #[tokio::test]
+    async fn a_rerun_replays_the_original_notifications() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Failed).await;
+
+        db.insert_task_run(job_run.id, TaskRunStatus::Failed).await;
+        db.insert_job_run_notification(job_run.id, &["oncall@example.com"]).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id).await.unwrap();
+
+        let notifications = db.job_run_notifications(rerun_id).await;
+
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(notifications[0].recipients.0, vec!["oncall@example.com"]);
+        assert_eq!(notifications[0].channel, NotificationChannel::Email);
+
+        // Open again, so the rerun is judged on its own outcome rather than inheriting one.
+        assert_eq!(notifications[0].status, JobRunNotificationStatus::Pending);
+        assert_eq!(notifications[0].sent_at, None);
+    }
+
+    /// A job that names nobody gets no notification at all, rather than an empty one
+    /// every pass has to look at and decide about.
+    #[test]
+    fn a_job_naming_nobody_is_submitted_with_no_notifications() {
+        assert!(job_run_notification_definitions(&[]).is_empty());
+    }
+
+    #[test]
+    fn the_addresses_a_job_names_become_one_email_notification() {
+
+        let definitions = job_run_notification_definitions(&[
+            "oncall@example.com".to_string(),
+            "data@example.com".to_string(),
+        ]);
+
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].channel, NotificationChannel::Email);
+        assert_eq!(definitions[0].recipients.len(), 2);
     }
 
     #[test]
