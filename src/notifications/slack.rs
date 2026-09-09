@@ -53,12 +53,10 @@ impl SlackChannel {
             .timeout(self.slack.timeout())
             .build()?;
 
-        let text = post_text(message);
-
         let mut errors: Vec<String> = Vec::new();
 
         for recipient in recipients {
-            if let Err(e) = self.post(&client, recipient, &text).await {
+            if let Err(e) = self.post(&client, &post_payload(recipient, message)).await {
                 errors.push(format!("{}: {:#}", recipient, e));
             }
         }
@@ -70,15 +68,12 @@ impl SlackChannel {
         Ok(())
     }
 
-    async fn post(&self, client: &reqwest::Client, channel: &str, text: &str) -> anyhow::Result<()> {
+    async fn post(&self, client: &reqwest::Client, payload: &serde_json::Value) -> anyhow::Result<()> {
 
         let response = client
             .post(&self.slack.api_url)
             .bearer_auth(&self.slack.token)
-            .json(&serde_json::json!({
-                "channel": channel,
-                "text": text,
-            }))
+            .json(payload)
             .send()
             .await?;
 
@@ -102,9 +97,30 @@ impl SlackChannel {
 
 }
 
-/// The message as one Slack post: the subject as the line you read in a notification
-/// preview, and the body fenced, because it is aligned plain text that only survives in a
-/// monospaced block.
+/// What one `chat.postMessage` call sends.
+///
+/// `text` is what Slack shows in a notification preview and reads out where it cannot
+/// render blocks, so a message that has blocks puts its subject there and lets them carry
+/// the rest. A message kind with no blocks has nowhere else to say what it says, so it
+/// falls back to the whole thing in one fence.
+fn post_payload(channel: &str, message: &NotificationMessage) -> serde_json::Value {
+
+    match &message.blocks {
+        Some(blocks) => serde_json::json!({
+            "channel": channel,
+            "text": message.subject,
+            "blocks": blocks,
+        }),
+        None => serde_json::json!({
+            "channel": channel,
+            "text": post_text(message),
+        }),
+    }
+}
+
+/// The message as one Slack post, for a message kind that has no blocks: the subject as
+/// the line you read in a notification preview, and the body fenced, because it is aligned
+/// plain text that only survives in a monospaced block.
 fn post_text(message: &NotificationMessage) -> String {
     format!(
         "*{}*\n```\n{}\n```",
@@ -115,8 +131,19 @@ fn post_text(message: &NotificationMessage) -> String {
 
 /// A fence inside the body would close the block early and garble everything after it,
 /// and the body quotes output from a command that may print anything at all.
-fn fence_safe(body: &str) -> String {
+pub fn fence_safe(body: &str) -> String {
     body.replace("```", "` ` `")
+}
+
+/// The three characters Slack reads as its own before it reads anything else. A task is
+/// free to print `a < b`, and unescaped it arrives as the start of a tag Slack then eats
+/// along with whatever follows it.
+///
+/// `&` first, or the ampersands written by the other two are escaped a second time.
+pub fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 
@@ -135,6 +162,7 @@ mod tests {
         authorization: String,
         channel: String,
         text: String,
+        blocks: serde_json::Value,
     }
 
     #[derive(Clone)]
@@ -189,6 +217,7 @@ mod tests {
                 .unwrap_or_default(),
             channel: channel.clone(),
             text: body["text"].as_str().unwrap().to_string(),
+            blocks: body["blocks"].clone(),
         });
 
         let refusal = state.refusals
@@ -210,6 +239,8 @@ mod tests {
         })
     }
 
+    /// A message with no Slack rendering of its own, which is what the fallback path
+    /// exists for.
     fn message() -> NotificationMessage {
         NotificationMessage {
             subject: "[flowlite] Nightly Sync run 42 failed".to_string(),
@@ -217,6 +248,19 @@ mod tests {
             // Slack shapes its post from the subject and the body, so a message with no
             // HTML rendering has to post exactly the same as one that has one.
             html: None,
+            blocks: None,
+        }
+    }
+
+    fn message_with_blocks() -> NotificationMessage {
+        NotificationMessage {
+            blocks: Some(serde_json::json!([
+                {
+                    "type": "header",
+                    "text": { "type": "plain_text", "text": ":x: Nightly Sync run 42 failed" },
+                },
+            ])),
+            ..message()
         }
     }
 
@@ -233,6 +277,40 @@ mod tests {
         assert_eq!(posts[0].authorization, "Bearer xoxb-test");
         assert_eq!(posts[0].channel, "#oncall");
         assert!(posts[0].text.contains("[flowlite] Nightly Sync run 42 failed"), "{}", posts[0].text);
+        assert!(posts[0].text.contains("(nightly-sync) failed."), "{}", posts[0].text);
+    }
+
+    /// What the blocks are for: the post Slack lays out itself, with the subject left in
+    /// `text` because that is what a notification preview and a screen reader read.
+    #[tokio::test]
+    async fn a_message_with_blocks_posts_them_rather_than_one_fenced_wall() {
+
+        let (api_url, posts) = fake_slack(&[]).await;
+
+        channel(api_url)
+            .send(&["#oncall".to_string()], &message_with_blocks())
+            .await
+            .unwrap();
+
+        let posts = posts.lock().unwrap();
+
+        assert_eq!(posts[0].text, "[flowlite] Nightly Sync run 42 failed");
+        assert_eq!(posts[0].blocks[0]["type"], "header");
+        assert!(!posts[0].text.contains("```"), "{}", posts[0].text);
+    }
+
+    /// A message kind with no Slack rendering still has to reach Slack, so the post falls
+    /// back to the whole thing fenced rather than to a subject line on its own.
+    #[tokio::test]
+    async fn a_message_with_no_blocks_still_posts_everything_it_says() {
+
+        let (api_url, posts) = fake_slack(&[]).await;
+
+        channel(api_url).send(&["#oncall".to_string()], &message()).await.unwrap();
+
+        let posts = posts.lock().unwrap();
+
+        assert!(posts[0].blocks.is_null(), "{}", posts[0].blocks);
         assert!(posts[0].text.contains("(nightly-sync) failed."), "{}", posts[0].text);
     }
 
@@ -313,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn the_body_is_fenced_so_the_alignment_survives() {
+    fn the_fallback_body_is_fenced_so_the_alignment_survives() {
         let text = post_text(&message());
 
         assert!(text.starts_with("*[flowlite] Nightly Sync run 42 failed*\n```\n"), "{}", text);

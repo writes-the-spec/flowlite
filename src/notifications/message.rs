@@ -4,19 +4,22 @@ use crate::crud::job_run::{JobRun, JobRunStatus};
 use crate::crud::task_run::{TaskRun, TaskRunStatus};
 use crate::crud::task_run_attempt::TaskRunAttempt;
 use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStreams;
+use crate::notifications::slack;
 use crate::router::app::format;
 
 /// What one notification says: the two parts every channel has some form of - a line
-/// naming it and the text itself - and the same thing rendered as HTML for the channels
-/// whose transport can show one.
+/// naming it and the text itself - and the same thing rendered again for the channels
+/// whose transport can show more than text. Email reads `html` and ignores `blocks`,
+/// Slack reads `blocks` and ignores `html`.
 ///
-/// `html` is optional because a channel that cannot use it simply ignores it, and because
-/// a message kind need not have an HTML rendering at all. Email then sends the text part
-/// alone rather than an empty alternative.
+/// Both are optional because a channel that cannot use one simply ignores it, and because
+/// a message kind need not have that rendering at all. Email then sends the text part
+/// alone rather than an empty alternative, and Slack posts it fenced.
 pub struct NotificationMessage {
     pub subject: String,
     pub body: String,
     pub html: Option<String>,
+    pub blocks: Option<serde_json::Value>,
 }
 
 /// One task run that did not succeed, with the attempt that decided it and what that
@@ -80,6 +83,7 @@ pub fn job_run_message(
         subject: message_subject(job_run),
         body: message_body(job_run, task_runs, failures, max_output_bytes),
         html: message_html(job_run, task_runs, failures, max_output_bytes),
+        blocks: Some(message_blocks(job_run, task_runs, failures, max_output_bytes)),
     }
 }
 
@@ -199,6 +203,211 @@ fn message_html(
             eprintln!("Template rendering error: {}", e);
             None
         }
+    }
+}
+
+/// Slack's own limits on one message. It refuses a message that exceeds any of them
+/// rather than trimming it, so the trimming happens here.
+const MAX_BLOCKS: usize = 50;
+const MAX_HEADER_CHARS: usize = 150;
+const MAX_SECTION_CHARS: usize = 3000;
+const MAX_FIELD_CHARS: usize = 2000;
+
+
+/// The same message as Slack Block Kit, for the one transport that lays out structure of
+/// its own rather than being handed markup.
+///
+/// Built here beside the text and the HTML, from the same facts, for the reason those two
+/// are: a fact added to one rendering cannot then go missing from another. What is Slack's
+/// own — how its text is escaped and fenced — stays in `slack.rs` with the transport.
+fn message_blocks(
+    job_run: &JobRun,
+    task_runs: &[TaskRun],
+    failures: &[JobRunFailureTask],
+    max_output_bytes: usize,
+) -> serde_json::Value {
+
+    let mut blocks = vec![header_block(&format!(
+        "{} {} run {} {}",
+        job_run_emoji(job_run.status),
+        job_run.job_name,
+        job_run.id,
+        format::job_run_word(job_run.status),
+    ))];
+
+    let fields = summary_rows(job_run)
+        .into_iter()
+        .map(|(label, value)| format!("*{}*\n{}", label, slack::escape(&value)))
+        .collect();
+
+    blocks.push(fields_block(fields));
+
+    blocks.extend(task_sections(task_runs));
+
+    // A run that succeeded has none, so this is where the two endings differ and the
+    // only place they do.
+    for failure in failures {
+        blocks.push(section_block(&format!("*{}*", slack::escape(&failure_title(failure)))));
+
+        if failure.attempt.is_some() {
+            blocks.push(section_block(&fenced(
+                "stdout",
+                &stream_tail(&failure.streams.stdout, max_output_bytes),
+            )));
+
+            blocks.push(section_block(&fenced(
+                "stderr",
+                &stream_tail(&failure.streams.stderr, max_output_bytes),
+            )));
+        }
+    }
+
+    blocks.push(context_block(&format!(
+        "Every task and attempt: `{}`",
+        logs_command(job_run),
+    )));
+
+    // Whatever overran — a run that failed in thirty tasks at once, or one with more
+    // tasks than fit — is cut from the end, and the line naming the command is written
+    // again as the last block: the point of cutting is that what is left still says
+    // where the rest of it is.
+    if blocks.len() > MAX_BLOCKS {
+        blocks.truncate(MAX_BLOCKS - 1);
+
+        blocks.push(context_block(&format!(
+            "Too long for one message. Everything it left out: `{}`",
+            logs_command(job_run),
+        )));
+    }
+
+    serde_json::Value::Array(blocks)
+}
+
+/// The task list, split across as many sections as its length needs. One section per task
+/// would spend the block budget on a handful of tasks, and one section for all of them is
+/// refused as soon as a job has a few hundred.
+fn task_sections(task_runs: &[TaskRun]) -> Vec<serde_json::Value> {
+
+    if task_runs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut sections = Vec::new();
+    let mut section = String::from("*Tasks*");
+
+    for task_run in task_runs {
+        let line = format!(
+            "\n{} `{}` — {}",
+            task_run_emoji(task_run.status),
+            slack::escape(&task_run.task_id),
+            format::task_run_word(task_run.status),
+        );
+
+        if section.chars().count() + line.chars().count() > MAX_SECTION_CHARS {
+            sections.push(section_block(section.trim_start()));
+            section = String::new();
+        }
+
+        section.push_str(&line);
+    }
+
+    sections.push(section_block(section.trim_start()));
+
+    sections
+}
+
+/// A stream under its own label, in a code block, because it is output that only reads in
+/// a monospaced one — and because a fence is what stops Slack reading a `*` a command
+/// printed as formatting.
+///
+/// Cut to fit around the fence rather than after it: trimming the finished section would
+/// take the closing fence off and leave the rest of the message inside the code block.
+fn fenced(label: &str, stream: &str) -> String {
+
+    let stream = slack::fence_safe(&slack::escape(stream.trim_end()));
+
+    let wrapper = format!("*{}*\n```\n\n```", label);
+
+    format!(
+        "*{}*\n```\n{}\n```",
+        label,
+        truncated(&stream, MAX_SECTION_CHARS - wrapper.chars().count()),
+    )
+}
+
+fn truncated(text: &str, max_chars: usize) -> String {
+
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+
+    let kept: String = text.chars().take(max_chars - 1).collect();
+
+    format!("{}…", kept)
+}
+
+fn header_block(text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "header",
+        "text": {
+            "type": "plain_text",
+            "text": truncated(text, MAX_HEADER_CHARS),
+            "emoji": true,
+        },
+    })
+}
+
+fn section_block(mrkdwn: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "section",
+        "text": { "type": "mrkdwn", "text": truncated(mrkdwn, MAX_SECTION_CHARS) },
+    })
+}
+
+fn fields_block(fields: Vec<String>) -> serde_json::Value {
+
+    let fields: Vec<serde_json::Value> = fields
+        .into_iter()
+        .map(|field| serde_json::json!({
+            "type": "mrkdwn",
+            "text": truncated(&field, MAX_FIELD_CHARS),
+        }))
+        .collect();
+
+    serde_json::json!({ "type": "section", "fields": fields })
+}
+
+fn context_block(mrkdwn: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "context",
+        "elements": [{ "type": "mrkdwn", "text": truncated(mrkdwn, MAX_SECTION_CHARS) }],
+    })
+}
+
+/// What a status looks like in Slack, where a colour cannot be set on a line of text.
+/// Exhaustive beside the accents, so a new status has to say how it reads in every
+/// rendering rather than defaulting to one of the others.
+fn job_run_emoji(status: JobRunStatus) -> &'static str {
+    match status {
+        JobRunStatus::Pending => ":hourglass_flowing_sand:",
+        JobRunStatus::Running => ":arrows_counterclockwise:",
+        JobRunStatus::Succeeded => ":white_check_mark:",
+        JobRunStatus::Failed => ":x:",
+        JobRunStatus::Skipped => ":heavy_minus_sign:",
+        JobRunStatus::Aborted => ":octagonal_sign:",
+        JobRunStatus::TimedOut => ":alarm_clock:",
+    }
+}
+
+fn task_run_emoji(status: TaskRunStatus) -> &'static str {
+    match status {
+        TaskRunStatus::Pending => ":hourglass_flowing_sand:",
+        TaskRunStatus::Running => ":arrows_counterclockwise:",
+        TaskRunStatus::Succeeded => ":white_check_mark:",
+        TaskRunStatus::Failed => ":x:",
+        TaskRunStatus::Skipped => ":heavy_minus_sign:",
+        TaskRunStatus::Aborted => ":octagonal_sign:",
+        TaskRunStatus::TimedOut => ":alarm_clock:",
     }
 }
 
@@ -619,14 +828,256 @@ mod tests {
         assert!(!html.contains("<pre"), "{}", html);
     }
 
-    /// Both renderings on the one message, so a client that prefers plain text loses
-    /// nothing by the HTML part existing.
+    /// Every rendering on the one message, so no channel is left with a shape its
+    /// transport cannot show.
     #[test]
-    fn a_job_run_message_carries_both_renderings() {
+    fn a_job_run_message_carries_every_rendering() {
 
         let message = job_run_message(&job_run(JobRunStatus::Failed), &[], &[], 4096);
 
         assert!(message.body.contains("Job run 42"), "{}", message.body);
         assert!(message.html.unwrap().contains("Job run 42"));
+
+        let blocks = message.blocks.unwrap();
+
+        assert_eq!(blocks[0]["type"], "header");
+        assert!(blocks_text(&blocks).contains("Nightly Sync run 42 failed"), "{}", blocks);
     }
+
+    /// Everything the blocks say, for the assertions that only care that a word is or is
+    /// not somewhere in the post.
+    fn blocks_text(blocks: &serde_json::Value) -> String {
+        serde_json::to_string(blocks).unwrap()
+    }
+
+    fn blocks_of(
+        job_run: &JobRun,
+        task_runs: &[TaskRun],
+        failures: &[JobRunFailureTask],
+        max_output_bytes: usize,
+    ) -> Vec<serde_json::Value> {
+        message_blocks(job_run, task_runs, failures, max_output_bytes)
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn the_blocks_open_with_a_header_naming_the_run_and_what_happened() {
+
+        let blocks = blocks_of(&job_run(JobRunStatus::Failed), &[], &[], 4096);
+
+        assert_eq!(blocks[0]["type"], "header");
+        assert_eq!(blocks[0]["text"]["type"], "plain_text");
+
+        let header = blocks[0]["text"]["text"].as_str().unwrap();
+
+        assert!(header.contains("Nightly Sync"), "{}", header);
+        assert!(header.contains("failed"), "{}", header);
+        assert!(header.contains(":x:"), "{}", header);
+    }
+
+    /// The summary is two columns of fields rather than the text body's aligned block:
+    /// Slack lays fields out itself, and padding to a column width only reads in a fence.
+    #[test]
+    fn the_summary_becomes_fields_rather_than_an_aligned_column() {
+
+        let blocks = blocks_of(&job_run(JobRunStatus::Succeeded), &[], &[], 4096);
+
+        let section = blocks
+            .iter()
+            .find(|block| block["fields"].is_array())
+            .expect("a section carrying the summary as fields");
+
+        let fields: Vec<String> = section["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|field| field["text"].as_str().unwrap().to_string())
+            .collect();
+
+        assert!(fields.iter().any(|field| field.contains("*Job*") && field.contains("nightly-sync")), "{:?}", fields);
+        assert!(fields.iter().any(|field| field.contains("*Run*") && field.contains("42")), "{:?}", fields);
+    }
+
+    #[test]
+    fn every_task_is_listed_with_its_status() {
+
+        let task_runs = vec![
+            task_run("extract", TaskRunStatus::Succeeded),
+            task_run("load", TaskRunStatus::Skipped),
+        ];
+
+        let text = blocks_text(&message_blocks(&job_run(JobRunStatus::Failed), &task_runs, &[], 4096));
+
+        assert!(text.contains("extract"), "{}", text);
+        assert!(text.contains("load"), "{}", text);
+        assert!(text.contains("skipped"), "{}", text);
+    }
+
+    /// The same rule both other renderings follow: the section that quotes output is not
+    /// written when there is none.
+    #[test]
+    fn a_succeeded_run_quotes_no_output_in_its_blocks() {
+
+        let task_runs = vec![task_run("extract", TaskRunStatus::Succeeded)];
+
+        let text = blocks_text(&message_blocks(&job_run(JobRunStatus::Succeeded), &task_runs, &[], 4096));
+
+        assert!(!text.contains("```"), "{}", text);
+        assert!(!text.contains("stderr"), "{}", text);
+    }
+
+    #[test]
+    fn the_blocks_carry_the_failing_tasks_output_in_a_fence() {
+
+        let failures = vec![failure(
+            "reading rows\n",
+            "psycopg2.OperationalError: connection refused\n",
+        )];
+
+        let text = blocks_text(&message_blocks(&job_run(JobRunStatus::Failed), &[], &failures, 4096));
+
+        assert!(text.contains("Output of transform, attempt 3 of 3"), "{}", text);
+        assert!(text.contains("psycopg2.OperationalError: connection refused"), "{}", text);
+        assert!(text.contains("```"), "{}", text);
+    }
+
+    #[test]
+    fn a_failed_task_with_no_attempt_says_so_in_the_blocks_too() {
+
+        let failures = vec![JobRunFailureTask {
+            task_run: task_run("transform", TaskRunStatus::Failed),
+            attempt: None,
+            streams: TaskRunAttemptOutputStreams::default(),
+        }];
+
+        let text = blocks_text(&message_blocks(&job_run(JobRunStatus::Failed), &[], &failures, 4096));
+
+        assert!(text.contains("transform failed, with no attempt"), "{}", text);
+        assert!(!text.contains("```"), "{}", text);
+    }
+
+    #[test]
+    fn the_blocks_end_with_the_command_that_shows_everything() {
+
+        let blocks = blocks_of(&job_run(JobRunStatus::Failed), &[], &[], 4096);
+
+        let last = blocks.last().unwrap();
+
+        assert_eq!(last["type"], "context");
+        assert!(
+            last["elements"][0]["text"].as_str().unwrap().contains("flowlite job-run logs 42"),
+            "{}",
+            last,
+        );
+    }
+
+    /// A task is free to print a `<`, and Slack reads an unescaped one as the start of
+    /// something it then swallows along with whatever follows it.
+    #[test]
+    fn markup_printed_by_a_command_is_escaped_in_the_blocks_too() {
+
+        let failures = vec![failure("", "expected a < b & c\n")];
+
+        let text = blocks_text(&message_blocks(&job_run(JobRunStatus::Failed), &[], &failures, 4096));
+
+        assert!(text.contains("a &lt; b &amp; c"), "{}", text);
+    }
+
+    /// A command is free to print a fence of its own, and it must not be able to end the
+    /// block its output is quoted in.
+    #[test]
+    fn a_fence_in_the_quoted_output_cannot_close_the_code_block() {
+
+        let failures = vec![failure("", "boom\n```\nmore\n")];
+
+        let blocks = blocks_of(&job_run(JobRunStatus::Failed), &[], &failures, 4096);
+
+        let stderr = blocks
+            .iter()
+            .filter_map(|block| block["text"]["text"].as_str())
+            .find(|text| text.starts_with("*stderr*"))
+            .expect("a section quoting stderr");
+
+        assert_eq!(stderr.matches("```").count(), 2, "{}", stderr);
+        assert!(stderr.contains("boom"), "{}", stderr);
+        assert!(stderr.contains("more"), "{}", stderr);
+    }
+
+    /// Slack refuses a section over 3000 characters outright rather than trimming it, so a
+    /// job with a few hundred tasks has to arrive as several sections.
+    #[test]
+    fn a_long_task_list_is_split_rather_than_refused_by_slack() {
+
+        let task_runs: Vec<TaskRun> = (0..300)
+            .map(|n| task_run(&format!("task-{:03}", n), TaskRunStatus::Succeeded))
+            .collect();
+
+        let blocks = blocks_of(&job_run(JobRunStatus::Succeeded), &task_runs, &[], 4096);
+
+        for block in &blocks {
+            if let Some(text) = block["text"]["text"].as_str() {
+                assert!(text.chars().count() <= 3000, "{} characters", text.chars().count());
+            }
+        }
+
+        let text = blocks_text(&serde_json::Value::Array(blocks));
+
+        assert!(text.contains("task-000"), "the first task is missing");
+        assert!(text.contains("task-299"), "the last task is missing");
+    }
+
+    /// Escaping grows a stream — every `&` becomes five characters — so a stream inside the
+    /// byte cap can still be over the character cap once it is escaped.
+    #[test]
+    fn an_escaped_stream_too_long_for_a_section_is_cut_to_fit() {
+
+        let failures = vec![failure("", &"&".repeat(2000))];
+
+        let blocks = blocks_of(&job_run(JobRunStatus::Failed), &[], &failures, 4096);
+
+        for block in &blocks {
+            if let Some(text) = block["text"]["text"].as_str() {
+                assert!(text.chars().count() <= 3000, "{} characters", text.chars().count());
+                assert_eq!(text.matches("```").count() % 2, 0, "a fence was left open");
+            }
+        }
+    }
+
+    #[test]
+    fn a_very_long_job_name_is_cut_to_fit_slacks_header() {
+
+        let mut job_run = job_run(JobRunStatus::Failed);
+        job_run.job_name = "N".repeat(400);
+
+        let blocks = blocks_of(&job_run, &[], &[], 4096);
+
+        let header = blocks[0]["text"]["text"].as_str().unwrap();
+
+        assert!(header.chars().count() <= 150, "{} characters", header.chars().count());
+    }
+
+    /// Slack takes 50 blocks and refuses the whole message at 51, which a run that failed
+    /// in many tasks at once would otherwise reach.
+    #[test]
+    fn a_run_with_many_failed_tasks_stays_under_slacks_block_limit() {
+
+        let failures: Vec<JobRunFailureTask> = (0..40)
+            .map(|_| failure("reading rows\n", "boom\n"))
+            .collect();
+
+        let blocks = blocks_of(&job_run(JobRunStatus::Failed), &[], &failures, 4096);
+
+        assert!(blocks.len() <= 50, "{} blocks", blocks.len());
+
+        let last = blocks.last().unwrap();
+
+        assert!(
+            last["elements"][0]["text"].as_str().unwrap().contains("flowlite job-run logs 42"),
+            "a cut message still has to say where the rest is: {}",
+            last,
+        );
+    }
+
 }

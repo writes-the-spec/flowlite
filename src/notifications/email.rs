@@ -117,6 +117,9 @@ mod tests {
             subject: "[flowlite] Nightly Sync run 42 failed".to_string(),
             body: "Job run 42 of 'Nightly Sync' (nightly-sync) failed.".to_string(),
             html: html.map(|html| html.to_string()),
+            // Email ignores the Slack rendering, so what a message carries there cannot
+            // change what is built here.
+            blocks: None,
         }
     }
 
