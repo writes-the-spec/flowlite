@@ -76,10 +76,32 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
     use std::time::Duration;
 
     use super::*;
     use crate::app_config::smtp::AppConfigSmtpEncryption;
+
+    /// `load` reads the process environment, and cargo runs the tests of one binary as
+    /// threads of one process — so a test that sets a `FLOWLITE_` variable is setting it
+    /// for every `load` running beside it, not only its own.
+    ///
+    /// A lock rather than a convention, because the failure it prevents is a test that
+    /// passes alone and fails in a full run, blaming whichever load happened to overlap.
+    /// One writer and many readers is the shape of the problem exactly: only the test that
+    /// mutates the environment needs the binary to itself.
+    static ENVIRONMENT: RwLock<()> = RwLock::new(());
+
+    /// Taken by every test that loads a config. Bind it to a name — a `let _` drops the
+    /// guard on the spot and holds nothing.
+    fn reading_the_environment() -> RwLockReadGuard<'static, ()> {
+        ENVIRONMENT.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Taken by the one test that sets a variable, for as long as it is set.
+    fn writing_the_environment() -> RwLockWriteGuard<'static, ()> {
+        ENVIRONMENT.write().unwrap_or_else(PoisonError::into_inner)
+    }
 
     fn temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("flowlite-config-{}", uuid::Uuid::new_v4()));
@@ -89,6 +111,8 @@ mod tests {
 
     #[test]
     fn a_directory_with_no_config_file_loads_every_default() {
+        let _environment = reading_the_environment();
+
         let dir = temp_dir();
 
         let config = AppConfig::load(Some(dir.clone())).unwrap();
@@ -103,6 +127,8 @@ mod tests {
 
     #[test]
     fn a_file_naming_one_key_leaves_every_other_default_alone() {
+        let _environment = reading_the_environment();
+
         let dir = temp_dir();
         std::fs::write(dir.join("config.toml"), "[ui]\npage_size = 10\n").unwrap();
 
@@ -118,6 +144,8 @@ mod tests {
 
     #[test]
     fn a_file_may_set_keys_across_several_sections() {
+        let _environment = reading_the_environment();
+
         let dir = temp_dir();
         std::fs::write(
             dir.join("config.toml"),
@@ -137,6 +165,8 @@ mod tests {
 
     #[test]
     fn a_schedule_timezone_is_read_as_a_zone_rather_than_a_string() {
+        let _environment = reading_the_environment();
+
         let dir = temp_dir();
         std::fs::write(
             dir.join("config.toml"),
@@ -150,6 +180,8 @@ mod tests {
 
     #[test]
     fn an_unknown_timezone_is_an_error_rather_than_a_silent_fallback() {
+        let _environment = reading_the_environment();
+
         let dir = temp_dir();
         std::fs::write(
             dir.join("config.toml"),
@@ -161,6 +193,8 @@ mod tests {
 
     #[test]
     fn a_directory_with_no_config_file_has_no_channel_and_so_no_notifications() {
+        let _environment = reading_the_environment();
+
         let dir = temp_dir();
 
         let config = AppConfig::load(Some(dir)).unwrap();
@@ -171,6 +205,8 @@ mod tests {
 
     #[test]
     fn an_smtp_section_naming_only_what_it_must_takes_the_rest_by_default() {
+        let _environment = reading_the_environment();
+
         let dir = temp_dir();
         std::fs::write(
             dir.join("config.toml"),
@@ -189,6 +225,8 @@ mod tests {
 
     #[test]
     fn an_smtp_section_missing_a_host_is_an_error_rather_than_a_silent_default() {
+        let _environment = reading_the_environment();
+
         let dir = temp_dir();
         std::fs::write(
             dir.join("config.toml"),
@@ -200,6 +238,8 @@ mod tests {
 
     #[test]
     fn a_slack_section_naming_only_a_token_takes_the_rest_by_default() {
+        let _environment = reading_the_environment();
+
         let dir = temp_dir();
         std::fs::write(
             dir.join("config.toml"),
@@ -218,22 +258,27 @@ mod tests {
     /// come into existence from the environment alone.
     #[test]
     fn a_token_set_only_in_the_environment_configures_slack_with_no_file_at_all() {
+        let _environment = writing_the_environment();
+
         let dir = temp_dir();
 
-        // SAFETY: figment reads the environment, and this is the only test that sets this
-        // variable. Cargo runs tests of one binary in threads, so it is removed again
-        // before anything else can observe it.
+        // SAFETY: the environment is process-wide, and the write guard above is what makes
+        // this the only thread reading it until the variable is gone again.
         unsafe { std::env::set_var("FLOWLITE_SLACK__TOKEN", "xoxb-from-env") };
 
-        let slack = AppConfig::load(Some(dir)).unwrap().slack;
+        let config = AppConfig::load(Some(dir));
 
         unsafe { std::env::remove_var("FLOWLITE_SLACK__TOKEN") };
 
-        assert_eq!(slack.unwrap().token, "xoxb-from-env");
+        // Asserted after the removal, so a load that fails cannot leave the variable set
+        // for whatever runs next.
+        assert_eq!(config.unwrap().slack.unwrap().token, "xoxb-from-env");
     }
 
     #[test]
     fn a_slack_section_missing_a_token_is_an_error_rather_than_a_silent_default() {
+        let _environment = reading_the_environment();
+
         let dir = temp_dir();
         std::fs::write(
             dir.join("config.toml"),
@@ -245,6 +290,8 @@ mod tests {
 
     #[test]
     fn the_directory_flowlite_was_pointed_at_wins_over_the_file_in_it() {
+        let _environment = reading_the_environment();
+
         let dir = temp_dir();
         std::fs::write(dir.join("config.toml"), "data_dir = \"/somewhere/else\"\n").unwrap();
 
