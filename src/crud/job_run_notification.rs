@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use crate::crud::CRUD;
+use crate::crud::job_run::JobRunStatus;
 
 /// Where one notification has got to.
 ///
@@ -29,12 +30,72 @@ impl std::fmt::Display for JobRunNotificationStatus {
     }
 }
 
+/// What a notification is waiting for its run to do. Spelled exactly as the suffix of the
+/// key a job declares it under — `on_failure:` writes `failure`, `on_success:` writes
+/// `success` — so a row says for itself which block asked for it.
+///
+/// A column rather than something inferred from the run afterwards: a job may ask for
+/// both, and then the same run ending once has to settle two rows differently.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, sqlx::Type)]
+#[sqlx(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum NotifyOn {
+    Failure,
+    Success,
+}
+
+impl NotifyOn {
+
+    /// Whether a run that ended this way is the thing this notification was written for.
+    /// Asked only of a finished run — `JobRunStatus::is_finished` is the other half — and
+    /// a `false` here closes the row as skipped rather than delivering it.
+    ///
+    /// Both arms are matched exhaustively on purpose: a new run status has to say what it
+    /// means for a failure notification *and* for a success one, or it stops compiling.
+    ///
+    /// `Aborted` and `Skipped` are news to nobody either way: both mean somebody stopped
+    /// the run, and they already know what they did.
+    pub fn wants(&self, status: JobRunStatus) -> bool {
+        match self {
+            NotifyOn::Failure => match status {
+                JobRunStatus::Failed
+                | JobRunStatus::TimedOut => true,
+                JobRunStatus::Pending
+                | JobRunStatus::Running
+                | JobRunStatus::Succeeded
+                | JobRunStatus::Skipped
+                | JobRunStatus::Aborted => false,
+            },
+            NotifyOn::Success => match status {
+                JobRunStatus::Succeeded => true,
+                JobRunStatus::Pending
+                | JobRunStatus::Running
+                | JobRunStatus::Failed
+                | JobRunStatus::Skipped
+                | JobRunStatus::Aborted
+                | JobRunStatus::TimedOut => false,
+            },
+        }
+    }
+
+}
+
+impl std::fmt::Display for NotifyOn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NotifyOn::Failure => write!(f, "failure"),
+            NotifyOn::Success => write!(f, "success"),
+        }
+    }
+}
+
 /// How a notification reaches somebody. A column rather than something the sender infers
 /// from the recipients, so one row says for itself what delivering it means — and a third
 /// channel is a variant here plus an arm the compiler then demands.
 ///
-/// Each variant is spelled exactly as the key a job declares it under in `on_failure:`,
-/// so an error about a channel can name the YAML the reader has to go and edit.
+/// Each variant is spelled exactly as the key a job declares it under inside `on_failure:`
+/// or `on_success:`, so an error about a channel can name the YAML the reader has to go and
+/// edit.
 ///
 /// Ordered because a job's recipients are keyed by it, which is also what fixes the order
 /// a run's notification rows are written in.
@@ -59,6 +120,7 @@ impl std::fmt::Display for NotificationChannel {
 pub struct InsertJobRunNotificationDataInput {
     pub job_run_id: i64,
     pub job_id: String,
+    pub notify_on: NotifyOn,
     pub channel: NotificationChannel,
     pub recipients: Vec<String>,
     pub status: JobRunNotificationStatus,
@@ -76,6 +138,7 @@ pub struct InsertJobRunNotificationData {
 pub struct SelectJobRunNotificationsDataFilter {
     pub id: Option<i64>,
     pub job_run_id: Option<i64>,
+    pub notify_on: Option<NotifyOn>,
     pub channel: Option<NotificationChannel>,
     pub status: Option<JobRunNotificationStatus>,
 }
@@ -116,6 +179,7 @@ pub struct JobRunNotification {
     pub id: i64,
     pub job_run_id: i64,
     pub job_id: String,
+    pub notify_on: NotifyOn,
     pub channel: NotificationChannel,
     pub recipients: sqlx::types::Json<Vec<String>>,
     pub status: JobRunNotificationStatus,
@@ -131,10 +195,11 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO job_run_notification (job_run_id, job_id, channel, recipients, status, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO job_run_notification (job_run_id, job_id, notify_on, channel, recipients, status, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(data.input.job_run_id)
             .bind(&data.input.job_id)
+            .bind(&data.input.notify_on)
             .bind(&data.input.channel)
             .bind(sqlx::types::Json(&data.input.recipients))
             .bind(&data.input.status)
@@ -160,7 +225,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, job_run_id, job_id, channel, recipients, status, error, created_at, sent_at FROM job_run_notification WHERE 1=1"
+            "SELECT id, job_run_id, job_id, notify_on, channel, recipients, status, error, created_at, sent_at FROM job_run_notification WHERE 1=1"
         );
 
         if let Some(id) = &data.filter.id {
@@ -171,6 +236,11 @@ impl CRUD {
         if let Some(job_run_id) = &data.filter.job_run_id {
             query_builder.push(" AND job_run_id = ");
             query_builder.push_bind(job_run_id);
+        }
+
+        if let Some(notify_on) = &data.filter.notify_on {
+            query_builder.push(" AND notify_on = ");
+            query_builder.push_bind(notify_on);
         }
 
         if let Some(channel) = &data.filter.channel {

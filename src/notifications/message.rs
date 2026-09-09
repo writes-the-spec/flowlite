@@ -21,21 +21,25 @@ pub struct JobRunFailureTask {
 }
 
 
-/// What a job run that did not succeed says. The only kind of message there is today,
-/// which is why it lives beside the service rather than behind a trait.
-pub fn job_run_failure_message(
+/// What a finished job run says, however it ended. One message shape rather than one per
+/// ending: a success and a failure both answer "what did this run do, and what did each of
+/// its tasks do", and the only difference is that a failure has output worth quoting.
+///
+/// The status supplies the wording throughout, so a succeeded run reads as one rather than
+/// as a failure notice with the word swapped.
+pub fn job_run_message(
     job_run: &JobRun,
     task_runs: &[TaskRun],
     failures: &[JobRunFailureTask],
     max_output_bytes: usize,
 ) -> NotificationMessage {
     NotificationMessage {
-        subject: failure_subject(job_run),
-        body: failure_body(job_run, task_runs, failures, max_output_bytes),
+        subject: message_subject(job_run),
+        body: message_body(job_run, task_runs, failures, max_output_bytes),
     }
 }
 
-fn failure_subject(job_run: &JobRun) -> String {
+fn message_subject(job_run: &JobRun) -> String {
     format!(
         "[flowlite] {} run {} {}",
         job_run.job_name,
@@ -44,7 +48,7 @@ fn failure_subject(job_run: &JobRun) -> String {
     )
 }
 
-fn failure_body(
+fn message_body(
     job_run: &JobRun,
     task_runs: &[TaskRun],
     failures: &[JobRunFailureTask],
@@ -72,6 +76,8 @@ fn failure_body(
         ));
     }
 
+    // A run that succeeded has none, so this is where the two endings differ and the
+    // only place they do.
     for failure in failures {
         body.push('\n');
         body.push_str(&failure_output(failure, max_output_bytes));
@@ -246,9 +252,41 @@ mod tests {
     #[test]
     fn the_subject_names_the_job_the_run_and_what_happened() {
         assert_eq!(
-            failure_subject(&job_run(JobRunStatus::TimedOut)),
+            message_subject(&job_run(JobRunStatus::TimedOut)),
             "[flowlite] Nightly Sync run 42 timed out",
         );
+    }
+
+    /// The same line for the good news, so a success reads as one instead of as a failure
+    /// notice with a word swapped.
+    #[test]
+    fn a_succeeded_run_says_so_in_its_own_subject() {
+        assert_eq!(
+            message_subject(&job_run(JobRunStatus::Succeeded)),
+            "[flowlite] Nightly Sync run 42 succeeded",
+        );
+    }
+
+    /// A success is worth reading for the same reasons a failure is — how long it took and
+    /// what each task did — and it has no output to quote, so the body is the summary and
+    /// the task list alone.
+    #[test]
+    fn a_succeeded_run_carries_its_tasks_and_quotes_no_output() {
+
+        let task_runs = vec![
+            task_run("extract", TaskRunStatus::Succeeded),
+            task_run("load", TaskRunStatus::Succeeded),
+        ];
+
+        let body = message_body(&job_run(JobRunStatus::Succeeded), &task_runs, &[], 4096);
+
+        assert!(body.contains("Job run 42 of 'Nightly Sync' (nightly-sync) succeeded."), "{}", body);
+
+        assert!(body.contains("extract"), "{}", body);
+        assert!(body.contains("load"), "{}", body);
+
+        assert!(!body.contains("stdout:"), "{}", body);
+        assert!(!body.contains("Output of"), "{}", body);
     }
 
     /// What the alert is for: the failing task's own output, in the message, so nobody has
@@ -271,7 +309,7 @@ mod tests {
             },
         }];
 
-        let body = failure_body(&job_run(JobRunStatus::Failed), &task_runs, &failures, 4096);
+        let body = message_body(&job_run(JobRunStatus::Failed), &task_runs, &failures, 4096);
 
         assert!(body.contains("Job run 42 of 'Nightly Sync' (nightly-sync) failed."), "{}", body);
 
@@ -296,7 +334,7 @@ mod tests {
             streams: TaskRunAttemptOutputStreams::default(),
         }];
 
-        let body = failure_body(&job_run(JobRunStatus::Failed), &[], &failures, 4096);
+        let body = message_body(&job_run(JobRunStatus::Failed), &[], &failures, 4096);
 
         assert!(body.contains("transform failed, with no attempt"), "{}", body);
         assert!(!body.contains("stdout:"), "{}", body);

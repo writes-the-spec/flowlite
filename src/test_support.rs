@@ -6,7 +6,7 @@ use crate::app_config::AppConfig;
 use crate::crud::CRUD;
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
-use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotification, JobRunNotificationStatus, NotificationChannel, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
+use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotification, JobRunNotificationStatus, NotificationChannel, NotifyOn, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRun, TaskRunStatus};
 use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
 use crate::orchestrator::job_run_monitor::JobRunMonitor;
@@ -308,6 +308,7 @@ impl TestDb {
     pub async fn insert_job_run_notification(
         &self,
         job_run_id: i64,
+        notify_on: NotifyOn,
         channel: NotificationChannel,
         recipients: &[&str],
     ) -> JobRunNotification {
@@ -318,6 +319,7 @@ impl TestDb {
                 input: InsertJobRunNotificationDataInput {
                     job_run_id,
                     job_id: "job".to_string(),
+                    notify_on,
                     channel,
                     recipients: recipients.iter().map(|r| r.to_string()).collect(),
                     status: JobRunNotificationStatus::Pending,
@@ -340,6 +342,7 @@ impl TestDb {
                 filter: SelectJobRunNotificationsDataFilter {
                     id: None,
                     job_run_id: Some(job_run_id),
+                    notify_on: None,
                     channel: None,
                     status: None,
                 },

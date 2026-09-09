@@ -16,7 +16,7 @@ use crate::crud::task_run_attempt_output::{
     SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort,
 };
 use crate::notifications::channel::NotificationChannels;
-use crate::notifications::message::{job_run_failure_message, JobRunFailureTask};
+use crate::notifications::message::{job_run_message, JobRunFailureTask};
 use crate::poller::Service;
 
 
@@ -24,9 +24,9 @@ use crate::poller::Service;
 /// one asks for.
 ///
 /// It is not part of the orchestrator, and starts alongside it the way the Scheduler
-/// does. Nothing in the orchestrator calls it and it calls nothing back: a run that fails
-/// leaves a `job_run_notification` row, and this loop picks up every open one on its own
-/// pass. Delivery is slow and sometimes fails for hours, which is exactly the work a
+/// does. Nothing in the orchestrator calls it and it calls nothing back: a run leaves
+/// `job_run_notification` rows when it is submitted, and this loop picks up every open one
+/// on its own pass. Delivery is slow and sometimes fails for hours, which is exactly the work a
 /// monitor must not be holding when it is meant to be finishing everyone else's runs.
 pub struct NotificationService {
     pub crud: Arc<CRUD>,
@@ -56,8 +56,12 @@ impl NotificationService {
     /// the run ended:
     ///
     /// - still going — leave it open, and ask again on the next pass;
-    /// - ended in a way nobody needs telling about — close it as skipped;
-    /// - ended badly — build the message and deliver it.
+    /// - ended some way other than the one this row is waiting for — close it as skipped;
+    /// - ended the way it was written for — build the message and deliver it.
+    ///
+    /// Which ending that is belongs to the row, not to this loop: a run a job wants to
+    /// hear about either way carries a notification for each, and one run ending settles
+    /// them differently.
     ///
     /// **Every path that reaches a channel writes the row**, which is what stops a
     /// channel that is down from being hammered every second: a delivery that fails is
@@ -72,15 +76,17 @@ impl NotificationService {
             return Ok(());
         }
 
-        if !job_run.status.is_worth_notifying() {
+        if !notification.notify_on.wants(job_run.status) {
             return self.record_skipped(notification).await;
         }
 
         let task_runs = self.get_task_runs(job_run.id).await?;
 
+        // Empty for a run that succeeded, which is what makes one message shape enough
+        // for both endings.
         let failures = self.get_failures(&task_runs).await?;
 
-        let message = job_run_failure_message(
+        let message = job_run_message(
             &job_run,
             &task_runs,
             &failures,
@@ -97,8 +103,9 @@ impl NotificationService {
             self.record_failed(notification, &format!("{:#}", e)).await?;
 
             return Err(e.context(format!(
-                "Failed to deliver job run {} by {} to {}",
+                "Failed to deliver job run {} on {} by {} to {}",
                 job_run.id,
+                notification.notify_on,
                 notification.channel,
                 notification.recipients.0.join(", "),
             )));
@@ -238,6 +245,7 @@ impl NotificationService {
                 filter: SelectJobRunNotificationsDataFilter {
                     id: None,
                     job_run_id: None,
+                    notify_on: None,
                     channel: None,
                     status: Some(JobRunNotificationStatus::Pending),
                 },
@@ -308,9 +316,10 @@ impl Service for NotificationService {
 
     fn row_context(&self, notification: &JobRunNotification) -> String {
         format!(
-            "job run notification {} of job run {}, by {}",
+            "job run notification {} of job run {}, on {} by {}",
             notification.id,
             notification.job_run_id,
+            notification.notify_on,
             notification.channel,
         )
     }
@@ -329,13 +338,13 @@ impl Service for NotificationService {
 mod tests {
     use super::*;
     use crate::crud::job_run::JobRunStatus;
-    use crate::crud::job_run_notification::NotificationChannel;
+    use crate::crud::job_run_notification::{NotificationChannel, NotifyOn};
     use crate::crud::task_run::TaskRunStatus;
     use crate::poller::Service;
     use crate::test_support::TestDb;
 
-    /// A run in the given state, with the open notification `submit_job` would have
-    /// written for it when it was submitted.
+    /// A run in the given state, with the open `on_failure:` notification `submit_job`
+    /// would have written for it when it was submitted.
     async fn notification_for_run(db: &TestDb, status: JobRunStatus) -> JobRunNotification {
 
         let job_run = db.insert_job_run(status).await;
@@ -344,8 +353,24 @@ mod tests {
 
         db.insert_job_run_notification(
             job_run.id,
+            NotifyOn::Failure,
             NotificationChannel::Email,
             &["oncall@example.com"],
+        ).await
+    }
+
+    /// The same, for a run whose job asked to hear about a success instead.
+    async fn success_notification_for_run(db: &TestDb, status: JobRunStatus) -> JobRunNotification {
+
+        let job_run = db.insert_job_run(status).await;
+
+        db.insert_task_run(job_run.id, TaskRunStatus::Succeeded).await;
+
+        db.insert_job_run_notification(
+            job_run.id,
+            NotifyOn::Success,
+            NotificationChannel::Email,
+            &["data-team@example.com"],
         ).await
     }
 
@@ -372,6 +397,108 @@ mod tests {
 
         assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Pending);
         assert_eq!(service.select().await.unwrap().len(), 1);
+    }
+
+    /// A success notification is left open by a run still going for the same reason a
+    /// failure one is: nothing is decidable until the run has ended.
+    #[tokio::test]
+    async fn a_run_still_going_leaves_its_success_notification_open_too() {
+
+        let db = TestDb::new().await;
+
+        let notification = success_notification_for_run(&db, JobRunStatus::Running).await;
+
+        db.notification_service().handle(&notification).await.unwrap();
+
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Pending);
+    }
+
+    /// The mirror of the failure path: what one row calls news the other calls nothing to
+    /// report, and the row is what says which.
+    #[tokio::test]
+    async fn a_succeeded_run_delivers_the_notification_that_asked_for_it() {
+
+        let db = TestDb::new().await;
+
+        let notification = success_notification_for_run(&db, JobRunStatus::Succeeded).await;
+
+        let service = db.notification_service();
+
+        // No channel is configured here, so reaching one at all is what this asserts.
+        assert!(service.handle(&notification).await.is_err());
+
+        let settled = db.job_run_notifications(notification.job_run_id).await
+            .into_iter()
+            .next()
+            .unwrap();
+
+        assert_eq!(settled.status, JobRunNotificationStatus::Failed);
+        assert!(settled.error.contains("[smtp]"), "{}", settled.error);
+
+        assert!(service.select().await.unwrap().is_empty());
+    }
+
+    /// A failure is not what a success notification was written for, so it closes as
+    /// skipped — the run's `on_failure:` row is what tells anybody about that.
+    #[tokio::test]
+    async fn a_failed_run_closes_its_success_notification_as_skipped() {
+
+        let db = TestDb::new().await;
+
+        let notification = success_notification_for_run(&db, JobRunStatus::Failed).await;
+
+        db.notification_service().handle(&notification).await.unwrap();
+
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Skipped);
+    }
+
+    /// Nobody asked to be told that a run they stopped did not finish, either way round.
+    #[tokio::test]
+    async fn an_aborted_run_closes_its_success_notification_as_skipped() {
+
+        let db = TestDb::new().await;
+
+        let notification = success_notification_for_run(&db, JobRunStatus::Aborted).await;
+
+        db.notification_service().handle(&notification).await.unwrap();
+
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Skipped);
+    }
+
+    /// One run ending settles a job's two rows in opposite directions, which is the whole
+    /// reason the ending each waits for lives on the row.
+    #[tokio::test]
+    async fn a_run_asking_to_be_told_either_way_settles_its_two_rows_differently() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Succeeded).await;
+
+        db.insert_task_run(job_run.id, TaskRunStatus::Succeeded).await;
+
+        let on_failure = db.insert_job_run_notification(
+            job_run.id,
+            NotifyOn::Failure,
+            NotificationChannel::Email,
+            &["oncall@example.com"],
+        ).await;
+
+        let on_success = db.insert_job_run_notification(
+            job_run.id,
+            NotifyOn::Success,
+            NotificationChannel::Email,
+            &["data-team@example.com"],
+        ).await;
+
+        let service = db.notification_service();
+
+        service.handle(&on_failure).await.unwrap();
+
+        // Delivery is what this one is for, and no channel is configured in a test.
+        assert!(service.handle(&on_success).await.is_err());
+
+        assert_eq!(settled_status(&db, &on_failure).await, JobRunNotificationStatus::Skipped);
+        assert_eq!(settled_status(&db, &on_success).await, JobRunNotificationStatus::Failed);
     }
 
     #[tokio::test]
@@ -442,6 +569,7 @@ mod tests {
 
         let notification = db.insert_job_run_notification(
             job_run.id,
+            NotifyOn::Failure,
             NotificationChannel::Slack,
             &["#oncall"],
         ).await;

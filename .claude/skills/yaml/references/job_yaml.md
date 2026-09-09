@@ -19,6 +19,8 @@ tasks:
 on_failure:
   email: [oncall@example.com]
   slack: ["#oncall"]
+on_success:
+  slack: ["#data"]
 ```
 
 ## `JobYaml`
@@ -33,7 +35,8 @@ A `[job_defaults]` default is the data dir's `config.toml` value, falling back t
 | `max_parallel_runs` | no | `[job_defaults]`, `1` | How many runs of this job may be `Running` at once. **`0` means no limit.** Enforced only in `JobRunDispatcher::settle_as_pending`; submitting is never rejected for exceeding it. |
 | `parameters` | no | `{}` | Declared name to default value. A schedule's `jobs[].parameters` or `job submit --param` may override a declared name; naming one this job does not declare is a submit error, not a silent no-op. See the [entities skill](../../entities/references/job.md). |
 | `env` | no | `{}` | Environment variables for **every** task of this job. A task's own `env:` wins the names both of them set; the merge happens in `submit_job`, so `task_run.env` holds the merged result. |
-| `on_failure` | no | `{}` | What happens when a run of this job does not succeed. One key per channel — `email`, a list of addresses, and `slack`, a list of conversations (`#channel`, a channel id, or a user id) — told when a run is `Failed` or `TimedOut`, never when it is `Aborted`, which is somebody stopping it on purpose. A job may name both and gets **one notification per channel**; a channel it names nobody under produces none. **Naming a recipient of a channel `config.toml` does not configure fails startup**, in `CRUD::validate_job_notifications`, which checks each channel against its own section: a notification that silently never leaves is the one failure you cannot see from the run afterwards. One field per channel rather than a free map, for the reason `NotificationChannel` is an enum — see the [notifications skill](../../notifications/SKILL.md). A block rather than a bare `notify_email:` so the action to run on a failure can join it later. |
+| `on_failure` | no | `{}` | Who to tell when a run of this job does not succeed. One key per channel — `email`, a list of addresses, and `slack`, a list of conversations (`#channel`, a channel id, or a user id) — told when a run is `Failed` or `TimedOut`, never when it is `Aborted`, which is somebody stopping it on purpose. A job may name both and gets **one notification per channel**; a channel it names nobody under produces none. **Naming a recipient of a channel `config.toml` does not configure fails startup**, in `CRUD::validate_job_notifications`, which checks each channel against its own section: a notification that silently never leaves is the one failure you cannot see from the run afterwards. One field per channel rather than a free map, for the reason `NotificationChannel` is an enum — see the [notifications skill](../../notifications/SKILL.md). A block rather than a bare `notify_email:` so the action to run on a failure can join it later. |
+| `on_success` | no | `{}` | The same block, `JobYamlNotify` again, for a run that ends `Succeeded`. Addressed independently of `on_failure` — a failure wakes whoever is on call, a success reassures whoever is waiting on the data — and validated by the same startup check, whose error names the block as well as the channel. A job naming both gets a notification row for each, and its one ending delivers exactly one of them. |
 | `tasks` | no | `[]` | A job with no tasks is legal; its job runs finish `Succeeded` immediately. |
 
 ## `JobYamlTask`

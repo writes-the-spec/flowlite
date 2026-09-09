@@ -33,23 +33,6 @@ impl JobRunStatus {
         }
     }
 
-    /// Whether how the run ended is worth telling somebody about. Matched exhaustively
-    /// for the same reason as `is_finished`.
-    ///
-    /// `Aborted` and `Skipped` are deliberately not news: both mean somebody stopped it,
-    /// and they already know what they did.
-    pub fn is_worth_notifying(&self) -> bool {
-        match self {
-            JobRunStatus::Failed
-            | JobRunStatus::TimedOut => true,
-            JobRunStatus::Pending
-            | JobRunStatus::Running
-            | JobRunStatus::Succeeded
-            | JobRunStatus::Skipped
-            | JobRunStatus::Aborted => false,
-        }
-    }
-
 }
 
 impl std::fmt::Display for JobRunStatus {

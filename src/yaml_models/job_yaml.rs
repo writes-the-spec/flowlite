@@ -30,20 +30,25 @@ pub struct JobYamlTask {
     pub working_dir: String,
 }
 
-/// What happens when a run of this job does not succeed. Each key is a channel and holds
-/// who that channel tells — addresses under `email`, conversations under `slack`. A job
-/// may name both, and gets one notification per channel it names.
+/// Who to tell about one way a run can end — the shape of both `on_failure:` and
+/// `on_success:`. Each key is a channel and holds who that channel tells — addresses
+/// under `email`, conversations under `slack`. A job may name both, and gets one
+/// notification per channel it names.
+///
+/// One struct for the two blocks because they are one concept asked twice: the channels a
+/// failure can be announced over are exactly the channels a success can. A job wanting to
+/// be told about both names the same channels under each.
 ///
 /// One field per channel rather than a map keyed by channel name, for the reason
 /// `NotificationChannel` is an enum and not a registry: the channels are known at compile
 /// time, and adding one should be a field the compiler carries through rather than a
-/// string somebody has to spell right. `CRUD::job_on_failure_recipients` is what turns
-/// this into the channel-to-recipients map the job row carries.
+/// string somebody has to spell right. `CRUD::job_notify_recipients` is what turns this
+/// into the channel-to-recipients map the job row carries.
 ///
-/// The block is a block rather than a bare `notify_email:` so the action to run on a
-/// failure can join it later without the two ways of reacting reading as unrelated keys.
+/// Each is a block rather than a bare `notify_email:` so the action to run on a failure
+/// can join it later without the two ways of reacting reading as unrelated keys.
 #[derive(Deserialize, Validate, Debug, Default)]
-pub struct JobYamlOnFailure {
+pub struct JobYamlNotify {
     #[serde(default)]
     pub email: Vec<String>,
     /// Conversations, as `#channel`, a channel id, or a user id for a direct message —
@@ -74,7 +79,13 @@ pub struct JobYaml {
     /// channel config.toml does not configure is a startup error — see
     /// `CRUD::validate_job_notifications`.
     #[serde(default)]
-    pub on_failure: JobYamlOnFailure,
+    pub on_failure: JobYamlNotify,
+    /// Who to tell when a run of this job succeeds. Separate from `on_failure` rather
+    /// than a flag on it, because the two are addressed to different people as often as
+    /// not: a failure wakes whoever is on call, a success reassures whoever is waiting on
+    /// the data.
+    #[serde(default)]
+    pub on_success: JobYamlNotify,
     #[serde(default)]
     pub tasks: Vec<JobYamlTask>,
 }

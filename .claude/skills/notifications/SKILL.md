@@ -10,7 +10,7 @@ It is **not** part of the [orchestrator](../orchestrator/SKILL.md). `serve` star
 | [channel.rs](../../../src/notifications/channel.rs) | `NotificationChannels` — every channel this process can actually deliver over |
 | [email.rs](../../../src/notifications/email.rs) | `EmailChannel` — the one place that talks SMTP |
 | [slack.rs](../../../src/notifications/slack.rs) | `SlackChannel` — the one place that talks to Slack's API |
-| [message.rs](../../../src/notifications/message.rs) | `NotificationMessage`, and what a failed job run says |
+| [message.rs](../../../src/notifications/message.rs) | `NotificationMessage`, and what a finished job run says |
 
 ## The loop
 
@@ -19,39 +19,42 @@ It is **not** part of the [orchestrator](../orchestrator/SKILL.md). `serve` star
 - **`select`** returns every **open** [`job_run_notification`](../entities/references/job_run_notification.md) — `status = 'pending'` — oldest first, whatever channel it names and whatever run it is about. A backlog after a restart therefore goes out in the order it built up in.
 - **`handle`** decides what one deserves, and does it.
 
-**Open does not mean ready.** A notification is written when its run is *submitted*, long before anyone knows whether it will be needed, so most passes over one are about a run still going. `handle` asks the run's status first:
+**Open does not mean ready.** A notification is written when its run is *submitted*, long before anyone knows whether it will be needed, so most passes over one are about a run still going. `handle` asks the run's status first, and then asks the *row* whether that is what it was written for:
 
-| The run | The notification |
-|---|---|
-| not finished | left open, asked again next pass |
-| `Succeeded`, `Aborted`, `Skipped` | closed as `skipped` — nobody needs telling |
-| `Failed`, `TimedOut` | message built and delivered, then `sent` or `failed` |
+| The run | `notify_on: failure` | `notify_on: success` |
+|---|---|---|
+| not finished | left open, asked again next pass | left open, asked again next pass |
+| `Failed`, `TimedOut` | message built and delivered, then `sent` or `failed` | closed as `skipped` |
+| `Succeeded` | closed as `skipped` | message built and delivered, then `sent` or `failed` |
+| `Aborted`, `Skipped` | closed as `skipped` — somebody stopped it, and they know | closed as `skipped` |
 
-Both questions live on `JobRunStatus` — `is_finished` and `is_worth_notifying` ([src/crud/job_run.rs](../../../src/crud/job_run.rs)) — matched exhaustively, so a new run status has to say which side of each line it falls on or it stops compiling.
+The two questions live in different places on purpose. "Has it ended?" is about the run, so it is `JobRunStatus::is_finished` ([src/crud/job_run.rs](../../../src/crud/job_run.rs)). "Is this ending mine?" is about the notification, so it is `NotifyOn::wants` ([src/crud/job_run_notification.rs](../../../src/crud/job_run_notification.rs)) — the service never decides it, because a run whose job asked to hear either way carries **a row for each**, and one run ending has to settle them differently.
+
+Both are matched exhaustively, so a new run status has to say what it means for a failure notification *and* for a success one, or it stops compiling.
 
 Its wake-up is registered in `serve` **before any `Poller` is spawned**, for the reason `Orchestrator::start` registers all of its own up front: a poller's first pass runs the moment it is spawned, and must not publish to a wake-up nobody has registered yet.
 
 The service is started **whatever config.toml configures**. With no channel at all it simply has nothing open to deliver, and a row it cannot deliver is closed as failed with the reason on it — a state you can read, rather than a silence.
 
-A job naming two channels is submitted with **two rows**, and each is selected, delivered and recorded on its own. That is the whole of the isolation between channels: a Slack workspace that is down cannot swallow the mail, and neither row knows the other exists.
+A job naming two channels is submitted with **two rows**, and each is selected, delivered and recorded on its own. That is the whole of the isolation between channels: a Slack workspace that is down cannot swallow the mail, and neither row knows the other exists. A job naming both endings is two rows for the same reason, and exactly one of them is ever delivered.
 
 ## How it is decoupled
 
 The producer and the deliverer meet through a row and nowhere else, which is the same rule the orchestrator's own services follow.
 
-`CRUD::submit_job` and `CRUD::rerun_job` write the open row as part of a run's definition, in the same call that writes the run and its task runs — who to tell is snapshotted exactly like the commands and the parameters. **The orchestrator writes nothing at all here**: `JobRunMonitor` finishes a run and publishes, and does not know this table exists. This service never calls back into it either. The only thing that crosses between them is the run's status column, which this service reads.
+`CRUD::submit_job` and `CRUD::rerun_job` write the open rows as part of a run's definition, in the same call that writes the run and its task runs — who to tell, and what to tell them about, is snapshotted exactly like the commands and the parameters. **The orchestrator writes nothing at all here**: `JobRunMonitor` finishes a run and publishes, and does not know this table exists. This service never calls back into it either. The only thing that crosses between them is the run's status column, which this service reads.
 
 That is the whole point: delivery is slow and sometimes fails for hours. A monitor that waited on a relay would stop finishing everyone else's runs while it did.
 
 Writing the row at submit rather than at failure also removes a problem instead of guarding one. When the monitor wrote it, the insert had to share a transaction with the status write — a monitor only visits `Running` rows, so a status write that committed alone would leave a finished run nothing ever looks at again. By the time a run can fail, the row is already there.
 
-**To notify about something new**, insert an open row from whatever creates the thing being watched — do not call the service, and do not reach for the moment of failure.
+**To notify about something new**, insert an open row from whatever creates the thing being watched — do not call the service, and do not reach for the moment the news happens.
 
 ## Channels
 
 `NotificationChannels::from_config` builds every channel `config.toml` configures, once. `NotificationChannel` (the enum, on [the entity](../../../src/crud/job_run_notification.rs) beside the status it sits next to in the table) is the column, so a row says for itself what delivering it means rather than the sender guessing from the recipients.
 
-Two today, `email` and `slack`, and each variant is spelled **exactly as the key a job declares it under** in `on_failure:` — which is what lets an error name the YAML the reader has to go and edit, without a second table mapping one spelling to the other.
+Two today, `email` and `slack`, and each variant is spelled **exactly as the key a job declares it under** inside `on_failure:` or `on_success:` — which is what lets an error name the YAML the reader has to go and edit, without a second table mapping one spelling to the other.
 
 | Channel | Config | Addresses | Delivers |
 |---|---|---|---|
@@ -70,14 +73,16 @@ A channel with nothing configured is `None` rather than absent, and asking for i
 2. A module beside [slack.rs](../../../src/notifications/slack.rs) with its own `send` and `max_output_bytes`.
 3. Its config section on `AppConfig`, and a field on `NotificationChannels` built in `from_config`.
 4. The arms the compiler now demands in `send` and `max_output_bytes`.
-5. A field on `JobYamlOnFailure`, and its line in `job_on_failure_recipients` ([crud.rs](../../../src/crud/crud.rs)) — the one place the YAML's per-channel fields become the `channel -> recipients` map the job row stores. `job_run_notification_definitions` in [misc.rs](../../../src/crud/multistatements/misc.rs) walks that map and needs no change.
-6. The arm the compiler demands in `CRUD::validate_job_notifications`, saying which config section the channel needs to work at all.
+5. A field on `JobYamlNotify`, and its line in `job_notify_recipients` ([crud.rs](../../../src/crud/crud.rs)) — the one place the YAML's per-channel fields become the `channel -> recipients` map the job row stores, once per notify block. `job_run_notification_definitions` in [misc.rs](../../../src/crud/multistatements/misc.rs) walks those maps and needs no change.
+6. The arm the compiler demands in `CRUD::validate_job_notifications`, saying which config section the channel needs to work at all. It is checked once per block, so nothing there is per-ending either.
 
 Steps 4 and 6 are the point of the enum: a channel cannot be added without saying both how to deliver it and what makes it deliverable, because neither match compiles until it does.
 
 ## Messages
 
-`NotificationMessage` is `{ subject, body }` — the two parts every channel has some form of, and each channel renders them the way its transport wants. `job_run_failure_message` is the only kind there is today, which is why it is a function beside the service rather than a trait.
+`NotificationMessage` is `{ subject, body }` — the two parts every channel has some form of, and each channel renders them the way its transport wants. `job_run_message` is the only kind there is today, which is why it is a function beside the service rather than a trait.
+
+**One message shape for both endings, not one per ending.** A success and a failure answer the same question — what did this run do, and what did each of its tasks do — and the run's status supplies the wording throughout, so a succeeded run reads as one rather than as a failure notice with the word swapped. The only difference is the quoted output, and that falls out on its own: the failures a success has none of are an empty list, so the section that quotes them is simply not written.
 
 **The cap on quoted output belongs to the channel, not the message.** `NotificationChannels::max_output_bytes` is asked per channel and passed into the builder, because the reason for a cap is the transport's own limit — a relay's maximum message size for email, and for Slack how much of a chat message anybody scrolls through, which is why its default is the smaller of the two. Truncation has to happen while the body is built, since the output is embedded in formatted text no channel could safely cut afterwards.
 
@@ -90,3 +95,5 @@ A channel that needs the message shaped differently does that in its own module,
 **No retries.** Every path that reaches a channel writes the row, which is what stops a channel that is down from being hammered every second. There is deliberately no delay or attempt count — an alert nobody can see failed is worse than one that failed loudly. If retries are wanted, this table is the right shape for them: add `attempts` and `next_attempt_at`, and select on the latter.
 
 **No opinion about what a run *should* do.** It reads the status and decides what to do with a notification; it never writes a run status, and nothing it does can change how a run ends.
+
+**No opinion about which endings are worth hearing about.** That is the job's, declared in its YAML and frozen onto the row at submit. The service only asks whether this row's ending is the one that happened.

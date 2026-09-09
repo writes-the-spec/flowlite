@@ -185,10 +185,10 @@ tasks:
 on rarely fixes itself within one second; set it to 0 to retry as soon as possible.
 Each attempt keeps its own output — see [Task output](#task-output).
 
-## Failure notifications
+## Run notifications
 
-A job can name who to tell when one of its runs does not succeed, by email, in Slack, or
-both:
+A job can name who to tell when one of its runs ends — when it does not succeed, when it
+does, or both — by email, in Slack, or both:
 
 ```yaml
 id: nightly-sync
@@ -196,17 +196,23 @@ name: Nightly Sync
 on_failure:
   email: [oncall@example.com, data-team@example.com]
   slack: ["#oncall"]
+on_success:
+  slack: ["#data"]
 tasks:
   - id: sync
     command: ./sync.sh
 ```
 
+The two blocks take the same channels and are addressed independently, which is usually
+the point: a failure wakes whoever is on call, a success reassures whoever is waiting on
+the data. A job may name the same people under both, and hears either way.
+
 Each channel a job names is delivered and recorded **separately**, so a Slack workspace
 that is down does not swallow the mail, and each says on its own row whether it landed.
 
-The message carries the run's status and timings, every task and how it ended, and the
-**output of the tasks that broke** — so the mail itself usually says what went wrong,
-without opening the dashboard:
+The message carries the run's status and timings, every task and how it ended, and — for
+a run that broke — the **output of the tasks that broke**, so the mail itself usually says
+what went wrong without opening the dashboard:
 
 ```
 Job run 42 of 'Nightly Sync' (nightly-sync) failed.
@@ -239,8 +245,29 @@ it is aligned text that only reads in a monospaced one. The quoted output is cap
 shorter there than in mail by default — a chat message is read in a scroll, and the mail
 is where the long tail belongs.
 
-**Only a real failure is sent** — `failed` and `timed out`, never `aborted`. A run you
-stopped yourself is not news.
+A success is the same message without the quoted output, since there is none:
+
+```
+Job run 43 of 'Nightly Sync' (nightly-sync) succeeded.
+
+  Job         nightly-sync
+  Run         43
+  Status      succeeded
+  Started     2026-09-10 02:00:01
+  Finished    2026-09-10 02:03:12
+  Duration    3m 11s
+
+Tasks
+
+  extract                  succeeded
+  transform                succeeded
+  load                     succeeded
+
+Run `flowlite job-run logs 43` for every task and attempt.
+```
+
+**`on_failure:` means a real failure** — `failed` and `timed out`, never `aborted`. A run
+you stopped yourself is not news, and neither block is told about one.
 
 ### Where the mail server and the Slack token go
 
@@ -298,6 +325,10 @@ Caused by:
     can be sent by slack. Add one, or remove the recipients.
 ```
 
+The error names the block as well as the channel, since the two are checked separately —
+a job may ask for mail on a failure and Slack on a success, and only one of them be
+deliverable here.
+
 A notification that silently never leaves is the one failure you cannot see from the run
 afterwards, so it is a startup error rather than a surprise at 03:00.
 
@@ -308,9 +339,13 @@ refuses an unknown conversation with `ok: false` in a 200, and one conversation 
 does not stop the others from getting the alert.
 
 A run records who it will tell **when it is submitted**, alongside the commands and
-parameters it snapshots. So editing `on_failure:` does not change a run already in flight,
-a rerun tells whoever the original run would have told, and a run whose job YAML has since
-been deleted still reaches somebody.
+parameters it snapshots. So editing `on_failure:` or `on_success:` does not change a run
+already in flight, a rerun tells whoever the original run would have told, and a run whose
+job YAML has since been deleted still reaches somebody.
+
+A run that named both carries a record for each, and its one ending settles them in
+opposite directions: whichever block the run matched is delivered, and the other is closed
+as nothing to report.
 
 Delivery runs as its own background service, so a slow or unreachable mail server never
 holds up the runs themselves. Each notification records which channel it is to be told
@@ -416,8 +451,8 @@ timezone = "UTC"                # what a schedule with no timezone: reads its cr
 ```
 
 `[smtp]` is the one section with no defaults, because there is no default mail server:
-leave it out and failure notifications are off entirely. See
-[Failure notifications](#failure-notifications).
+leave it out and mail notifications are off entirely. See
+[Run notifications](#run-notifications).
 
 ```toml
 [smtp]

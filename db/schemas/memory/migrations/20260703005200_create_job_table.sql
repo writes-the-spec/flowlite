@@ -7,6 +7,7 @@ CREATE TABLE job (
     parameters TEXT NOT NULL,
     env TEXT NOT NULL,
     on_failure_recipients TEXT NOT NULL,
+    on_success_recipients TEXT NOT NULL,
 
     PRIMARY KEY (job_id),
     UNIQUE (row_id)

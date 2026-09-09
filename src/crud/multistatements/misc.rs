@@ -5,7 +5,7 @@ use sqlx::SqliteConnection;
 use crate::crud::CRUD;
 use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
-use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotificationStatus, NotificationChannel, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
+use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotificationStatus, NotificationChannel, NotifyOn, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
 use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort};
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRunStatus};
 
@@ -24,9 +24,10 @@ struct JobRunDefinition {
 }
 
 /// Somebody to tell about this run, written when the run is created rather than when it
-/// fails. Nothing here knows yet whether it will be needed — that is the notification
-/// service's question, once the run has ended.
+/// ends. Nothing here knows yet whether it will be needed — whether the run ends the way
+/// `notify_on` is waiting for is the notification service's question, once it has ended.
 struct JobRunNotificationDefinition {
+    notify_on: NotifyOn,
     channel: NotificationChannel,
     recipients: Vec<String>,
 }
@@ -150,17 +151,32 @@ fn is_valid_parameter_name(name: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// The notifications one run is submitted with: one per channel the job named somebody
+/// The notifications one run is submitted with: one per channel each block named somebody
 /// under. A job that names nobody at all gets none.
+///
+/// A job asking to be told both ways over the same channel gets two rows, settled
+/// separately — the run can only end one way, so exactly one of them is ever delivered and
+/// the other closes as skipped.
 fn job_run_notification_definitions(
     on_failure_recipients: &BTreeMap<NotificationChannel, Vec<String>>,
+    on_success_recipients: &BTreeMap<NotificationChannel, Vec<String>>,
 ) -> Vec<JobRunNotificationDefinition> {
 
-    on_failure_recipients
-        .iter()
-        .map(|(channel, recipients)| JobRunNotificationDefinition {
-            channel: *channel,
-            recipients: recipients.clone(),
+    let blocks = [
+        (NotifyOn::Failure, on_failure_recipients),
+        (NotifyOn::Success, on_success_recipients),
+    ];
+
+    blocks
+        .into_iter()
+        .flat_map(|(notify_on, block)| {
+            block
+                .iter()
+                .map(move |(channel, recipients)| JobRunNotificationDefinition {
+                    notify_on,
+                    channel: *channel,
+                    recipients: recipients.clone(),
+                })
         })
         .collect()
 }
@@ -235,14 +251,18 @@ impl CRUD {
                     working_dir: task.working_dir.clone(),
                 })
                 .collect(),
-            notifications: job_run_notification_definitions(&job.on_failure_recipients.0),
+            notifications: job_run_notification_definitions(
+                &job.on_failure_recipients.0,
+                &job.on_success_recipients.0,
+            ),
         };
 
         self.insert_job_run_definition(&mut *conn, &definition).await
     }
 
     /// Inserts a pending job run, one pending task run per task, and one open notification
-    /// per channel the job named. This is the only place a run's config is written.
+    /// per channel each of the job's notify blocks named. This is the only place a run's
+    /// config is written.
     async fn insert_job_run_definition(
         &self,
         conn: &mut SqliteConnection,
@@ -291,6 +311,7 @@ impl CRUD {
                     input: InsertJobRunNotificationDataInput {
                         job_run_id,
                         job_id: definition.job_id.clone(),
+                        notify_on: notification.notify_on,
                         channel: notification.channel,
                         recipients: notification.recipients.clone(),
                         status: JobRunNotificationStatus::Pending,
@@ -352,6 +373,7 @@ impl CRUD {
                 filter: SelectJobRunNotificationsDataFilter {
                     id: None,
                     job_run_id: Some(job_run_id),
+                    notify_on: None,
                     channel: None,
                     status: None,
                 },
@@ -383,6 +405,7 @@ impl CRUD {
             notifications: notifications
                 .into_iter()
                 .map(|notification| JobRunNotificationDefinition {
+                    notify_on: notification.notify_on,
                     channel: notification.channel,
                     recipients: notification.recipients.0.clone(),
                 })
@@ -637,12 +660,14 @@ mod tests {
 
         db.insert_job_run_notification(
             job_run.id,
+            NotifyOn::Failure,
             NotificationChannel::Email,
             &["oncall@example.com"],
         ).await;
 
         db.insert_job_run_notification(
             job_run.id,
+            NotifyOn::Success,
             NotificationChannel::Slack,
             &["#oncall"],
         ).await;
@@ -653,8 +678,10 @@ mod tests {
         let notifications = db.job_run_notifications(rerun_id).await;
 
         assert_eq!(notifications.len(), 2);
+        assert_eq!(notifications[0].notify_on, NotifyOn::Failure);
         assert_eq!(notifications[0].channel, NotificationChannel::Email);
         assert_eq!(notifications[0].recipients.0, vec!["oncall@example.com"]);
+        assert_eq!(notifications[1].notify_on, NotifyOn::Success);
         assert_eq!(notifications[1].channel, NotificationChannel::Slack);
         assert_eq!(notifications[1].recipients.0, vec!["#oncall"]);
 
@@ -677,19 +704,55 @@ mod tests {
     /// every pass has to look at and decide about.
     #[test]
     fn a_job_naming_nobody_is_submitted_with_no_notifications() {
-        assert!(job_run_notification_definitions(&recipients(&[])).is_empty());
+        assert!(job_run_notification_definitions(&recipients(&[]), &recipients(&[])).is_empty());
     }
 
     #[test]
     fn the_addresses_a_job_names_become_one_email_notification() {
 
-        let definitions = job_run_notification_definitions(&recipients(&[
-            (NotificationChannel::Email, &["oncall@example.com", "data@example.com"]),
-        ]));
+        let definitions = job_run_notification_definitions(
+            &recipients(&[
+                (NotificationChannel::Email, &["oncall@example.com", "data@example.com"]),
+            ]),
+            &recipients(&[]),
+        );
 
         assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].notify_on, NotifyOn::Failure);
         assert_eq!(definitions[0].channel, NotificationChannel::Email);
         assert_eq!(definitions[0].recipients.len(), 2);
+    }
+
+    /// The success block produces the same rows as the failure one, marked for the ending
+    /// it is waiting for.
+    #[test]
+    fn the_addresses_a_success_block_names_become_a_success_notification() {
+
+        let definitions = job_run_notification_definitions(
+            &recipients(&[]),
+            &recipients(&[(NotificationChannel::Slack, &["#data"])]),
+        );
+
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].notify_on, NotifyOn::Success);
+        assert_eq!(definitions[0].channel, NotificationChannel::Slack);
+        assert_eq!(definitions[0].recipients, vec!["#data"]);
+    }
+
+    /// A job wanting to hear either way over the same channel gets a row for each. Only
+    /// one of them can ever be delivered — the run ends once — and the other closes as
+    /// skipped, which is what keeps the decision on the row rather than in the sender.
+    #[test]
+    fn a_job_naming_both_endings_is_submitted_with_a_row_for_each() {
+
+        let definitions = job_run_notification_definitions(
+            &recipients(&[(NotificationChannel::Email, &["oncall@example.com"])]),
+            &recipients(&[(NotificationChannel::Email, &["oncall@example.com"])]),
+        );
+
+        assert_eq!(definitions.len(), 2);
+        assert_eq!(definitions[0].notify_on, NotifyOn::Failure);
+        assert_eq!(definitions[1].notify_on, NotifyOn::Success);
     }
 
     /// A run is told over every channel its job named, and each channel gets its own row —
@@ -698,10 +761,13 @@ mod tests {
     #[test]
     fn a_job_naming_two_channels_is_submitted_with_one_notification_each() {
 
-        let definitions = job_run_notification_definitions(&recipients(&[
-            (NotificationChannel::Email, &["oncall@example.com"]),
-            (NotificationChannel::Slack, &["#oncall"]),
-        ]));
+        let definitions = job_run_notification_definitions(
+            &recipients(&[
+                (NotificationChannel::Email, &["oncall@example.com"]),
+                (NotificationChannel::Slack, &["#oncall"]),
+            ]),
+            &recipients(&[]),
+        );
 
         assert_eq!(definitions.len(), 2);
         assert_eq!(definitions[0].channel, NotificationChannel::Email);
