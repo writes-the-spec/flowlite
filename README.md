@@ -89,10 +89,10 @@ tasks:
 `test` only runs if `build` succeeds; `deploy` only runs if `test` succeeds, and everything
 downstream of a task that did not succeed is skipped.
 
-A job's remaining keys have sections of their own: `parameters`, `env` and `working_dir`
-under [Command inputs](#command-inputs), `timeout`, `max_retries` and `retry_delay` under
-[Timeouts and retries](#timeouts-and-retries), `on_failure` and `on_success` under
-[Run notifications](#run-notifications), and `max_parallel_runs` under
+A job's remaining keys have sections of their own: `parameters`, `env`, `secret_env` and
+`working_dir` under [Command inputs](#command-inputs), `timeout`, `max_retries` and
+`retry_delay` under [Timeouts and retries](#timeouts-and-retries), `on_failure` and
+`on_success` under [Run notifications](#run-notifications), and `max_parallel_runs` under
 [Overlapping runs](#overlapping-runs).
 
 ## Schedules
@@ -123,10 +123,10 @@ schedule is skipped rather than fired and discarded.
 
 ## Command inputs
 
-A command is configured three ways — parameters declared on the job, environment variables
-set on the job or a task, and a working directory — plus a handful of variables flowlite
-injects. All of them arrive as environment variables, since `sh -c <command>` inherits its
-environment like any process:
+A command is configured four ways — parameters declared on the job, environment variables
+set on the job or a task, environment variables resolved from a named secret, and a working
+directory — plus a handful of variables flowlite injects. All of them arrive as environment
+variables, since `sh -c <command>` inherits its environment like any process:
 
 ```yaml
 id: daily-etl
@@ -174,12 +174,18 @@ Where a name collides, later wins, applied in this order:
 1. The environment flowlite itself inherited, less every `FLOWLITE_*` variable in it.
 2. The job's `env:`.
 3. The task's `env:`.
-4. `FLOWLITE_PARAM_*`.
-5. The variables below, injected by flowlite.
+4. Resolved secrets — the job's and the task's `secret_env:` — see [Secrets](#secrets).
+5. `FLOWLITE_PARAM_*`.
+6. The variables below, injected by flowlite.
 
-Steps 2 and 3 are merged once, at submit time, onto `task_run.env`; steps 4 and 5 are
-composed at spawn. Metadata is last so nothing a user writes can make a command lie about
-which run it belongs to.
+Steps 2 and 3 are merged once, at submit time, onto `task_run.env` (`secret_env:` the same
+way, onto `task_run.secret_env`); step 4 resolves those references into values, and steps 5
+and 6 are composed at spawn. A plain `env:` value can therefore never shadow a credential —
+a secret is layered in after both `env:` blocks — and because a name can never appear in
+both blocks at the same level (see [Secrets](#secrets)), this is never a tie-break between
+`env:` and `secret_env:`, only a sequence: a job's default in one block and a task's
+override in the other resolve exactly one way. Metadata is last so nothing a user writes
+can make a command lie about which run it belongs to.
 
 **A command does not inherit flowlite's own configuration.** The `FLOWLITE_*` namespace in
 a command's environment is flowlite's to state, so every such variable is stripped from the
@@ -209,13 +215,90 @@ for it whenever the question is "which day, hour or slice is this."
 A rerun replays the original run's parameters and `FLOWLITE_SCHEDULED_AT` unchanged, not
 the job's current defaults — see [Reruns](#reruns).
 
-### `env:` is visible in the dashboard, on purpose
+### Secrets
+
+`secret_env:` maps an environment variable to the *name* of a secret, not its value.
+It is declared on a job or a task exactly like `env:`, and merged the same way — a task's
+own wins any name both levels set:
+
+```yaml
+id: nightly-sync
+name: Nightly sync
+env:
+  PGHOST: warehouse.internal
+tasks:
+  - id: load
+    command: psql "postgres://etl@$PGHOST/prod" -f load.sql
+    secret_env:
+      PGPASSWORD: warehouse_pw
+```
+
+The command never names the password, because `psql` already reads `PGPASSWORD` out of its
+own environment. That is where composition belongs: the command is a shell, which is
+already better at building a connection string than a YAML parser would be — which is why
+there is no `${...}` interpolation inside `env:` or `secret_env:`. A block states a fixed
+name; it is not a second templating language to learn.
+
+`warehouse_pw` is a name, resolved against `[secrets]` in `config.toml` or
+`FLOWLITE_SECRETS__WAREHOUSE_PW` in the server's own environment — see
+[Configuration](#configuration). The name is what travels: it is what a run stores, what the
+dashboard shows, and what `--json` returns. The value is looked up once, when the command is
+spawned, and exists nowhere but that one process's environment — not the database, not a
+page, not a rerun's row.
+
+Four things are refused when a job's YAML is read, before it is ever served:
+
+- a variable name that is not a valid environment variable name;
+- a secret name outside `[a-z0-9_]+` — `config.toml` can quote a name like `"Warehouse-PW"`,
+  but `FLOWLITE_SECRETS__*` cannot reach it, so it is refused rather than shipped as a name
+  that works on a development box and not in production;
+- a variable name starting with `FLOWLITE_` — run metadata is applied last under that
+  prefix and would silently win, leaving the task's credential quietly missing;
+- the same variable name in both `env:` and `secret_env:` **at the same level**. Across
+  levels it is intentional layering — a job declaring a default that a task replaces with a
+  secret — but at one level it is a contradiction the author should see rather than a
+  precedence rule to learn.
+
+```
+Invalid Job YAML at /srv/flowlite/jobs/nightly.yaml
+
+Caused by:
+    Job 'nightly-sync' task 'load' names secret 'Warehouse-PW' for variable 'PGPASSWORD',
+    which is not a valid secret name. A secret name may contain only lowercase ASCII
+    letters, digits and underscores: config.toml can hold other characters, but
+    FLOWLITE_SECRETS__* cannot reach them, so the name would work on a development box and
+    be unreachable in production.
+```
+
+`serve` also refuses to start if a job names a secret that nothing defines — a missing
+*value*, not just a malformed name — so a typo is caught before 03:00 rather than at it:
+
+```
+Job 'nightly-sync'
+
+Caused by:
+    task 'load' needs secret 'warehouse_pw' for PGPASSWORD, but nothing defines it. Add it
+    under [secrets] in config.toml, or set FLOWLITE_SECRETS__WAREHOUSE_PW.
+```
+
+That check runs only in `serve`. `job-run list` and the other read commands work with no
+secrets in the environment at all, because reading a run's status must never require the
+credentials that run used.
+
+The task page and the task-run page each show the reference and never the value —
+`PGPASSWORD ← warehouse_pw` — which is what lets either page say which credential a run
+used: there is no value on the page to leak. `--json` carries the same map.
+
+### `env:` is for what you'd commit; `secret_env:` for what you wouldn't
 
 The merged `env:` values are shown as written on the run and task pages. The YAML is
 already plaintext on disk, so this leaks nothing a reader of the data directory couldn't
 see anyway, and hiding it would make a wrong value undebuggable from the run that used it.
-A secret belongs in the environment flowlite's own process runs in — the command inherits
-that like any environment, and flowlite neither stores nor displays it.
+
+That makes `env:` the right place for a value you are willing to commit and see on a page —
+a hostname, a flag, a timezone. For a credential, reach for `secret_env:` instead: it stores
+a name rather than a value, and the value it resolves is never written to the database or
+shown anywhere.
 
 ## Timeouts and retries
 
@@ -476,9 +559,17 @@ flowlite job-run rerun 42
 
 A rerun replays **the definition the original run executed, not the current YAML.** Every
 run snapshots its own commands, `depends_on` edges, timeouts and retry settings, resolved
-`parameters`, and the `env` and `working_dir` of every task, plus the
+`parameters`, and the `env`, `secret_env` and `working_dir` of every task, plus the
 `FLOWLITE_SCHEDULED_AT` it fired for. So an old run reruns its old config for the same
 occurrence, and a run whose job YAML has since been edited or deleted is still rerunnable.
+
+`secret_env:` is the one exception to "replays exactly that": what is frozen is the
+secret's *name*, not its value. A rerun resolves that name against whatever `[secrets]` or
+`FLOWLITE_SECRETS__*` currently holds, so rotating a credential changes what the next rerun
+uses without touching the run's row at all — the opposite of `env:`, whose literal values
+really are frozen forever, and deliberately so: replaying a leaked password would be the
+worst thing a rerun could do.
+
 To run the job as it is defined now, submit it instead:
 
 ```bash
@@ -616,6 +707,26 @@ username = ""                   # empty for a relay that authenticates nobody
 encryption = "starttls"         # "starttls", "tls" or "none"
 max_output_bytes = 4096         # per stream, per failed task, in the message
 ```
+
+`[secrets]` is where a job's `secret_env:` resolves its values, by name — see
+[Secrets](#secrets). Leaving it out is fine for a job that names none; what it holds is the
+same argument `[smtp]`'s `password` makes for staying out of the file: a value here sits in
+the data directory beside the `jobs/` you were told to commit. Both sources reach the same
+map, so use whichever suits the box:
+
+```toml
+[secrets]
+warehouse_pw = "hunter2"
+```
+
+```bash
+FLOWLITE_SECRETS__WAREHOUSE_PW=hunter2 flowlite serve
+```
+
+The file suits a development box; the environment variable suits a real one, for the same
+reason the SMTP password does. A secret name is restricted to `[a-z0-9_]+` precisely so
+either spelling reaches the same name — `config.toml` can quote a name `FLOWLITE_SECRETS__*`
+could never spell.
 
 `[job_defaults]` and `[schedule_defaults]` fill in what a job's or schedule's YAML leaves
 out, and they are read when the YAML is — at startup. So a task with no `timeout:` takes
