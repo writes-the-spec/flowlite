@@ -8,6 +8,11 @@ use crate::crud::task_run_attempt::TaskRunAttempt;
 /// flowlite itself inherited - `Command::envs` adds to that rather than replacing it, so
 /// this map is an overlay and never the whole environment.
 ///
+/// The one part of that inherited environment a command does not get is the `FLOWLITE_*`
+/// namespace, which the dispatcher strips before applying this overlay. So every
+/// `FLOWLITE_` variable a command sees is one this function put there, and nothing here
+/// can be defeated by what the server happened to be started with.
+///
 /// The three layers are applied in the order the design fixes: the task's own env:, then
 /// the run's parameters, then the run metadata. Metadata is last so nothing a user writes
 /// can make a command lie about which run it belongs to.
@@ -15,6 +20,7 @@ pub fn build_task_run_attempt_env(
     task_run: &TaskRun,
     job_run: &JobRun,
     task_run_attempt: &TaskRunAttempt,
+    data_dir: &str,
 ) -> BTreeMap<String, String> {
 
     let mut env = task_run.env.0.clone();
@@ -22,6 +28,11 @@ pub fn build_task_run_attempt_env(
     for (name, value) in job_run.parameters.0.iter() {
         env.insert(parameter_env_name(name), value.clone());
     }
+
+    // Injected rather than inherited. The dispatcher strips every FLOWLITE_ variable the
+    // child would have inherited, so a task command that calls flowlite itself gets the
+    // directory this server is serving, for a stated reason instead of by accident.
+    env.insert("FLOWLITE_DATA_DIR".to_string(), data_dir.to_string());
 
     env.insert("FLOWLITE_JOB_ID".to_string(), job_run.job_id.clone());
     env.insert("FLOWLITE_JOB_RUN_ID".to_string(), job_run.id.to_string());
@@ -118,9 +129,25 @@ mod tests {
             &task_run(map(&[("PYTHONUNBUFFERED", "1")])),
             &job_run(map(&[]), None),
             &task_run_attempt(),
+            "/srv/flowlite",
         );
 
         assert_eq!(env.get("PYTHONUNBUFFERED").unwrap(), "1");
+    }
+
+    /// The data directory is injected rather than inherited: the dispatcher strips every
+    /// FLOWLITE_ variable it inherited, so a task command that calls flowlite itself would
+    /// otherwise lose the directory it has to work on.
+    #[test]
+    fn the_data_dir_is_injected() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[])),
+            &job_run(map(&[]), None),
+            &task_run_attempt(),
+            "/srv/flowlite",
+        );
+
+        assert_eq!(env.get("FLOWLITE_DATA_DIR").unwrap(), "/srv/flowlite");
     }
 
     #[test]
@@ -129,6 +156,7 @@ mod tests {
             &task_run(map(&[])),
             &job_run(map(&[("region", "us")]), None),
             &task_run_attempt(),
+            "/srv/flowlite",
         );
 
         assert_eq!(env.get("FLOWLITE_PARAM_REGION").unwrap(), "us");
@@ -142,6 +170,7 @@ mod tests {
             &task_run(map(&[("FLOWLITE_PARAM_REGION", "eu")])),
             &job_run(map(&[("region", "us")]), None),
             &task_run_attempt(),
+            "/srv/flowlite",
         );
 
         assert_eq!(env.get("FLOWLITE_PARAM_REGION").unwrap(), "us");
@@ -155,6 +184,7 @@ mod tests {
             &task_run(map(&[("FLOWLITE_JOB_RUN_ID", "999")])),
             &job_run(map(&[]), None),
             &task_run_attempt(),
+            "/srv/flowlite",
         );
 
         assert_eq!(env.get("FLOWLITE_JOB_RUN_ID").unwrap(), "7");
@@ -169,6 +199,7 @@ mod tests {
             &task_run(map(&[])),
             &job_run(map(&[("job_run_id", "999")]), None),
             &task_run_attempt(),
+            "/srv/flowlite",
         );
 
         assert_eq!(env.get("FLOWLITE_PARAM_JOB_RUN_ID").unwrap(), "999");
@@ -181,6 +212,7 @@ mod tests {
             &task_run(map(&[])),
             &job_run(map(&[]), None),
             &task_run_attempt(),
+            "/srv/flowlite",
         );
 
         assert_eq!(env.get("FLOWLITE_JOB_ID").unwrap(), "daily-etl");
@@ -201,6 +233,7 @@ mod tests {
             &task_run(map(&[])),
             &job_run(map(&[]), Some(scheduled_at)),
             &task_run_attempt(),
+            "/srv/flowlite",
         );
 
         assert!(env.get("FLOWLITE_SCHEDULED_AT").unwrap().starts_with("2026-09-08T03:00:00"));
@@ -214,6 +247,7 @@ mod tests {
             &task_run(map(&[])),
             &job_run(map(&[]), None),
             &task_run_attempt(),
+            "/srv/flowlite",
         );
 
         assert!(!env.contains_key("FLOWLITE_SCHEDULED_AT"));
@@ -228,6 +262,7 @@ mod tests {
             &task_run(map(&[("FLOWLITE_SCHEDULED_AT", "1999-01-01T00:00:00Z")])),
             &job_run(map(&[]), None),
             &task_run_attempt(),
+            "/srv/flowlite",
         );
 
         assert!(!env.contains_key("FLOWLITE_SCHEDULED_AT"));

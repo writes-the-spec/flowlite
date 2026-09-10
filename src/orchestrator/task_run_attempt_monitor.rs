@@ -491,7 +491,7 @@ impl Service for TaskRunAttemptMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{has_exited, read_pid_file};
+    use crate::test_support::{has_exited, read_pid_file, reading_the_environment};
     use std::time::Duration;
     use crate::crud::job_run::JobRunStatus;
     use crate::crud::task_run::TaskRunStatus;
@@ -654,6 +654,8 @@ mod tests {
     /// it covers both the group created and the group killed.
     #[tokio::test]
     async fn a_timeout_kills_the_whole_process_group() {
+
+        let _environment = reading_the_environment();
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
@@ -693,6 +695,8 @@ mod tests {
     /// in after the dispatcher has spawned, since it would otherwise skip the attempt.
     #[tokio::test]
     async fn a_stop_kills_the_whole_process_group() {
+
+        let _environment = reading_the_environment();
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
@@ -849,6 +853,8 @@ mod tests {
     /// and it fails by hanging rather than by a wrong value.
     #[tokio::test]
     async fn a_task_over_the_cap_still_finishes() {
+
+        let _environment = reading_the_environment();
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use axum::Json;
 use axum::extract::State;
 use axum::routing::post;
@@ -26,6 +26,38 @@ use crate::orchestrator::task_run_monitor::TaskRunMonitor;
 use crate::poller::Service;
 use crate::signals::Signals;
 use crate::toolkit::Toolkit;
+
+
+/// The process environment, which no test owns alone.
+///
+/// `AppConfig::load` reads it, and a task run attempt's spawn now reads it too - the child
+/// must not inherit flowlite's own `FLOWLITE_*` configuration. Cargo runs the tests of one
+/// binary as threads of one process, so a test that sets a `FLOWLITE_` variable sets it for
+/// every load and every spawn running beside it. In edition 2024 that is not merely a
+/// logical race: `std::env::set_var` is unsafe because it is undefined behaviour beside a
+/// concurrent `std::env::vars()`.
+///
+/// One writer and many readers is the shape of the problem exactly, so:
+///
+/// - a test that **sets** a variable takes `writing_the_environment()`, for as long as it
+///   is set;
+/// - a test that **reads** the environment - loading a config, or spawning a command -
+///   takes `reading_the_environment()`.
+///
+/// A lock rather than a convention, because the failure it prevents is a test that passes
+/// alone and fails in a full run, blaming whichever load or spawn happened to overlap.
+static ENVIRONMENT: RwLock<()> = RwLock::new(());
+
+/// Taken by every test that loads a config or spawns a command. Bind it to a name - a
+/// `let _` drops the guard on the spot and holds nothing.
+pub fn reading_the_environment() -> RwLockReadGuard<'static, ()> {
+    ENVIRONMENT.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Taken by a test that sets a variable, for as long as it is set.
+pub fn writing_the_environment() -> RwLockWriteGuard<'static, ()> {
+    ENVIRONMENT.write().unwrap_or_else(PoisonError::into_inner)
+}
 
 
 /// One test's own flowlite database, in a temp directory nothing else shares.
@@ -160,8 +192,11 @@ impl TestDb {
     }
 
     /// What a data directory with no config.toml gets, which is what the tests run with.
+    /// The config the CRUD under test is actually using, rather than a fresh default: a
+    /// service built here has to agree with `data_dir()` about which directory it is
+    /// serving, since that directory is what a task command is told to work on.
     pub fn app_config(&self) -> AppConfig {
-        AppConfig::default()
+        self.crud.toolkit.app_config.clone()
     }
 
     pub async fn insert_job_run(&self, status: JobRunStatus) -> JobRun {

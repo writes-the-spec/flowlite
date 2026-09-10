@@ -201,9 +201,21 @@ impl TaskRunAttemptDispatcher {
         let task_run = self.get_task_run(task_run_attempt).await?;
         let job_run = self.get_job_run(task_run_attempt).await?;
 
-        let env = build_task_run_attempt_env(&task_run, &job_run, task_run_attempt);
+        let env = build_task_run_attempt_env(&task_run, &job_run, task_run_attempt, &self.app_config.data_dir);
 
         let mut command = tokio::process::Command::new("sh");
+
+        // The child's FLOWLITE_ namespace belongs to flowlite, and is stated rather than
+        // inherited. `Command::envs` is an overlay - it cannot unset what this server was
+        // started with - so a credential passed the way the README says to pass one,
+        // FLOWLITE_SMTP__PASSWORD=... flowlite serve, would otherwise be readable by every
+        // command flowlite spawns. Stripped before the overlay is applied, so the names
+        // build_task_run_attempt_env means a command to have are put back by it.
+        for (name, _) in std::env::vars() {
+            if name.starts_with("FLOWLITE_") {
+                command.env_remove(name);
+            }
+        }
 
         command
             .arg("-c")
@@ -219,14 +231,6 @@ impl TaskRunAttemptDispatcher {
         // Empty means inherit the server's, which is what Command does when nothing is set.
         if !task_run.working_dir.is_empty() {
             command.current_dir(&task_run.working_dir);
-        }
-
-        // A manual run's env map has FLOWLITE_SCHEDULED_AT removed, but that map can only
-        // ever overlay what flowlite itself inherited - it can't unset a value the server's
-        // own environment already carries. Without this, a forged FLOWLITE_SCHEDULED_AT in
-        // flowlite's own environment would reach the command on every manual run.
-        if job_run.scheduled_at.is_none() {
-            command.env_remove("FLOWLITE_SCHEDULED_AT");
         }
 
         let working_dir_description = if task_run.working_dir.is_empty() {
@@ -464,6 +468,7 @@ mod tests {
     use crate::crud::job_run::JobRunStatus;
     use crate::test_support::TestDb;
     use crate::test_support::read_command_file;
+    use crate::test_support::{reading_the_environment, writing_the_environment};
 
     /// Calls `settle_as_pending` rather than the whole chain on purpose: falling through it
     /// spawns a real process, which is what these tests are about avoiding.
@@ -526,6 +531,8 @@ mod tests {
         stop_the_job_run: bool,
     ) -> TaskRunAttemptStatus {
 
+        let _environment = reading_the_environment();
+
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
@@ -587,6 +594,8 @@ mod tests {
     #[tokio::test]
     async fn the_composed_environment_reaches_the_command() {
 
+        let _environment = reading_the_environment();
+
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run_with_parameters(
@@ -624,9 +633,151 @@ mod tests {
         );
     }
 
+    /// A spawn's child inherits flowlite's own environment, and `Command::envs` is an
+    /// overlay that cannot unset what was inherited. So a credential passed to the server
+    /// the way the README says to pass it - `FLOWLITE_SMTP__PASSWORD=... flowlite serve` -
+    /// would otherwise be readable by every command flowlite spawns, whether or not that
+    /// command has anything to do with mail.
+    #[tokio::test]
+    async fn a_command_cannot_read_flowlites_own_environment() {
+
+        let _environment = writing_the_environment();
+
+        unsafe {
+            std::env::set_var("FLOWLITE_SMTP__PASSWORD", "hunter2");
+            std::env::set_var("FLOWLITE_SECRETS__WAREHOUSE_PW", "hunter3");
+        }
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let seen_path = db.data_dir().join("seen.txt");
+
+        let task_run = db.insert_task_run_for_command_with_env(
+            job_run.id,
+            &format!(
+                "printf '%s|%s' \"$FLOWLITE_SMTP__PASSWORD\" \"$FLOWLITE_SECRETS__WAREHOUSE_PW\" > {}",
+                seen_path.display(),
+            ),
+            std::collections::BTreeMap::new(),
+            "",
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            1,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        db.task_run_attempt_dispatcher()
+            .handle(&task_run_attempt)
+            .await
+            .unwrap();
+
+        let seen = read_command_file(&seen_path).await;
+
+        // Before the assert, so a failure does not leave them set for whatever runs next.
+        unsafe {
+            std::env::remove_var("FLOWLITE_SMTP__PASSWORD");
+            std::env::remove_var("FLOWLITE_SECRETS__WAREHOUSE_PW");
+        }
+
+        assert_eq!(seen, "|");
+    }
+
+    /// The companion of the strip: the data directory is the one FLOWLITE_ variable a task
+    /// command has a reason to read, since a command that calls flowlite itself needs it,
+    /// so it is injected instead of inherited.
+    #[tokio::test]
+    async fn the_data_dir_reaches_the_command() {
+
+        let _environment = reading_the_environment();
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let seen_path = db.data_dir().join("seen.txt");
+
+        let task_run = db.insert_task_run_for_command_with_env(
+            job_run.id,
+            &format!(
+                "printf '%s' \"$FLOWLITE_DATA_DIR\" > {}",
+                seen_path.display(),
+            ),
+            std::collections::BTreeMap::new(),
+            "",
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            1,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        db.task_run_attempt_dispatcher()
+            .handle(&task_run_attempt)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            read_command_file(&seen_path).await,
+            db.data_dir().to_string_lossy(),
+        );
+    }
+
+    /// The behaviour the `env_remove("FLOWLITE_SCHEDULED_AT")` special case used to carry
+    /// on its own, kept honest while the strip takes it over: a manual run must not read a
+    /// scheduled instant out of flowlite's own environment.
+    #[tokio::test]
+    async fn a_manual_run_ignores_a_forged_scheduled_at_in_the_environment() {
+
+        let _environment = writing_the_environment();
+
+        unsafe { std::env::set_var("FLOWLITE_SCHEDULED_AT", "1999-01-01T00:00:00Z") };
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let seen_path = db.data_dir().join("seen.txt");
+
+        let task_run = db.insert_task_run_for_command_with_env(
+            job_run.id,
+            &format!(
+                // Bracketed because read_command_file waits for a non-empty file, and
+                // what this test asserts is that the value is empty.
+                "printf '[%s]' \"$FLOWLITE_SCHEDULED_AT\" > {}",
+                seen_path.display(),
+            ),
+            std::collections::BTreeMap::new(),
+            "",
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            1,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        db.task_run_attempt_dispatcher()
+            .handle(&task_run_attempt)
+            .await
+            .unwrap();
+
+        let seen = read_command_file(&seen_path).await;
+
+        unsafe { std::env::remove_var("FLOWLITE_SCHEDULED_AT") };
+
+        assert_eq!(seen, "[]");
+    }
+
     /// working_dir is where the command runs, not a prefix on it.
     #[tokio::test]
     async fn the_working_dir_is_where_the_command_runs() {
+
+        let _environment = reading_the_environment();
 
         let db = TestDb::new().await;
 
@@ -666,6 +817,8 @@ mod tests {
     #[tokio::test]
     async fn a_spawn_failure_names_the_task_and_the_working_dir() {
 
+        let _environment = reading_the_environment();
+
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
@@ -699,6 +852,8 @@ mod tests {
     #[tokio::test]
     async fn an_unclaimed_attempt_is_settled_invalid() {
 
+        let _environment = reading_the_environment();
+
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
@@ -719,6 +874,8 @@ mod tests {
     /// settled rather than started.
     #[tokio::test]
     async fn a_pending_attempt_already_spawned_for_is_invalid() {
+
+        let _environment = reading_the_environment();
 
         let db = TestDb::new().await;
 
@@ -746,6 +903,8 @@ mod tests {
     #[tokio::test]
     async fn a_pending_attempt_already_spawned_for_is_not_spawned_again() {
 
+        let _environment = reading_the_environment();
+
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
@@ -767,6 +926,8 @@ mod tests {
     #[tokio::test]
     async fn a_fresh_pending_attempt_still_starts() {
 
+        let _environment = reading_the_environment();
+
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
@@ -785,6 +946,8 @@ mod tests {
     /// intent is cleared, so the next pass tries again rather than settling it Invalid.
     #[tokio::test]
     async fn an_attempt_whose_spawn_fails_is_left_startable() {
+
+        let _environment = reading_the_environment();
 
         let db = TestDb::new().await;
 
@@ -809,6 +972,8 @@ mod tests {
     /// group id is the only way back to a process still running.
     #[tokio::test]
     async fn starting_an_attempt_records_its_process_group() {
+
+        let _environment = reading_the_environment();
 
         let db = TestDb::new().await;
 

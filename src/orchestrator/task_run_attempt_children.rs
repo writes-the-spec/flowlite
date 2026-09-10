@@ -112,11 +112,14 @@ mod tests {
     use crate::crud::task_run_attempt::TaskRunAttemptStatus;
     use crate::poller::Service;
     use crate::test_support::TestDb;
+    use crate::test_support::reading_the_environment;
 
     /// Shutting down has to reach the command's whole process tree, the same as a timeout
     /// or a stop: leaving it running is what makes the next start's Aborted a lie.
     #[tokio::test]
     async fn kill_all_kills_the_process_group_of_every_attempt() {
+
+        let _environment = reading_the_environment();
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;

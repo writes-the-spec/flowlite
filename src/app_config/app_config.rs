@@ -76,32 +76,11 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+    use crate::test_support::{reading_the_environment, writing_the_environment};
     use std::time::Duration;
 
     use super::*;
     use crate::app_config::smtp::AppConfigSmtpEncryption;
-
-    /// `load` reads the process environment, and cargo runs the tests of one binary as
-    /// threads of one process — so a test that sets a `FLOWLITE_` variable is setting it
-    /// for every `load` running beside it, not only its own.
-    ///
-    /// A lock rather than a convention, because the failure it prevents is a test that
-    /// passes alone and fails in a full run, blaming whichever load happened to overlap.
-    /// One writer and many readers is the shape of the problem exactly: only the test that
-    /// mutates the environment needs the binary to itself.
-    static ENVIRONMENT: RwLock<()> = RwLock::new(());
-
-    /// Taken by every test that loads a config. Bind it to a name — a `let _` drops the
-    /// guard on the spot and holds nothing.
-    fn reading_the_environment() -> RwLockReadGuard<'static, ()> {
-        ENVIRONMENT.read().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Taken by the one test that sets a variable, for as long as it is set.
-    fn writing_the_environment() -> RwLockWriteGuard<'static, ()> {
-        ENVIRONMENT.write().unwrap_or_else(PoisonError::into_inner)
-    }
 
     fn temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("flowlite-config-{}", uuid::Uuid::new_v4()));

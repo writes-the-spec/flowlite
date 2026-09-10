@@ -171,7 +171,7 @@ rather than deliver nothing to the command.
 
 Where a name collides, later wins, applied in this order:
 
-1. The environment flowlite itself inherited.
+1. The environment flowlite itself inherited, less every `FLOWLITE_*` variable in it.
 2. The job's `env:`.
 3. The task's `env:`.
 4. `FLOWLITE_PARAM_*`.
@@ -180,6 +180,12 @@ Where a name collides, later wins, applied in this order:
 Steps 2 and 3 are merged once, at submit time, onto `task_run.env`; steps 4 and 5 are
 composed at spawn. Metadata is last so nothing a user writes can make a command lie about
 which run it belongs to.
+
+**A command does not inherit flowlite's own configuration.** The `FLOWLITE_*` namespace in
+a command's environment is flowlite's to state, so every such variable is stripped from the
+child before the layers above are applied — a server started with
+`FLOWLITE_SMTP__PASSWORD=...` or `FLOWLITE_SLACK__TOKEN=...` does not hand that credential
+to every command it spawns. What a command is meant to have, flowlite injects by name.
 
 ### Injected variables
 
@@ -191,6 +197,7 @@ which run it belongs to.
 | `FLOWLITE_TASK_RUN_ID` | This task's run. |
 | `FLOWLITE_TASK_RUN_ATTEMPT_ID` | This attempt. |
 | `FLOWLITE_ATTEMPT` | Which attempt this is, starting at 1. |
+| `FLOWLITE_DATA_DIR` | The data directory this server is serving — injected, not inherited, so a command that calls `flowlite` itself works on the same directory. |
 | `FLOWLITE_SCHEDULED_AT` | The instant a schedule fired for, as RFC3339. Set only for a scheduled run — a manual `job submit` gets no such variable at all, not an empty one. |
 
 **Parameters answer "which caller is this run for," not "which run is this."** A parameter
