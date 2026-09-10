@@ -52,6 +52,10 @@ impl TaskRunAttemptDispatcher {
     /// it was inserted.
     async fn handle_pending_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
+        if self.settle_as_invalid(task_run_attempt).await? {
+            return Ok(());
+        }
+
         if self.settle_as_skipped(task_run_attempt).await? {
             return Ok(());
         }
@@ -97,6 +101,44 @@ impl TaskRunAttemptDispatcher {
         self.signals.publish();
 
         Ok(())
+    }
+
+    /// Settles a pending attempt a spawn was already begun for, which only a crash between
+    /// the spawn and the Running write leaves behind. Its command may be running, so
+    /// starting it again would run the command twice — worse than an unknown outcome.
+    ///
+    /// Asked first: a stop would otherwise skip it, claiming nothing ran.
+    async fn settle_as_invalid(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
+
+        if task_run_attempt.started_at.is_none() {
+            return Ok(false);
+        }
+
+        eprintln!(
+            "Task run attempt {} was already spawned for but never recorded as running, so \
+             its command may have run and it has been settled invalid rather than started \
+             a second time",
+            task_run_attempt.id,
+        );
+
+        self.crud.update_task_run_attempts(
+            &*self.conn_pool,
+            &UpdateTaskRunAttemptsData {
+                filter: UpdateTaskRunAttemptsDataFilter {
+                    id: Some(task_run_attempt.id),
+                    task_run_id: None,
+                },
+                input: UpdateTaskRunAttemptsDataInput {
+                    status: Some(TaskRunAttemptStatus::Invalid),
+                    started_at: None,
+                    finished_at: Some(Some(Utc::now())),
+                },
+            },
+        ).await?;
+
+        self.signals.publish();
+
+        Ok(true)
     }
 
     /// Skips the attempt if its job run was stopped, so its command never started.
@@ -190,12 +232,54 @@ impl TaskRunAttemptDispatcher {
             format!("'{}'", task_run.working_dir)
         };
 
-        let mut child = command.spawn()
+        // Recorded before the spawn, not after: a crash between the two leaves a pending
+        // attempt whose command is running, and `settle_as_invalid` reads this to refuse to
+        // start it again. The instant is the command's own start either way.
+        self.crud.update_task_run_attempts(
+            &*self.conn_pool,
+            &UpdateTaskRunAttemptsData {
+                filter: UpdateTaskRunAttemptsDataFilter {
+                    id: Some(task_run_attempt.id),
+                    task_run_id: None,
+                },
+                input: UpdateTaskRunAttemptsDataInput {
+                    status: None,
+                    started_at: Some(Some(Utc::now())),
+                    finished_at: None,
+                },
+            },
+        ).await?;
+
+        let spawned = command.spawn()
             .with_context(|| format!(
                 "Failed to spawn task '{}' in working directory {}",
                 task_run.task_id,
                 working_dir_description,
-            ))?;
+            ));
+
+        // Nothing was started, so the intent has to go: left behind it would settle this
+        // attempt invalid on the next pass instead of letting it be tried again.
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(error) => {
+                self.crud.update_task_run_attempts(
+                    &*self.conn_pool,
+                    &UpdateTaskRunAttemptsData {
+                        filter: UpdateTaskRunAttemptsDataFilter {
+                            id: Some(task_run_attempt.id),
+                            task_run_id: None,
+                        },
+                        input: UpdateTaskRunAttemptsDataInput {
+                            status: None,
+                            started_at: Some(None),
+                            finished_at: None,
+                        },
+                    },
+                ).await?;
+
+                return Err(error);
+            },
+        };
 
         let stdout = child.stdout.take()
             .ok_or_else(|| anyhow::anyhow!("Failed to get stdout of task: {}", task_run_attempt.task_id))?;
@@ -616,5 +700,97 @@ mod tests {
             db.task_run_attempt(task_run_attempt.id).await.status,
             TaskRunAttemptStatus::Invalid,
         );
+    }
+
+    /// A crash between `spawn()` and the Running write leaves a pending attempt whose
+    /// command is already running. Starting it again runs the command twice, which is
+    /// worse than any unknown — so a pending attempt that was already spawned for is
+    /// settled rather than started.
+    #[tokio::test]
+    async fn a_pending_attempt_already_spawned_for_is_invalid() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run_for_command(job_run.id, "echo hi", 3600).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+
+        db.begin_spawn_of_task_run_attempt(task_run_attempt.id).await;
+
+        // Re-read: the poller hands the service the row as stored, and the intent was
+        // written after this struct was built.
+        let task_run_attempt = db.task_run_attempt(task_run_attempt.id).await;
+
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Invalid,
+        );
+    }
+
+    /// And nothing was spawned for it — the point of the whole change is the command not
+    /// running twice. Asserted on the children map rather than on a side effect of the
+    /// command, which a just-spawned process may not have reached yet.
+    #[tokio::test]
+    async fn a_pending_attempt_already_spawned_for_is_not_spawned_again() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run_for_command(job_run.id, "echo hi", 3600).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+
+        db.begin_spawn_of_task_run_attempt(task_run_attempt.id).await;
+
+        // Re-read: the poller hands the service the row as stored, and the intent was
+        // written after this struct was built.
+        let task_run_attempt = db.task_run_attempt(task_run_attempt.id).await;
+
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
+
+        assert!(db.children.remove(task_run_attempt.id).await.is_none());
+    }
+
+    /// The ordinary path: an attempt nothing has spawned for still starts.
+    #[tokio::test]
+    async fn a_fresh_pending_attempt_still_starts() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run_for_command(job_run.id, "echo hi", 3600).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Running,
+        );
+    }
+
+    /// A command that cannot be spawned at all must not look like one that was: the
+    /// intent is cleared, so the next pass tries again rather than settling it Invalid.
+    #[tokio::test]
+    async fn an_attempt_whose_spawn_fails_is_left_startable() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run_for_command_with_env(
+            job_run.id,
+            "echo hi",
+            std::collections::BTreeMap::new(),
+            "/no/such/working/directory",
+        ).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+
+        assert!(db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.is_err());
+
+        let after = db.task_run_attempt(task_run_attempt.id).await;
+
+        assert_eq!(after.status, TaskRunAttemptStatus::Pending);
+        assert!(after.started_at.is_none(), "a failed spawn left the attempt looking spawned");
     }
 }

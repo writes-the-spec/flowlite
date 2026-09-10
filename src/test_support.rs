@@ -380,6 +380,19 @@ impl TestDb {
         self.last_task_run_attempt(task_run.id).await
     }
 
+    /// Marks a pending attempt as one a spawn was begun for, which is what a crash between
+    /// the spawn and the Running write leaves behind. No CRUD update writes `started_at`
+    /// without a status, so this reaches past CRUD for a state only a crash produces.
+    pub async fn begin_spawn_of_task_run_attempt(&self, task_run_attempt_id: i64) {
+
+        sqlx::query("UPDATE task_run_attempt SET started_at = ? WHERE id = ?")
+            .bind(Utc::now())
+            .bind(task_run_attempt_id)
+            .execute(&*self.conn_pool)
+            .await
+            .unwrap();
+    }
+
     /// Moves an attempt's `created_at` back, which is what a retry_delay is measured from.
     /// No CRUD update writes that column — only the insert does — so the test reaches past
     /// CRUD rather than opening a seam in it for a case only a test has.
