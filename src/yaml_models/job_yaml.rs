@@ -258,6 +258,7 @@ tasks:
         assert!(error.contains("nightly-sync"), "{error}");
         assert!(error.contains("ingest"), "{error}");
         assert!(error.contains("1secret"), "{error}");
+        assert!(error.contains("not a valid environment variable name"), "{error}");
     }
 
     #[test]
@@ -284,6 +285,8 @@ secret_env:
 
         assert!(error.contains("nightly-sync"), "{error}");
         assert!(error.contains("FLOWLITE_TOKEN"), "{error}");
+        assert!(error.contains("starts with FLOWLITE_"), "{error}");
+        assert!(error.contains("Run metadata"), "{error}");
     }
 
     #[test]
@@ -302,6 +305,7 @@ tasks:
 
         assert!(error.contains("ingest"), "{error}");
         assert!(error.contains("DB_PASSWORD"), "{error}");
+        assert!(error.contains("in both env and secret_env"), "{error}");
     }
 
     /// The same name may still appear once on the job and once on a task - a job
