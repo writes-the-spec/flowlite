@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use anyhow::Result;
 use figment::Figment;
@@ -33,6 +34,11 @@ pub struct AppConfig {
     /// None is "no `[slack]` section", skipped for the reason `smtp` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slack: Option<AppConfigSlack>,
+    /// Secret values a job's `secret_env:` names, by name. Figment's Toml-then-Env merge
+    /// fills this from `[secrets]` in config.toml or from `FLOWLITE_SECRETS__*`, so a
+    /// development box can use the file and a real one need not have the value on disk.
+    #[serde(default)]
+    pub secrets: BTreeMap<String, String>,
 }
 
 impl Default for AppConfig {
@@ -45,6 +51,7 @@ impl Default for AppConfig {
             schedule_defaults: AppConfigScheduleDefaults::default(),
             smtp: None,
             slack: None,
+            secrets: BTreeMap::new(),
         }
     }
 }
@@ -277,5 +284,75 @@ mod tests {
         let config = AppConfig::load(Some(dir.clone())).unwrap();
 
         assert_eq!(config.data_dir, dir.to_string_lossy());
+    }
+
+    #[test]
+    fn a_secrets_section_is_read_as_a_map() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+        std::fs::write(
+            dir.join("config.toml"),
+            "[secrets]\nwarehouse_pw = \"hunter2\"\n",
+        ).unwrap();
+
+        let config = AppConfig::load(Some(dir)).unwrap();
+
+        assert_eq!(config.secrets.get("warehouse_pw"), Some(&"hunter2".to_string()));
+    }
+
+    #[test]
+    fn a_secret_set_only_in_the_environment_is_read() {
+        let _environment = writing_the_environment();
+
+        let dir = temp_dir();
+
+        // SAFETY: the environment is process-wide, and the write guard above is what makes
+        // this the only thread reading it until the variable is gone again.
+        unsafe { std::env::set_var("FLOWLITE_SECRETS__WAREHOUSE_PW", "hunter2") };
+
+        let config = AppConfig::load(Some(dir));
+
+        unsafe { std::env::remove_var("FLOWLITE_SECRETS__WAREHOUSE_PW") };
+
+        // Asserted after the removal, so a load that fails cannot leave the variable set
+        // for whatever runs next.
+        let config = config.unwrap();
+        assert_eq!(config.secrets.get("warehouse_pw"), Some(&"hunter2".to_string()));
+    }
+
+    #[test]
+    fn the_environment_wins_over_a_secrets_section() {
+        let _environment = writing_the_environment();
+
+        let dir = temp_dir();
+        std::fs::write(
+            dir.join("config.toml"),
+            "[secrets]\nwarehouse_pw = \"file_value\"\n",
+        ).unwrap();
+
+        // SAFETY: the environment is process-wide, and the write guard above is what makes
+        // this the only thread reading it until the variable is gone again.
+        unsafe { std::env::set_var("FLOWLITE_SECRETS__WAREHOUSE_PW", "env_value") };
+
+        let config = AppConfig::load(Some(dir));
+
+        unsafe { std::env::remove_var("FLOWLITE_SECRETS__WAREHOUSE_PW") };
+
+        // Asserted after the removal, so a load that fails cannot leave the variable set
+        // for whatever runs next.
+        let config = config.unwrap();
+        assert_eq!(config.secrets.get("warehouse_pw"), Some(&"env_value".to_string()));
+    }
+
+    #[test]
+    fn a_directory_with_no_config_file_has_no_secrets() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+
+        let config = AppConfig::load(Some(dir)).unwrap();
+
+        assert!(config.secrets.is_empty());
     }
 }
