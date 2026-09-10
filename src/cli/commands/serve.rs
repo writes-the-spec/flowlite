@@ -70,6 +70,11 @@ impl ServeCmd {
             app_config.clone(),
         );
 
+        // Before the pollers, not after: a Running attempt from an earlier run of the
+        // program still names the process group it spawned, and a monitor pass would settle
+        // the row without ever reading it.
+        orchestrator.recover().await?;
+
         orchestrator.start();
 
         // Started alongside the orchestrator rather than inside it, the way the scheduler

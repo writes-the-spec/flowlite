@@ -380,6 +380,23 @@ impl TestDb {
         self.last_task_run_attempt(task_run.id).await
     }
 
+    /// Plants the process group and start instant a previous run of the program would have
+    /// left on a Running attempt, which is the state a crash leaves behind.
+    pub async fn orphan_task_run_attempt(
+        &self,
+        task_run_attempt_id: i64,
+        process_group_id: i64,
+        started_at: DateTime<Utc>,
+    ) {
+        sqlx::query("UPDATE task_run_attempt SET process_group_id = ?, started_at = ? WHERE id = ?")
+            .bind(process_group_id)
+            .bind(started_at)
+            .bind(task_run_attempt_id)
+            .execute(&*self.conn_pool)
+            .await
+            .unwrap();
+    }
+
     /// Marks a pending attempt as one a spawn was begun for, which is what a crash between
     /// the spawn and the Running write leaves behind. No CRUD update writes `started_at`
     /// without a status, so this reaches past CRUD for a state only a crash produces.

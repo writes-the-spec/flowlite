@@ -89,7 +89,7 @@ That split is about a stop, so `Invalid` sits outside it: it is not a stop at al
 
 `Invalid` is what settles a row whose outcome the program cannot determine — as opposed to one whose command failed, timed out or was stopped. Two things write it:
 
-- **A `Running` attempt with no process in `TaskRunAttemptChildren`.** The map holds only processes *this* run of the program spawned, so this is the restart path: shutdown kills the process groups and leaves the attempt rows `Running` on purpose, because writing statuses there would race the pollers. Every restart with work in flight produces one per running attempt, and a `SIGKILL`ed flowlite produces them with the process tree still alive — which `Invalid` records but does not fix.
+- **A `Running` attempt with no process in `TaskRunAttemptChildren`.** The map holds only processes *this* run of the program spawned, so this is the restart path: shutdown kills the process groups and leaves the attempt rows `Running` on purpose, because writing statuses there would race the pollers. Every restart with work in flight produces one per running attempt, and a `SIGKILL`ed flowlite produces them with the process tree still alive. `Orchestrator::recover` deals with those before any poller starts — see [Picking up after a crash](#picking-up-after-a-crash).
 - **The five `settle_unclaimed` fall-throughs** described above.
 
 It then propagates: an invalid attempt makes its task run invalid and is **never retried** — flowlite does not know what that attempt did, so another would be guessing it left nothing behind — and an invalid task run makes its job run invalid and skips everything downstream of it, `TaskRunStatus::Invalid` being in `TaskRunDispatcher::settle_as_skipped`'s failure list.
@@ -97,6 +97,14 @@ It then propagates: an invalid attempt makes its task run invalid and is **never
 **Why settle at all rather than raise.** The status column is the only channel between the services, so a row that never settles strands the whole stack above it: the task run stays `Running`, so the job run does, so it holds one of its job's parallel slots for ever — with `max_parallel_runs: 1`, one crashed attempt stops that job running again, and the only repair is editing the database by hand.
 
 **Where a raise is still right.** Two states look like this and are not: an attempt whose `task_run` or `job_run` row is missing, and a task run naming a dependency with no row. Both are held shut by an enforced invariant — foreign keys with no `DELETE` anywhere in the codebase, and the YAML layer refusing a job whose task depends on a name that is not a task of that job — so their raises never fire and strand nothing. Convert a raise only when the state it guards can actually occur.
+
+## Picking up after a crash
+
+`Orchestrator::recover` ([src/orchestrator/recovery.rs](../../../src/orchestrator/recovery.rs)) runs once, **awaited before `start`**, and settles every attempt still marked `Running` — which at that moment can only be one an earlier run of the program left, since `TaskRunAttemptChildren` is empty until a dispatcher fills it. Left to the pollers instead, `TaskRunAttemptMonitor` would settle those rows without ever reading the group id, and their commands would go on running.
+
+Each attempt records the `process_group_id` it spawned, so the recovery pass can kill a command a crash left behind. **It refuses rather than guesses**: a group id is a number the kernel hands out again, so a kill happens only where the attempt started *after* the machine last booted — a pid from before that belongs to nothing this program spawned. An unknown boot time kills nothing. Signalling a stranger's process tree is a worse outcome than leaking a command, so the guard fails closed.
+
+The status is still `Invalid` and not `Aborted` even when the kill succeeds: what the command had done before it died is exactly what nobody knows, and `Aborted` would claim somebody stopped the run.
 
 ## The three levels
 

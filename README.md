@@ -488,9 +488,15 @@ once a second for as long as `serve` lived, and — because a running job run ho
 its job's `max_parallel_runs` slots — a single crashed attempt could stop that job from
 ever running again.
 
-**One thing it does not fix.** After a crash the command's process may still be running:
-the process group id lives only in memory, so nothing killed it. The log line says so.
-`invalid` records the uncertainty, it does not resolve it.
+**The command it left behind is killed on the next start.** Each attempt records the
+process group flowlite spawned for it, so a restart can find a command a crash left
+running and kill the whole tree — the log names the group it killed. What that command had
+already done stays unknown, which is why the run is `invalid` rather than `aborted`.
+
+The kill is refused rather than guessed at in one case: if the attempt started before the
+machine last booted, its recorded group id cannot still be the one it spawned — the number
+has been recycled — so nothing is signalled and the log says the command may still be
+running. Signalling a stranger's process tree is worse than leaking one.
 
 ## UI
 

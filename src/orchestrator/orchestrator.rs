@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use crate::crud::CRUD;
+use crate::orchestrator::recovery::{recover_orphaned_task_run_attempts, system_boot_time};
 use crate::orchestrator::job_run_dispatcher::JobRunDispatcher;
 use crate::orchestrator::job_run_monitor::JobRunMonitor;
 use crate::orchestrator::task_run_attempt_children::TaskRunAttemptChildren;
@@ -51,6 +52,21 @@ impl Orchestrator {
     /// foreground group.
     pub async fn shutdown(self: &Self) {
         self.children.kill_all().await;
+    }
+
+    /// Settles what an earlier run of the program left mid-flight, and kills the processes
+    /// it can prove are still its own.
+    ///
+    /// Must be awaited **before** `start`: `TaskRunAttemptChildren` is empty until a
+    /// dispatcher fills it, so every Running attempt here belongs to a process this run
+    /// does not hold — but once the pollers are going, `TaskRunAttemptMonitor` settles
+    /// those rows without ever reading the group id, and their commands keep running.
+    pub async fn recover(&self) -> anyhow::Result<()> {
+        recover_orphaned_task_run_attempts(
+            &self.crud,
+            &self.conn_pool,
+            system_boot_time(),
+        ).await
     }
 
     /// Spawns every service and returns immediately.
