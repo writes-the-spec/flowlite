@@ -201,7 +201,13 @@ impl TaskRunAttemptDispatcher {
         let task_run = self.get_task_run(task_run_attempt).await?;
         let job_run = self.get_job_run(task_run_attempt).await?;
 
-        let env = build_task_run_attempt_env(&task_run, &job_run, task_run_attempt, &self.app_config.data_dir);
+        let env = build_task_run_attempt_env(
+            &task_run,
+            &job_run,
+            task_run_attempt,
+            &self.app_config.data_dir,
+            &self.app_config.secrets,
+        )?;
 
         let mut command = tokio::process::Command::new("sh");
 
@@ -630,6 +636,56 @@ mod tests {
         assert_eq!(
             read_command_file(&seen_path).await,
             format!("us 1 {}", job_run.id),
+        );
+    }
+
+    /// The leak regression. A secret's value is meant to exist in exactly one place: the
+    /// environment handed to one spawned `sh`. This proves both halves of that at once -
+    /// the resolved value reaches the real command, and it appears nowhere in the
+    /// `task_run` row this attempt was submitted with, read back through CRUD the way any
+    /// other reader of that table would see it.
+    ///
+    /// This is the test that would catch a future refactor moving resolution back to
+    /// submit time - if a secret's value were ever written into the row instead of
+    /// resolved only at spawn, the row's JSON would carry it and this assertion would fail.
+    #[tokio::test]
+    async fn a_secret_reaches_the_command_but_never_the_stored_row() {
+
+        let _environment = reading_the_environment();
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let seen_path = db.data_dir().join("seen.txt");
+
+        let task_run = db.insert_task_run_for_command_with_secret_env(
+            job_run.id,
+            &format!("printf '%s' \"$WAREHOUSE_PW\" > {}", seen_path.display()),
+            [("WAREHOUSE_PW".to_string(), "warehouse_pw".to_string())].into_iter().collect(),
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            1,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        db.task_run_attempt_dispatcher_with_secrets(
+            [("warehouse_pw".to_string(), "hunter2".to_string())].into_iter().collect(),
+        )
+            .handle(&task_run_attempt)
+            .await
+            .unwrap();
+
+        assert_eq!(read_command_file(&seen_path).await, "hunter2");
+
+        let stored_row = db.task_run(task_run.id).await;
+        let stored_json = serde_json::to_string(&stored_row).unwrap();
+
+        assert!(
+            !stored_json.contains("hunter2"),
+            "the secret value leaked into the stored task_run row: {stored_json}",
         );
     }
 

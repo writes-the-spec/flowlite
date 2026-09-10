@@ -13,17 +13,42 @@ use crate::crud::task_run_attempt::TaskRunAttempt;
 /// `FLOWLITE_` variable a command sees is one this function put there, and nothing here
 /// can be defeated by what the server happened to be started with.
 ///
-/// The three layers are applied in the order the design fixes: the task's own env:, then
-/// the run's parameters, then the run metadata. Metadata is last so nothing a user writes
-/// can make a command lie about which run it belongs to.
+/// The four layers are applied in the order the design fixes: the task's own env:, then
+/// its resolved secrets, then the run's parameters, then the run metadata. A secret comes
+/// after env: so a plain value can never shadow a credential, and metadata is last so
+/// nothing a user writes can make a command lie about which run it belongs to.
+///
+/// `secrets` is the whole configured map, keyed by secret name rather than by variable
+/// name - `task_run.secret_env` is the other half, variable name to secret name, and the
+/// two are joined here. This is the one place in the codebase a secret's value exists
+/// outside its own config, and only for as long as it takes to build this map for one
+/// spawn.
 pub fn build_task_run_attempt_env(
     task_run: &TaskRun,
     job_run: &JobRun,
     task_run_attempt: &TaskRunAttempt,
     data_dir: &str,
-) -> BTreeMap<String, String> {
+    secrets: &BTreeMap<String, String>,
+) -> anyhow::Result<BTreeMap<String, String>> {
 
     let mut env = task_run.env.0.clone();
+
+    for (name, secret_name) in task_run.secret_env.0.iter() {
+        // A backstop, not the primary check: Task 5 adds a startup check in `serve` that
+        // resolves every secret_env name against the configured secrets before a job can
+        // be served at all, which makes this unreachable for a served job. It still has
+        // to fail loudly here, naming both sides, for whatever reaches this function
+        // without having gone through that check.
+        let value = secrets.get(secret_name).ok_or_else(|| anyhow::anyhow!(
+            "Task run attempt {} needs environment variable '{}' from secret '{}', but no \
+             such secret is configured",
+            task_run_attempt.id,
+            name,
+            secret_name,
+        ))?;
+
+        env.insert(name.clone(), value.clone());
+    }
 
     for (name, value) in job_run.parameters.0.iter() {
         env.insert(parameter_env_name(name), value.clone());
@@ -50,7 +75,7 @@ pub fn build_task_run_attempt_env(
         env.remove("FLOWLITE_SCHEDULED_AT");
     }
 
-    env
+    Ok(env)
 }
 
 fn parameter_env_name(name: &str) -> String {
@@ -108,6 +133,14 @@ mod tests {
         }
     }
 
+    /// The fixture above plus a `secret_env` mapping, for the tests that resolve one.
+    fn task_run_with_secret_env(env: BTreeMap<String, String>, secret_env: BTreeMap<String, String>) -> TaskRun {
+        TaskRun {
+            secret_env: sqlx::types::Json(secret_env),
+            ..task_run(env)
+        }
+    }
+
     fn task_run_attempt() -> TaskRunAttempt {
         TaskRunAttempt {
             id: 13,
@@ -131,7 +164,8 @@ mod tests {
             &job_run(map(&[]), None),
             &task_run_attempt(),
             "/srv/flowlite",
-        );
+            &BTreeMap::new(),
+        ).unwrap();
 
         assert_eq!(env.get("PYTHONUNBUFFERED").unwrap(), "1");
     }
@@ -146,7 +180,8 @@ mod tests {
             &job_run(map(&[]), None),
             &task_run_attempt(),
             "/srv/flowlite",
-        );
+            &BTreeMap::new(),
+        ).unwrap();
 
         assert_eq!(env.get("FLOWLITE_DATA_DIR").unwrap(), "/srv/flowlite");
     }
@@ -158,7 +193,8 @@ mod tests {
             &job_run(map(&[("region", "us")]), None),
             &task_run_attempt(),
             "/srv/flowlite",
-        );
+            &BTreeMap::new(),
+        ).unwrap();
 
         assert_eq!(env.get("FLOWLITE_PARAM_REGION").unwrap(), "us");
     }
@@ -172,7 +208,8 @@ mod tests {
             &job_run(map(&[("region", "us")]), None),
             &task_run_attempt(),
             "/srv/flowlite",
-        );
+            &BTreeMap::new(),
+        ).unwrap();
 
         assert_eq!(env.get("FLOWLITE_PARAM_REGION").unwrap(), "us");
     }
@@ -186,7 +223,8 @@ mod tests {
             &job_run(map(&[]), None),
             &task_run_attempt(),
             "/srv/flowlite",
-        );
+            &BTreeMap::new(),
+        ).unwrap();
 
         assert_eq!(env.get("FLOWLITE_JOB_RUN_ID").unwrap(), "7");
     }
@@ -201,7 +239,8 @@ mod tests {
             &job_run(map(&[("job_run_id", "999")]), None),
             &task_run_attempt(),
             "/srv/flowlite",
-        );
+            &BTreeMap::new(),
+        ).unwrap();
 
         assert_eq!(env.get("FLOWLITE_PARAM_JOB_RUN_ID").unwrap(), "999");
         assert_eq!(env.get("FLOWLITE_JOB_RUN_ID").unwrap(), "7");
@@ -214,7 +253,8 @@ mod tests {
             &job_run(map(&[]), None),
             &task_run_attempt(),
             "/srv/flowlite",
-        );
+            &BTreeMap::new(),
+        ).unwrap();
 
         assert_eq!(env.get("FLOWLITE_JOB_ID").unwrap(), "daily-etl");
         assert_eq!(env.get("FLOWLITE_JOB_RUN_ID").unwrap(), "7");
@@ -235,7 +275,8 @@ mod tests {
             &job_run(map(&[]), Some(scheduled_at)),
             &task_run_attempt(),
             "/srv/flowlite",
-        );
+            &BTreeMap::new(),
+        ).unwrap();
 
         assert!(env.get("FLOWLITE_SCHEDULED_AT").unwrap().starts_with("2026-09-08T03:00:00"));
     }
@@ -249,7 +290,8 @@ mod tests {
             &job_run(map(&[]), None),
             &task_run_attempt(),
             "/srv/flowlite",
-        );
+            &BTreeMap::new(),
+        ).unwrap();
 
         assert!(!env.contains_key("FLOWLITE_SCHEDULED_AT"));
     }
@@ -264,8 +306,73 @@ mod tests {
             &job_run(map(&[]), None),
             &task_run_attempt(),
             "/srv/flowlite",
-        );
+            &BTreeMap::new(),
+        ).unwrap();
 
         assert!(!env.contains_key("FLOWLITE_SCHEDULED_AT"));
+    }
+
+    #[test]
+    fn a_secret_is_resolved_into_the_environment() {
+        let env = build_task_run_attempt_env(
+            &task_run_with_secret_env(map(&[]), map(&[("WAREHOUSE_PW", "warehouse_pw")])),
+            &job_run(map(&[]), None),
+            &task_run_attempt(),
+            "/srv/flowlite",
+            &map(&[("warehouse_pw", "hunter2")]),
+        ).unwrap();
+
+        assert_eq!(env.get("WAREHOUSE_PW").unwrap(), "hunter2");
+    }
+
+    /// The layer order the design fixes: a resolved secret is applied after the task's own
+    /// env:, so a plain env: value cannot shadow a credential.
+    #[test]
+    fn a_secret_wins_a_colliding_env_value() {
+        let env = build_task_run_attempt_env(
+            &task_run_with_secret_env(
+                map(&[("WAREHOUSE_PW", "not_a_secret")]),
+                map(&[("WAREHOUSE_PW", "warehouse_pw")]),
+            ),
+            &job_run(map(&[]), None),
+            &task_run_attempt(),
+            "/srv/flowlite",
+            &map(&[("warehouse_pw", "hunter2")]),
+        ).unwrap();
+
+        assert_eq!(env.get("WAREHOUSE_PW").unwrap(), "hunter2");
+    }
+
+    /// The YAML layer rejects a `secret_env` name starting with `FLOWLITE_`, so this
+    /// collision cannot arise from a real job - but the layering order still has to hold
+    /// under it, since injected metadata is what the whole map is applied over.
+    #[test]
+    fn injected_metadata_still_wins_a_colliding_secret() {
+        let env = build_task_run_attempt_env(
+            &task_run_with_secret_env(map(&[]), map(&[("FLOWLITE_JOB_RUN_ID", "warehouse_pw")])),
+            &job_run(map(&[]), None),
+            &task_run_attempt(),
+            "/srv/flowlite",
+            &map(&[("warehouse_pw", "hunter2")]),
+        ).unwrap();
+
+        assert_eq!(env.get("FLOWLITE_JOB_RUN_ID").unwrap(), "7");
+    }
+
+    /// A backstop, not the primary check - Task 5 adds a startup check in `serve` that
+    /// makes this unreachable for a served job. It still has to fail loudly here, naming
+    /// both sides, for whatever reaches this function without having gone through it.
+    #[test]
+    fn a_secret_with_no_value_is_an_error_naming_both() {
+        let error = build_task_run_attempt_env(
+            &task_run_with_secret_env(map(&[]), map(&[("WAREHOUSE_PW", "warehouse_pw")])),
+            &job_run(map(&[]), None),
+            &task_run_attempt(),
+            "/srv/flowlite",
+            &BTreeMap::new(),
+        ).unwrap_err().to_string();
+
+        assert!(error.contains("WAREHOUSE_PW"), "{error}");
+        assert!(error.contains("warehouse_pw"), "{error}");
     }
 }

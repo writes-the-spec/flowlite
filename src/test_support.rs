@@ -181,6 +181,23 @@ impl TestDb {
         )
     }
 
+    /// The same dispatcher, over a config carrying the given secrets - `app_config()`
+    /// otherwise always answers an empty map, since nothing under test configures a
+    /// `[secrets]` section of its own. Follows `notification_service_with_slack`'s
+    /// pattern: the one field a test needs is overridden on top of the real config.
+    pub fn task_run_attempt_dispatcher_with_secrets(&self, secrets: BTreeMap<String, String>) -> TaskRunAttemptDispatcher {
+        TaskRunAttemptDispatcher::new(
+            self.crud.clone(),
+            self.conn_pool.clone(),
+            self.children.clone(),
+            self.signals.clone(),
+            AppConfig {
+                secrets,
+                ..self.app_config()
+            },
+        )
+    }
+
     pub fn task_run_attempt_monitor(&self) -> TaskRunAttemptMonitor {
         TaskRunAttemptMonitor::new(
             self.crud.clone(),
@@ -304,6 +321,39 @@ impl TestDb {
                     env,
                     secret_env: BTreeMap::new(),
                     working_dir: working_dir.to_string(),
+                    status: TaskRunStatus::Running,
+                },
+            },
+        ).await.unwrap();
+
+        self.task_run(id).await
+    }
+
+    /// A task run carrying a command plus a `secret_env` mapping, for the leak regression -
+    /// separate from `insert_task_run_for_command_with_env` because that helper's env is
+    /// always literals, and the two must never be conflated with a stored secret name.
+    pub async fn insert_task_run_for_command_with_secret_env(
+        &self,
+        job_run_id: i64,
+        command: &str,
+        secret_env: BTreeMap<String, String>,
+    ) -> TaskRun {
+
+        let id = self.crud.insert_task_run(
+            &*self.conn_pool,
+            &InsertTaskRunData {
+                input: InsertTaskRunDataInput {
+                    job_run_id,
+                    job_id: "job".to_string(),
+                    task_id: format!("task-{}", uuid::Uuid::new_v4()),
+                    command: command.to_string(),
+                    depends_on: Vec::new(),
+                    timeout: 3600,
+                    max_retries: 0,
+                    retry_delay: 60,
+                    env: BTreeMap::new(),
+                    secret_env,
+                    working_dir: String::new(),
                     status: TaskRunStatus::Running,
                 },
             },
