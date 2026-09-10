@@ -1,5 +1,6 @@
 use clap::Args;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use crate::router::app::app::create_router;
@@ -12,6 +13,7 @@ use crate::orchestrator::Orchestrator;
 use crate::poller::Poller;
 use crate::scheduler::Scheduler;
 use crate::signals::Signals;
+use crate::serve_state::{write_state, ServeLock, ServeState};
 
 #[derive(Args)]
 pub struct ServeCmd {
@@ -25,6 +27,14 @@ pub struct ServeCmd {
 
 impl ServeCmd {
     pub async fn run(&self, toolkit: Toolkit) -> anyhow::Result<()> {
+        let data_dir = PathBuf::from(&toolkit.app_config.data_dir);
+
+        // Taken before the pool is opened, so a second serve on this directory stops here
+        // rather than racing this one through sqlx::migrate! - and, more importantly, so
+        // two Schedulers cannot both advance one schedule's next_run and fire every cron
+        // twice. Bound to a name so it lives as long as the server: `let _` would release
+        // it here.
+        let _serve_lock = ServeLock::acquire(&data_dir)?;
 
         let toolkit = Arc::new(toolkit);
 
@@ -103,9 +113,27 @@ impl ServeCmd {
         let router = create_router(app_state);
 
         let addr: SocketAddr = format!("{}:{}", self.address, self.port).parse()?;
-        println!("Listening on http://{}", addr);
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
+
+        // Off the listener rather than off the flags, so `--port 0` reports the port it
+        // was actually given.
+        let bound = listener.local_addr()?;
+
+        // Written after the bind, so that a directory reported as served is one whose
+        // port is accepting.
+        write_state(&data_dir, &ServeState {
+            pid: std::process::id(),
+            address: bound.ip().to_string(),
+            port: bound.port(),
+            started_at: chrono::Utc::now(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        })?;
+
+        // After the bind too, which it should always have been: it claimed to be
+        // listening before it was.
+        println!("Listening on http://{}", bound);
+
         axum::serve(listener, router)
             .with_graceful_shutdown(shutdown_signal())
             .await?;
@@ -136,5 +164,41 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {}
         _ = terminate => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_config::AppConfig;
+    use crate::serve_state::ServeLock;
+
+    fn temp_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("flowlite-serve-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn toolkit_for(data_dir: &Path) -> Toolkit {
+        Toolkit::new(AppConfig {
+            data_dir: data_dir.to_string_lossy().into_owned(),
+            ..AppConfig::default()
+        })
+    }
+
+    /// The lock is taken before the pool is opened, so this fails without ever running a
+    /// migration or binding a port - which is what makes it safe to assert on here.
+    #[tokio::test]
+    async fn a_second_serve_on_one_data_dir_is_refused_naming_the_directory() {
+        let dir = temp_dir();
+
+        let _held = ServeLock::acquire(&dir).unwrap();
+
+        let cmd = ServeCmd { address: "127.0.0.1".to_string(), port: 0 };
+
+        let error = cmd.run(toolkit_for(&dir)).await.unwrap_err().to_string();
+
+        assert!(error.contains("already"), "{error}");
+        assert!(error.contains(&dir.to_string_lossy().to_string()), "{error}");
     }
 }
