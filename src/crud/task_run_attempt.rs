@@ -112,6 +112,7 @@ pub struct UpdateTaskRunAttemptsDataInput {
     pub status: Option<TaskRunAttemptStatus>,
     pub started_at: Option<Option<DateTime<Utc>>>,
     pub finished_at: Option<Option<DateTime<Utc>>>,
+    pub process_group_id: Option<Option<i64>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -138,6 +139,10 @@ pub struct TaskRunAttempt {
     pub finished_at: Option<DateTime<Utc>>,
     pub attempt: u32,
     pub status: TaskRunAttemptStatus,
+    /// The spawned child's pid, which `process_group(0)` makes its group id too. Kept on
+    /// the row because `TaskRunAttemptChildren` is memory: after a restart this is the only
+    /// way back to a process that may still be running.
+    pub process_group_id: Option<i64>,
 }
 
 impl CRUD {
@@ -166,7 +171,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, task_run_id, job_run_id, job_id, task_id, created_at, started_at, finished_at, attempt, status FROM task_run_attempt WHERE 1=1"
+            "SELECT id, task_run_id, job_run_id, job_id, task_id, created_at, started_at, finished_at, attempt, status, process_group_id FROM task_run_attempt WHERE 1=1"
         );
 
         if let Some(task_run_id) = data.filter.task_run_id {
@@ -231,7 +236,16 @@ impl CRUD {
             separated.push_bind_unseparated(finished_at);
         }
 
-        if data.input.status.is_none() && data.input.started_at.is_none() && data.input.finished_at.is_none() {
+        if let Some(process_group_id) = &data.input.process_group_id {
+            separated.push("process_group_id = ");
+            separated.push_bind_unseparated(process_group_id);
+        }
+
+        if data.input.status.is_none()
+            && data.input.started_at.is_none()
+            && data.input.finished_at.is_none()
+            && data.input.process_group_id.is_none()
+        {
             return Ok(());
         }
 
@@ -266,5 +280,37 @@ mod tests {
     #[test]
     fn an_invalid_attempt_does_not_report_a_stop() {
         assert!(!TaskRunAttemptStatus::Invalid.is_stopped());
+    }
+
+    /// The group id is how a restart reaches a process the map no longer holds, so it has
+    /// to survive on the row rather than in memory.
+    #[tokio::test]
+    async fn a_process_group_id_is_written_and_read_back() {
+
+        let db = crate::test_support::TestDb::new().await;
+
+        let job_run = db.insert_job_run(crate::crud::job_run::JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, crate::crud::task_run::TaskRunStatus::Running).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
+
+        assert_eq!(task_run_attempt.process_group_id, None);
+
+        db.crud.update_task_run_attempts(
+            &*db.conn_pool,
+            &UpdateTaskRunAttemptsData {
+                filter: UpdateTaskRunAttemptsDataFilter {
+                    id: Some(task_run_attempt.id),
+                    task_run_id: None,
+                },
+                input: UpdateTaskRunAttemptsDataInput {
+                    status: None,
+                    started_at: None,
+                    finished_at: None,
+                    process_group_id: Some(Some(4242)),
+                },
+            },
+        ).await.unwrap();
+
+        assert_eq!(db.task_run_attempt(task_run_attempt.id).await.process_group_id, Some(4242));
     }
 }

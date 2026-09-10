@@ -450,6 +450,7 @@ impl TaskRunAttemptMonitor {
                     status: Some(status),
                     started_at: None,
                     finished_at: Some(Some(Utc::now())),
+                    process_group_id: None,
                 },
             },
         ).await?;

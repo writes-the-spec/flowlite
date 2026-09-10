@@ -108,6 +108,7 @@ mod tests {
             started_at: None,
             finished_at: None,
             status: TaskRunAttemptStatus::Pending,
+            process_group_id: None,
         }
     }
 

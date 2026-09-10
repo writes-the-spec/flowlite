@@ -612,6 +612,7 @@ mod tests {
             finished_at: Some(Utc::now()),
             attempt: number,
             status: TaskRunAttemptStatus::Failed,
+            process_group_id: None,
         }
     }
 

@@ -94,6 +94,7 @@ impl TaskRunAttemptDispatcher {
                     status: Some(TaskRunAttemptStatus::Invalid),
                     started_at: None,
                     finished_at: Some(Some(Utc::now())),
+                    process_group_id: None,
                 },
             },
         ).await?;
@@ -132,6 +133,7 @@ impl TaskRunAttemptDispatcher {
                     status: Some(TaskRunAttemptStatus::Invalid),
                     started_at: None,
                     finished_at: Some(Some(Utc::now())),
+                    process_group_id: None,
                 },
             },
         ).await?;
@@ -161,6 +163,7 @@ impl TaskRunAttemptDispatcher {
                     status: Some(TaskRunAttemptStatus::Skipped),
                     started_at: None,
                     finished_at: Some(Some(Utc::now())),
+                    process_group_id: None,
                 },
             },
         ).await?;
@@ -232,9 +235,11 @@ impl TaskRunAttemptDispatcher {
             format!("'{}'", task_run.working_dir)
         };
 
+        let started_at = Utc::now();
+
         // Recorded before the spawn, not after: a crash between the two leaves a pending
         // attempt whose command is running, and `settle_as_invalid` reads this to refuse to
-        // start it again. The instant is the command's own start either way.
+        // start it again.
         self.crud.update_task_run_attempts(
             &*self.conn_pool,
             &UpdateTaskRunAttemptsData {
@@ -244,8 +249,9 @@ impl TaskRunAttemptDispatcher {
                 },
                 input: UpdateTaskRunAttemptsDataInput {
                     status: None,
-                    started_at: Some(Some(Utc::now())),
+                    started_at: Some(Some(started_at)),
                     finished_at: None,
+                    process_group_id: None,
                 },
             },
         ).await?;
@@ -273,6 +279,7 @@ impl TaskRunAttemptDispatcher {
                             status: None,
                             started_at: Some(None),
                             finished_at: None,
+                            process_group_id: None,
                         },
                     },
                 ).await?;
@@ -286,7 +293,6 @@ impl TaskRunAttemptDispatcher {
         let stderr = child.stderr.take()
             .ok_or_else(|| anyhow::anyhow!("Failed to get stderr of task: {}", task_run_attempt.task_id))?;
 
-        let started_at = Utc::now();
         let times_out_at = started_at + TimeDelta::seconds(task_run.timeout as i64);
 
         let (chunks_sender, chunks) = tokio::sync::mpsc::unbounded_channel();
@@ -310,6 +316,10 @@ impl TaskRunAttemptDispatcher {
             )),
         ];
 
+        // The group id is this child's pid, `process_group(0)` having made it a group
+        // leader. Read before the child moves into the map, where ownership of it ends.
+        let process_group_id = child.id().map(|pid| pid as i64);
+
         let running_task_run_attempt = TaskRunAttemptChild {
             child,
             chunks,
@@ -328,8 +338,9 @@ impl TaskRunAttemptDispatcher {
                 },
                 input: UpdateTaskRunAttemptsDataInput {
                     status: Some(TaskRunAttemptStatus::Running),
-                    started_at: Some(Some(started_at)),
+                    started_at: None,
                     finished_at: None,
+                    process_group_id: Some(process_group_id),
                 },
             },
         ).await?;
@@ -792,5 +803,29 @@ mod tests {
 
         assert_eq!(after.status, TaskRunAttemptStatus::Pending);
         assert!(after.started_at.is_none(), "a failed spawn left the attempt looking spawned");
+    }
+
+    /// Recorded on the row, because `TaskRunAttemptChildren` is memory: after a restart the
+    /// group id is the only way back to a process still running.
+    #[tokio::test]
+    async fn starting_an_attempt_records_its_process_group() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run_for_command(job_run.id, "exec sleep 30", 3600).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
+
+        let mut child = db.children.remove(task_run_attempt.id).await.unwrap();
+        let pid = child.child.id().unwrap() as i64;
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.process_group_id,
+            Some(pid),
+        );
+
+        child.kill_process_group().await;
     }
 }
