@@ -217,9 +217,15 @@ impl TaskRunAttemptDispatcher {
         // FLOWLITE_SMTP__PASSWORD=... flowlite serve, would otherwise be readable by every
         // command flowlite spawns. Stripped before the overlay is applied, so the names
         // build_task_run_attempt_env means a command to have are put back by it.
-        for (name, _) in std::env::vars() {
-            if name.starts_with("FLOWLITE_") {
-                command.env_remove(name);
+        //
+        // `vars_os`, not `vars`: an environment is bytes, and `vars` panics on a name or
+        // value it cannot decode as UTF-8. This walk is in the spawn path, so one
+        // undecodable variable anywhere in the server's environment - nothing to do with
+        // flowlite - would turn every task spawn into a panic. The prefix is ASCII, so
+        // matching it against the raw bytes needs no decoding at all.
+        for (name, _) in std::env::vars_os() {
+            if name.as_encoded_bytes().starts_with(b"FLOWLITE_") {
+                command.env_remove(&name);
             }
         }
 
@@ -475,6 +481,7 @@ mod tests {
     use crate::test_support::TestDb;
     use crate::test_support::read_command_file;
     use crate::test_support::{reading_the_environment, writing_the_environment};
+    use std::os::unix::ffi::OsStringExt;
 
     /// Calls `settle_as_pending` rather than the whole chain on purpose: falling through it
     /// spawns a real process, which is what these tests are about avoiding.
@@ -740,6 +747,51 @@ mod tests {
         }
 
         assert_eq!(seen, "|");
+    }
+
+    /// The strip walks the whole environment, and an environment is bytes rather than
+    /// UTF-8 - `std::env::vars()` panics on a variable it cannot decode. Nothing about
+    /// such a variable concerns flowlite, but the walk is in the spawn path, so one of
+    /// them anywhere in the server's environment would turn every task spawn into a
+    /// panic rather than a failed task.
+    #[tokio::test]
+    async fn a_non_utf8_variable_in_the_servers_environment_does_not_stop_a_spawn() {
+
+        let _environment = writing_the_environment();
+
+        // A name no valid UTF-8 can spell. Not FLOWLITE_-prefixed: the walk reads every
+        // name before it looks at the prefix, so any one of them is enough.
+        let name = std::ffi::OsString::from_vec(b"NOT_UTF8_\xff".to_vec());
+
+        unsafe { std::env::set_var(&name, "x") };
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let seen_path = db.data_dir().join("seen.txt");
+
+        let task_run = db.insert_task_run_for_command_with_env(
+            job_run.id,
+            &format!("printf ok > {}", seen_path.display()),
+            std::collections::BTreeMap::new(),
+            "",
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            1,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        let handled = db.task_run_attempt_dispatcher().handle(&task_run_attempt).await;
+
+        // Before the assert, so a failure does not leave it set for whatever runs next.
+        unsafe { std::env::remove_var(&name) };
+
+        handled.unwrap();
+
+        assert_eq!(read_command_file(&seen_path).await, "ok");
     }
 
     /// The companion of the strip: the data directory is the one FLOWLITE_ variable a task
