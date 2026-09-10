@@ -8,6 +8,7 @@ One [`task`](task.md) within one [`job_run`](job_run.md) — and **the config th
 | `job_run_id` | Foreign key to [`job_run`](job_run.md). |
 | `job_id`, `task_id` | Which task this is a run of. No foreign key — the task is in `mem`. |
 | `command`, `depends_on`, `timeout`, `max_retries`, `retry_delay`, `env`, `working_dir` | **The snapshot.** Copied off `mem.task` by `submit_job`; see below. `env` is the exception to "copied": it is `mem.job.env` with `mem.task.env` layered over it, so the row holds the merged environment rather than either declaration. |
+| `secret_env` | The same kind of exception as `env`: `mem.job.secret_env` with `mem.task.secret_env` layered over it — environment variable name to secret name, never a value. Nullable, unlike every other column here: `NULL` only for a row inserted before this column existed, a genuine distinct state rather than a second spelling of `'{}'`. Every row `submit_job`/`rerun_job` insert now writes a map, so `NULL` never appears on a run submitted after this column landed. |
 | `created_at` | Bound from `Toolkit`. |
 | `started_at` | Nullable. Written once, when the task run starts — it means "when the task run started", covering every attempt, not "when the current attempt started". |
 | `finished_at` | Nullable. Written with every terminal status. |

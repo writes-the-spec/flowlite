@@ -13,6 +13,7 @@ One row per task of a job, declared inline under the job YAML's `tasks:` list. L
 | `max_retries` | Retries *after* the first attempt, so executions total `1 + max_retries`. Defaults to 0. |
 | `retry_delay` | Seconds to wait before each retry. Defaults to 60. |
 | `env` | `NOT NULL`, `'{}'` when the task declares none. Environment variables layered onto the command's, over whatever flowlite itself inherited. |
+| `secret_env` | `NOT NULL`, `'{}'` when the task declares none. Environment variable name to secret name — never a value — layered over the job's own `secret_env:` the same way `env` is. |
 | `working_dir` | `NOT NULL`, `''` meaning inherit the server's own working directory. |
 
 ## Written by
@@ -23,7 +24,7 @@ Each task's dependency list is written to **two** places from the same source: `
 
 ## Read by
 
-- `CRUD::submit_job` — copies `command`, `depends_on`, `timeout`, `max_retries`, `retry_delay`, `env` and `working_dir` onto every `task_run` it inserts. This is the snapshot the orchestrator then runs on. `description` is not copied: a run snapshots what it executes, and prose is not that.
+- `CRUD::submit_job` — copies `command`, `depends_on`, `timeout`, `max_retries`, `retry_delay`, `env`, `secret_env` and `working_dir` onto every `task_run` it inserts. This is the snapshot the orchestrator then runs on. `description` is not copied: a run snapshots what it executes, and prose is not that.
 - The jobs and job-detail web routes, including the DAG ([src/router/app/routes/jobs/job_id/dag.rs](../../../../src/router/app/routes/jobs/job_id/dag.rs)), which describe the job **as defined now** rather than any run of it. The job page's task table lists `description`; the task page, `/jobs/{job_id}/tasks/{task_id}` ([src/router/app/routes/jobs/job_id/task_id/route.rs](../../../../src/router/app/routes/jobs/job_id/task_id/route.rs)), is the only place `command`, `env` and `working_dir` are shown as declared.
 
 **No orchestrator file reads this table.** Every config field a service acts on comes off `task_run`. Editing the YAML changes what future runs are submitted with and nothing about the runs already in flight — and equally, a wrong value is frozen onto every run submitted after the edit rather than fixable by editing the YAML back.

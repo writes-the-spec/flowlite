@@ -101,6 +101,7 @@ impl CRUD {
                                 .unwrap_or(job_defaults.max_parallel_runs),
                             parameters: job_yaml.parameters.clone(),
                             env: job_yaml.env.clone(),
+                            secret_env: job_yaml.secret_env.clone(),
                             on_failure_recipients: job_notify_recipients(&job_yaml.on_failure),
                             on_success_recipients: job_notify_recipients(&job_yaml.on_success),
                         }
@@ -129,6 +130,7 @@ impl CRUD {
                                 retry_delay: task_yaml.retry_delay
                                     .unwrap_or(job_defaults.retry_delay_seconds),
                                 env: task_yaml.env.clone(),
+                                secret_env: task_yaml.secret_env.clone(),
                                 working_dir: task_yaml.working_dir.clone(),
                             }
                         })

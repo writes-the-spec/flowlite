@@ -6,6 +6,7 @@ CREATE TABLE job (
     max_parallel_runs INTEGER NOT NULL,
     parameters TEXT NOT NULL,
     env TEXT NOT NULL,
+    secret_env TEXT NOT NULL,
     on_failure_recipients TEXT NOT NULL,
     on_success_recipients TEXT NOT NULL,
 

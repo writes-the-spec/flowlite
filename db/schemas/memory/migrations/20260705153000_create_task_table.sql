@@ -9,6 +9,7 @@ CREATE TABLE task (
     max_retries INTEGER NOT NULL,
     retry_delay INTEGER NOT NULL,
     env TEXT NOT NULL,
+    secret_env TEXT NOT NULL,
     working_dir TEXT NOT NULL,
     PRIMARY KEY (task_id, job_id),
     FOREIGN KEY (job_id) REFERENCES job (job_id),

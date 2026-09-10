@@ -87,6 +87,7 @@ pub struct InsertTaskRunDataInput {
     pub max_retries: u32,
     pub retry_delay: u32,
     pub env: BTreeMap<String, String>,
+    pub secret_env: BTreeMap<String, String>,
     pub working_dir: String,
     pub status: TaskRunStatus,
 }
@@ -149,6 +150,10 @@ pub struct TaskRun {
     pub max_retries: u32,
     pub retry_delay: u32,
     pub env: sqlx::types::Json<BTreeMap<String, String>>,
+    /// Environment variable name to secret name - never a value. `NULL` only for a run
+    /// submitted before this column existed - the insert always writes a map, so it is
+    /// never a second spelling of empty.
+    pub secret_env: Option<sqlx::types::Json<BTreeMap<String, String>>>,
     pub working_dir: String,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
@@ -162,7 +167,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO task_run (job_run_id, job_id, task_id, command, depends_on, timeout, max_retries, retry_delay, env, working_dir, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO task_run (job_run_id, job_id, task_id, command, depends_on, timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(data.input.job_run_id)
             .bind(&data.input.job_id)
@@ -173,6 +178,7 @@ impl CRUD {
             .bind(data.input.max_retries)
             .bind(data.input.retry_delay)
             .bind(sqlx::types::Json(&data.input.env))
+            .bind(sqlx::types::Json(&data.input.secret_env))
             .bind(&data.input.working_dir)
             .bind(self.toolkit.get_current_ts())
             .bind(&data.input.status)
@@ -195,7 +201,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, job_run_id, job_id, task_id, command, depends_on, timeout, max_retries, retry_delay, env, working_dir, created_at, started_at, finished_at, status FROM task_run WHERE 1=1"
+            "SELECT id, job_run_id, job_id, task_id, command, depends_on, timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, started_at, finished_at, status FROM task_run WHERE 1=1"
         );
 
         if let Some(id) = data.filter.id {

@@ -14,6 +14,7 @@ pub struct InsertTaskDataInput {
     pub max_retries: u32,
     pub retry_delay: u32,
     pub env: BTreeMap<String, String>,
+    pub secret_env: BTreeMap<String, String>,
     pub working_dir: String,
 }
 
@@ -53,6 +54,8 @@ pub struct Task {
     pub max_retries: u32,
     pub retry_delay: u32,
     pub env: sqlx::types::Json<BTreeMap<String, String>>,
+    /// Environment variable name to secret name - never a value. See `JobYamlTask::secret_env`.
+    pub secret_env: sqlx::types::Json<BTreeMap<String, String>>,
     pub working_dir: String,
 }
 
@@ -63,7 +66,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         sqlx::query(
-            "INSERT INTO mem.task (row_id, task_id, job_id, description, command, depends_on, timeout, max_retries, retry_delay, env, working_dir) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO mem.task (row_id, task_id, job_id, description, command, depends_on, timeout, max_retries, retry_delay, env, secret_env, working_dir) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(data.input.row_id as i64)
         .bind(&data.input.task_id)
@@ -75,6 +78,7 @@ impl CRUD {
         .bind(&data.input.max_retries)
         .bind(&data.input.retry_delay)
         .bind(sqlx::types::Json(&data.input.env))
+        .bind(sqlx::types::Json(&data.input.secret_env))
         .bind(&data.input.working_dir)
         .execute(executor)
         .await?;
@@ -86,7 +90,7 @@ impl CRUD {
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
-        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT task_id, job_id, description, command, depends_on, timeout, max_retries, retry_delay, env, working_dir FROM mem.task WHERE 1=1");
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT task_id, job_id, description, command, depends_on, timeout, max_retries, retry_delay, env, secret_env, working_dir FROM mem.task WHERE 1=1");
 
         if let Some(task_id) = &data.filter.task_id {
             query_builder.push(" AND task_id = ");
