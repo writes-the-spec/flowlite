@@ -34,17 +34,37 @@ pub fn build_task_run_attempt_env(
     let mut env = task_run.env.0.clone();
 
     for (name, secret_name) in task_run.secret_env.0.iter() {
-        // A backstop, not the primary check: Task 5 adds a startup check in `serve` that
-        // resolves every secret_env name against the configured secrets before a job can
-        // be served at all, which makes this unreachable for a served job. It still has
-        // to fail loudly here, naming both sides, for whatever reaches this function
-        // without having gone through that check.
+        // A backstop, not the primary check: `serve` resolves every secret_env name
+        // against the configured secrets at startup, so this cannot fire for a run whose
+        // declaration that check saw. Two ordinary paths still reach it. A rerun replays
+        // the old row's secret_env, so a `secret_env:` entry dropped from the YAML - and
+        // its secret from the config - leaves a row naming a secret the startup check no
+        // longer reads at all. And `job submit` from a separate process seeds its own
+        // `mem` from the current YAML, so an entry added without restarting `serve` is
+        // unknown to the running server's app_config.
+        //
+        // Nothing leaks either way: this returns before the spawn, so `settle_as_running`
+        // never writes started_at and the attempt stays Pending. But Pending is
+        // re-selected on every poll pass, so this message is what an operator sees
+        // repeating in the log until somebody acts on it - which is why it names the job
+        // and the task rather than only the attempt, and carries the same remedy the
+        // startup error does. The identical argument
+        // `a_spawn_failure_names_the_task_and_the_working_dir` makes for a bad
+        // working_dir.
+        //
+        // The remedy names FLOWLITE_SECRETS__<NAME>, reachable for every name
+        // `is_valid_secret_name` allows - which is why that rule rejects `__`, a sequence
+        // the env form reads as a nested key. Only a row snapshotted before that rule
+        // could still name one, and naming the job and the task points at the YAML to fix
+        // either way.
         let value = secrets.get(secret_name).ok_or_else(|| anyhow::anyhow!(
-            "Task run attempt {} needs environment variable '{}' from secret '{}', but no \
-             such secret is configured",
-            task_run_attempt.id,
-            name,
+            "Job '{}' task '{}' needs secret '{}' for {}, but nothing defines it. Add it \
+             under [secrets] in config.toml, or set FLOWLITE_SECRETS__{}.",
+            task_run.job_id,
+            task_run.task_id,
             secret_name,
+            name,
+            secret_name.to_ascii_uppercase(),
         ))?;
 
         env.insert(name.clone(), value.clone());
@@ -327,6 +347,14 @@ mod tests {
 
     /// The layer order the design fixes: a resolved secret is applied after the task's own
     /// env:, so a plain env: value cannot shadow a credential.
+    ///
+    /// The row below cannot be submitted: `job_run_task_definition` evicts a name from one
+    /// block when the task declares it in the other, so no `task_run` carries one name in
+    /// both `env` and `secret_env`. It is built by hand for the same reason
+    /// `injected_metadata_still_wins_a_colliding_secret` builds an impossible one - the
+    /// order has to hold on its own rather than by the upstream invariant's leave. Read it
+    /// as a property of this function, not as a live collision wanting shadowing logic
+    /// here; that belongs where the two blocks are merged.
     #[test]
     fn a_secret_wins_a_colliding_env_value() {
         let env = build_task_run_attempt_env(
@@ -359,11 +387,16 @@ mod tests {
         assert_eq!(env.get("FLOWLITE_JOB_RUN_ID").unwrap(), "7");
     }
 
-    /// A backstop, not the primary check - Task 5 adds a startup check in `serve` that
-    /// makes this unreachable for a served job. It still has to fail loudly here, naming
-    /// both sides, for whatever reaches this function without having gone through it.
+    /// A backstop for what the startup check in `serve` did not see: a rerun of a row
+    /// whose YAML has since dropped the entry, or a run another process submitted from a
+    /// YAML this server has not read. Neither leaks - `settle_as_running` bails before
+    /// writing `started_at` - but the attempt stays Pending and is re-selected every poll
+    /// pass, so this message is printed for ever until somebody acts on it. It therefore
+    /// has to carry everything acting on it needs: which job and task, which variable and
+    /// secret, and what to do about it. The same argument
+    /// `a_spawn_failure_names_the_task_and_the_working_dir` makes for a bad working_dir.
     #[test]
-    fn a_secret_with_no_value_is_an_error_naming_both() {
+    fn a_secret_with_no_value_names_the_job_the_task_the_variable_the_secret_and_the_remedy() {
         let error = build_task_run_attempt_env(
             &task_run_with_secret_env(map(&[]), map(&[("WAREHOUSE_PW", "warehouse_pw")])),
             &job_run(map(&[]), None),
@@ -372,7 +405,11 @@ mod tests {
             &BTreeMap::new(),
         ).unwrap_err().to_string();
 
+        assert!(error.contains("daily-etl"), "{error}");
+        assert!(error.contains("extract"), "{error}");
         assert!(error.contains("WAREHOUSE_PW"), "{error}");
         assert!(error.contains("warehouse_pw"), "{error}");
+        assert!(error.contains("[secrets] in config.toml"), "{error}");
+        assert!(error.contains("FLOWLITE_SECRETS__WAREHOUSE_PW"), "{error}");
     }
 }
