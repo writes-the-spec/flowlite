@@ -10,6 +10,7 @@ pub mod scheduler;
 pub mod signals;
 pub mod poller;
 pub mod notifications;
+pub mod serve_state;
 
 #[cfg(test)]
 pub mod test_support;
