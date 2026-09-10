@@ -15,7 +15,7 @@ use crate::app_config::ui::AppConfigUi;
 
 /// Everything `config.toml` can say, and the only thing that reads it. One field per
 /// section, each declared in a file of its own beside this one.
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct AppConfig {
     pub data_dir: String,
     #[serde(default)]
@@ -37,8 +37,51 @@ pub struct AppConfig {
     /// Secret values a job's `secret_env:` names, by name. Figment's Toml-then-Env merge
     /// fills this from `[secrets]` in config.toml or from `FLOWLITE_SECRETS__*`, so a
     /// development box can use the file and a real one need not have the value on disk.
-    #[serde(default)]
+    ///
+    /// Deserialized but never serialized. Nothing serializes an `AppConfig` today except
+    /// `load` itself, which feeds `Serialized::defaults(AppConfig::default())` into
+    /// figment as the bottom layer - and the default map is empty, so leaving it out of
+    /// that layer changes nothing. Skipping it is what makes the next writer of a config
+    /// debug route, or of a `serde_json::to_string(&app_config)` anywhere, unable to dump
+    /// every credential at once by accident.
+    #[serde(default, skip_serializing)]
     pub secrets: BTreeMap<String, String>,
+}
+
+/// Manual rather than derived, for the reason `secrets` is not serialized: a single
+/// `eprintln!("{app_config:?}")` added later would otherwise print every credential the
+/// server holds. The names are kept - they are what travels through the database and the
+/// dashboard already, and a redaction that hides which secrets are loaded would make the
+/// one thing this is useful for impossible.
+///
+/// `smtp.password` and `slack.token` carry the same exposure through their own derived
+/// `Debug`, and are deliberately left alone here rather than quietly widening this into
+/// files this change has no other reason to touch.
+impl std::fmt::Debug for AppConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppConfig")
+            .field("data_dir", &self.data_dir)
+            .field("orchestrator", &self.orchestrator)
+            .field("ui", &self.ui)
+            .field("job_defaults", &self.job_defaults)
+            .field("schedule_defaults", &self.schedule_defaults)
+            .field("smtp", &self.smtp)
+            .field("slack", &self.slack)
+            .field("secrets", &RedactedSecrets(&self.secrets))
+            .finish()
+    }
+}
+
+/// Prints a secret map as its names against a fixed marker, so the field reads like the
+/// map it is rather than like a list that could be mistaken for values.
+struct RedactedSecrets<'a>(&'a BTreeMap<String, String>);
+
+impl std::fmt::Debug for RedactedSecrets<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+            .entries(self.0.keys().map(|name| (name, "<redacted>")))
+            .finish()
+    }
 }
 
 impl Default for AppConfig {
@@ -354,5 +397,37 @@ mod tests {
         let config = AppConfig::load(Some(dir)).unwrap();
 
         assert!(config.secrets.is_empty());
+    }
+
+    /// The struct that holds every credential is one `eprintln!("{app_config:?}")` away
+    /// from printing all of them at once. The names stay - they travel through the
+    /// database and the dashboard already, and a config you cannot tell the loaded
+    /// secrets of is not worth printing.
+    #[test]
+    fn a_debug_print_shows_a_secrets_name_but_never_its_value() {
+        let config = AppConfig {
+            secrets: BTreeMap::from([("warehouse_pw".to_string(), "hunter2".to_string())]),
+            ..AppConfig::default()
+        };
+
+        let printed = format!("{config:?}");
+
+        assert!(printed.contains("warehouse_pw"), "{printed}");
+        assert!(!printed.contains("hunter2"), "{printed}");
+    }
+
+    /// The same for the other direction an accident could take: `AppConfig` is
+    /// `Serialize` because `load` feeds its own defaults back into figment, and that
+    /// derive is what a future config route would reach for.
+    #[test]
+    fn a_serialized_config_carries_no_secret_value() {
+        let config = AppConfig {
+            secrets: BTreeMap::from([("warehouse_pw".to_string(), "hunter2".to_string())]),
+            ..AppConfig::default()
+        };
+
+        let serialized = serde_json::to_string(&config).unwrap();
+
+        assert!(!serialized.contains("hunter2"), "{serialized}");
     }
 }
