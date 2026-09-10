@@ -171,9 +171,11 @@ fn validate_secret_env_block(
             anyhow::bail!(
                 "{} names secret '{}' for variable '{}', which is not a valid secret \
                  name. A secret name may contain only lowercase ASCII letters, digits \
-                 and underscores: config.toml can hold other characters, but \
-                 FLOWLITE_SECRETS__* cannot reach them, so the name would work on a \
-                 development box and be unreachable in production.",
+                 and underscores, and may not contain a double underscore: config.toml \
+                 can hold any other character but FLOWLITE_SECRETS__* cannot reach it, \
+                 and __ is the separator that form uses for nested keys, so \
+                 FLOWLITE_SECRETS__A__B sets a.b rather than a__b. Either way the name \
+                 would work on a development box and be unreachable in production.",
                 subject,
                 secret_name,
                 variable_name,
@@ -218,8 +220,19 @@ fn is_valid_env_var_name(name: &str) -> bool {
 /// can only carry the characters an environment variable name can - so a secret name
 /// outside that set would parse from `[secrets]` in `config.toml` on a development box
 /// and never be reachable through the env var form at all.
+///
+/// `__` is rejected for the same reason even though every character in it is allowed:
+/// `AppConfig::load` reads that form as `Env::prefixed("FLOWLITE_").split("__")`, which
+/// figment implements as `key.replace("__", ".")`, so `FLOWLITE_SECRETS__WAREHOUSE__PW`
+/// builds `secrets.warehouse.pw` - a nested map, not the name `warehouse__pw`. Allowing
+/// it would ship exactly the split this rule exists to prevent, and worse: the nested map
+/// makes `AppConfig::load` fail with `invalid type: map, expected a string`, which is
+/// every command in that shell rather than just `serve`, so even `job-run list` would
+/// stop working for an operator who set the variable the error message asked for.
 fn is_valid_secret_name(name: &str) -> bool {
-    !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    !name.is_empty()
+        && !name.contains("__")
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 #[cfg(test)]
@@ -272,6 +285,27 @@ secret_env:
 
         assert!(error.contains("Warehouse-PW"), "{error}");
         assert!(error.contains("production"), "{error}");
+    }
+
+    /// `[a-z0-9_]+` alone does not give the rule its own justification: figment's
+    /// `Env::prefixed("FLOWLITE_").split("__")` is a `key.replace("__", ".")`, so
+    /// `warehouse__pw` is not the name `FLOWLITE_SECRETS__WAREHOUSE__PW` reaches - that
+    /// spelling builds `secrets.warehouse.pw`, a nested map. The name would work from
+    /// config.toml and be unreachable from the environment, which is the case the message
+    /// above warns about, and an operator who set the variable anyway would make
+    /// `AppConfig::load` fail for every command in that shell.
+    #[test]
+    fn a_secret_name_containing_a_double_underscore_is_rejected() {
+        let error = parse_error("
+id: nightly-sync
+name: Nightly Sync
+secret_env:
+  DB_PASSWORD: warehouse__pw
+");
+
+        assert!(error.contains("warehouse__pw"), "{error}");
+        assert!(error.contains("not a valid secret name"), "{error}");
+        assert!(error.contains("__"), "{error}");
     }
 
     #[test]
