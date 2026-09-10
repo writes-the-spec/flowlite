@@ -246,12 +246,16 @@ dashboard shows, and what `--json` returns. The value is looked up once, when th
 spawned, and exists nowhere but that one process's environment — not the database, not a
 page, not a rerun's row.
 
-Four things are refused when a job's YAML is read, before it is ever served:
+Five things are refused when a job's YAML is read, before it is ever served:
 
 - a variable name that is not a valid environment variable name;
 - a secret name outside `[a-z0-9_]+` — `config.toml` can quote a name like `"Warehouse-PW"`,
   but `FLOWLITE_SECRETS__*` cannot reach it, so it is refused rather than shipped as a name
   that works on a development box and not in production;
+- a secret name containing `__`, for the same reason even though every character in it is
+  allowed: `__` is the separator that splits `FLOWLITE_SECRETS__*` into nested keys, so
+  `FLOWLITE_SECRETS__WAREHOUSE__PW` sets `secrets.warehouse.pw` and never the name
+  `warehouse__pw`;
 - a variable name starting with `FLOWLITE_` — run metadata is applied last under that
   prefix and would silently win, leaving the task's credential quietly missing;
 - the same variable name in both `env:` and `secret_env:` **at the same level**. Across
@@ -265,9 +269,11 @@ Invalid Job YAML at /srv/flowlite/jobs/nightly.yaml
 Caused by:
     Job 'nightly-sync' task 'load' names secret 'Warehouse-PW' for variable 'PGPASSWORD',
     which is not a valid secret name. A secret name may contain only lowercase ASCII
-    letters, digits and underscores: config.toml can hold other characters, but
-    FLOWLITE_SECRETS__* cannot reach them, so the name would work on a development box and
-    be unreachable in production.
+    letters, digits and underscores, and may not contain a double underscore: config.toml
+    can hold any other character but FLOWLITE_SECRETS__* cannot reach it, and __ is the
+    separator that form uses for nested keys, so FLOWLITE_SECRETS__A__B sets a.b rather
+    than a__b. Either way the name would work on a development box and be unreachable in
+    production.
 ```
 
 `serve` also refuses to start if a job names a secret that nothing defines — a missing
@@ -724,9 +730,10 @@ FLOWLITE_SECRETS__WAREHOUSE_PW=hunter2 flowlite serve
 ```
 
 The file suits a development box; the environment variable suits a real one, for the same
-reason the SMTP password does. A secret name is restricted to `[a-z0-9_]+` precisely so
-either spelling reaches the same name — `config.toml` can quote a name `FLOWLITE_SECRETS__*`
-could never spell.
+reason the SMTP password does. A secret name is restricted to `[a-z0-9_]+` with no `__` in
+it precisely so either spelling reaches the same name — `config.toml` can quote a name
+`FLOWLITE_SECRETS__*` could never spell, and `__` inside a name is how that form separates
+nested keys rather than part of the name.
 
 `[job_defaults]` and `[schedule_defaults]` fill in what a job's or schedule's YAML leaves
 out, and they are read when the YAML is — at startup. So a task with no `timeout:` takes
@@ -738,22 +745,36 @@ inside it is circular); pass `-D` / `--data-dir` / `FLOWLITE_DATA_DIR`.
 
 ## Upgrading
 
-While flowlite is pre-release, a column is added to an existing table by editing the
-migration that created it rather than by adding a new one. `sqlx` checksums the migrations
-it has already applied, so an existing database refuses to start after such a change, with
-no hint at the remedy:
+flowlite keeps two schemas, and they upgrade differently.
+
+The **memory** schema holds jobs, schedules and tasks, and is rebuilt from your YAML into a
+fresh in-memory database on every start. Nothing has ever persisted one of its migrations,
+so while flowlite is pre-release a change there edits the migration that created the table,
+and an upgrade asks nothing of you.
+
+The **disk** schema holds run history, which outlives the process — so once one of its
+migrations has shipped, a change there is a new file rather than an edit. `sqlx` checksums
+every migration it has applied, and an edited one makes an existing database refuse to
+start, with no hint at the remedy:
 
 ```
 migration 20260703234500 was previously applied but has been modified
 ```
 
-The remedy is to delete the run history and let it be recreated on the next start:
+Upgrading is therefore just starting the new binary: any pending disk migration runs on the
+first start and your history comes through it. The `secret_env` column this release adds to
+`task_run` is the first one to rebuild a table in place, and it carries every existing row
+across. **Do not delete `flowlite.db` as part of an upgrade** — nothing recreates a run.
+
+Deleting it is the remedy for one thing only, the checksum error above, on a database whose
+migration you edited yourself:
 
 ```bash
 rm <data_dir>/flowlite.db
 ```
 
-Only run history is lost — jobs and schedules are read from the YAML on every start.
+Jobs and schedules survive that, since they are read from the YAML on every start. The run
+history does not.
 
 ## Status
 
