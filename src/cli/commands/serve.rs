@@ -49,6 +49,17 @@ impl ServeCmd {
 
         crud.init(&*conn_pool).await?;
 
+        // Every job's and task's secret_env: must name a secret app_config.secrets
+        // actually defines. Checked here, and only here - never inside `init` itself -
+        // because `init` also runs inside `job` and `job-run` commands, which seed this
+        // very same mem.job/mem.task from this very same YAML in their own process. A
+        // check there would mean `flowlite job-run list` refuses to run in any terminal
+        // that has not exported the production secrets, and reading a run's status must
+        // never require the credentials that run used. This is the one process that will
+        // actually spawn a command, so it is the one place this fails before the bind
+        // rather than at 03:00.
+        crud.check_secret_env_is_satisfied(&*conn_pool, &toolkit.app_config.secrets).await?;
+
         let signals = Arc::new(Signals::new());
 
         let app_config = toolkit.app_config.clone();

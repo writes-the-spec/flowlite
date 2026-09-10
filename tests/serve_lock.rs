@@ -8,47 +8,10 @@ use std::time::{Duration, Instant};
 
 use flowlite::serve_state::{state_path, status, ServeStatus};
 
+mod common;
+use common::ServerGuard;
+
 const BINARY: &str = env!("CARGO_BIN_EXE_flowlite");
-
-/// Guard that ensures a spawned server process is killed and reaped, even if assertions fail.
-/// Tolerates an already-dead process (e.g., one deliberately killed with SIGKILL).
-struct ServerGuard {
-    child: Child,
-    signal: libc::c_int,
-    /// Set once `stop` has signalled and reaped the child, so `Drop` knows the pid is no
-    /// longer this child's to signal - after `wait()` returns, the OS is free to hand that
-    /// pid to an unrelated process, and signalling it again would reach a stranger.
-    stopped: bool,
-}
-
-impl ServerGuard {
-    fn new(child: Child, signal: libc::c_int) -> Self {
-        ServerGuard { child, signal, stopped: false }
-    }
-
-    /// Signals and reaps the child. Idempotent, so a test can call this itself and still
-    /// let the guard's `Drop` run unconditionally without double-signalling.
-    fn stop(&mut self) {
-        if self.stopped {
-            return;
-        }
-
-        // SAFETY: kill takes two integers and touches no memory of ours.
-        unsafe { libc::kill(self.child.id() as libc::pid_t, self.signal) };
-
-        let _ = self.child.wait();
-        self.stopped = true;
-    }
-}
-
-impl Drop for ServerGuard {
-    fn drop(&mut self) {
-        // Only reached unstopped after a test that panicked before calling `stop` - the
-        // pid is still known to be this child's because nothing has reaped it yet, which
-        // is exactly the guarantee `stop` itself depends on.
-        self.stop();
-    }
-}
 
 /// A data directory with one job in it, so it is a real service rather than an empty
 /// directory.
@@ -111,7 +74,7 @@ fn a_sigkilled_server_reads_as_down_even_though_its_state_file_remains() {
     let ServeStatus::Up(state) = status(&dir).unwrap() else {
         panic!("expected the server to be up");
     };
-    assert_eq!(state.pid, child.child.id());
+    assert_eq!(state.pid, child.id());
     assert_eq!(state.port, 18201);
 
     child.stop();
