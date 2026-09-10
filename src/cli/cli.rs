@@ -4,6 +4,7 @@ use crate::app_config::AppConfig;
 use crate::cli::commands::serve::ServeCmd;
 use crate::cli::commands::job::JobCmd;
 use crate::cli::commands::job_run::JobRunCmd;
+use crate::cli::commands::status::StatusCmd;
 use crate::toolkit::Toolkit;
 
 
@@ -23,6 +24,8 @@ pub enum Command {
     Serve(ServeCmd),
     Job(JobCmd),
     JobRun(JobRunCmd),
+    /// Whether this data directory is being served, and by what.
+    Status(StatusCmd),
 }
 
 
@@ -37,6 +40,7 @@ impl Cli {
             Command::Serve(cmd) => cmd.run(toolkit).await?,
             Command::Job(cmd) => cmd.run(toolkit).await?,
             Command::JobRun(cmd) => cmd.run(toolkit).await?,
+            Command::Status(cmd) => cmd.run(toolkit).await?,
         }
 
         Ok(())

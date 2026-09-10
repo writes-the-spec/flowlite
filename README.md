@@ -498,6 +498,48 @@ machine last booted, its recorded group id cannot still be the one it spawned �
 has been recycled — so nothing is signalled and the log says the command may still be
 running. Signalling a stranger's process tree is worse than leaking one.
 
+## One server per data directory
+
+A data directory is served by exactly one `flowlite serve`. A second one on the same
+directory is refused, because two servers there would run two schedulers over one set of
+schedules and fire every cron twice.
+
+A running server keeps a `.flowlite/` directory beside its database, holding its lock and
+the pid, address and port it bound. Ask about it with:
+
+```bash
+flowlite -D /srv/etl status
+# serving on http://127.0.0.1:8001 (pid 41207, up 4m 12s, flowlite 0.1.0)
+
+flowlite -D /srv/etl status --json
+# {"status":"up","pid":41207,"address":"127.0.0.1","port":8001,...}
+```
+
+`status` reads those files rather than the database, so it answers for a server that is
+down as readily as one that is up. Add `.flowlite/` to `.gitignore` if your data directory
+is a repository.
+
+### Running several services
+
+flowlite is a per-project sidecar: a second project is a second data directory, with its
+own database, its own port and its own `serve`. flowlite does not manage the set of them —
+`-D/--data-dir` names the one you mean, and whatever already supervises processes on your
+machine starts them. A systemd template unit is usually all it takes:
+
+```ini
+# /etc/systemd/system/flowlite@.service
+[Service]
+EnvironmentFile=/etc/flowlite/%i.env
+ExecStart=/usr/local/bin/flowlite -D /srv/%i serve --address ${ADDRESS} --port ${PORT}
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then `systemctl start flowlite@etl`, and you get restart-on-failure and start-on-boot with
+it. In development, a `Justfile` or a `Procfile` does the same job.
+
 ## UI
 
 A read-only, pure HTML dashboard is served directly from the binary:
