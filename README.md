@@ -502,7 +502,9 @@ running. Signalling a stranger's process tree is worse than leaking one.
 
 A data directory is served by exactly one `flowlite serve`. A second one on the same
 directory is refused, because two servers there would run two schedulers over one set of
-schedules and fire every cron twice.
+schedules and fire every cron twice. The refusal is enforced with an `flock`, so it needs
+a filesystem where `flock` actually works - local disk always qualifies, which is what
+SQLite already assumes of the data directory.
 
 A running server keeps a `.flowlite/` directory beside its database, holding its lock and
 the pid, address and port it bound. Ask about it with:
@@ -516,8 +518,15 @@ flowlite -D /srv/etl status --json
 ```
 
 `status` reads those files rather than the database, so it answers for a server that is
-down as readily as one that is up. Add `.flowlite/` to `.gitignore` if your data directory
-is a repository.
+down as readily as one that is up. There is a third state, `starting`, for the brief
+window between the lock being taken and the listener binding - expect it during restarts,
+not just on a first start. `status` exits 0 in all three states, so a wrapper should read
+the `status` field rather than the exit code.
+
+Add `.flowlite/` to `.gitignore` if your data directory is a repository, but do not delete
+it while a server is running: because the lock lives on the inode rather than the path,
+removing `serve.lock` out from under a running server (`git clean -xdf`, say) lets the
+next `serve` create a fresh inode and start right alongside it.
 
 ### Running several services
 
