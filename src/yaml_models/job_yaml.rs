@@ -25,6 +25,11 @@ pub struct JobYamlTask {
     /// Environment variables for the command, over the environment flowlite inherited.
     #[serde(default, deserialize_with = "deserialize_string_map")]
     pub env: BTreeMap<String, String>,
+    /// Environment variables whose values are secrets, as variable name to secret name.
+    /// The name is what travels - through the row, the dashboard and `--json`; the value is
+    /// resolved out of config at spawn and exists only in the command's environment.
+    #[serde(default, deserialize_with = "deserialize_string_map")]
+    pub secret_env: BTreeMap<String, String>,
     /// The command's working directory, empty to inherit the server's.
     #[serde(default)]
     pub working_dir: String,
@@ -75,6 +80,11 @@ pub struct JobYaml {
     /// names both of them set.
     #[serde(default, deserialize_with = "deserialize_string_map")]
     pub env: BTreeMap<String, String>,
+    /// Environment variables whose values are secrets, as variable name to secret name.
+    /// The name is what travels - through the row, the dashboard and `--json`; the value is
+    /// resolved out of config at spawn and exists only in the command's environment.
+    #[serde(default, deserialize_with = "deserialize_string_map")]
+    pub secret_env: BTreeMap<String, String>,
     /// Who to tell when a run of this job fails or times out. Naming a recipient of a
     /// channel config.toml does not configure is a startup error — see
     /// `CRUD::validate_job_notifications`.
@@ -100,6 +110,224 @@ impl JobYaml {
 
         job.validate().with_context(|| format!("Invalid Job YAML at {}", path.display()))?;
 
+        job.validate_secret_env().with_context(|| format!("Invalid Job YAML at {}", path.display()))?;
+
         Ok(job)
+    }
+
+    /// `secret_env` can only ever come from a file - unlike a parameter, nothing at
+    /// submit time can add or override one - so its self-consistency is checked here,
+    /// once, rather than every time `CRUD` reads the job back out of the row.
+    fn validate_secret_env(&self) -> anyhow::Result<()> {
+        validate_secret_env_block(&self.id, None, &self.env, &self.secret_env)?;
+
+        for task in &self.tasks {
+            validate_secret_env_block(&self.id, Some(task.id.as_str()), &task.env, &task.secret_env)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// One `env:`/`secret_env:` pair - the job's own, or one task's - checked in isolation.
+/// Checking level by level rather than across the whole job is what makes a job-level
+/// default and a task-level secret_env override of the same name legitimate: they are
+/// never compared against each other, only each block against its own level's `env:`.
+fn validate_secret_env_block(
+    job_id: &str,
+    task_id: Option<&str>,
+    env: &BTreeMap<String, String>,
+    secret_env: &BTreeMap<String, String>,
+) -> anyhow::Result<()> {
+
+    let subject = match task_id {
+        Some(task_id) => format!("Job '{}' task '{}'", job_id, task_id),
+        None => format!("Job '{}'", job_id),
+    };
+
+    for (variable_name, secret_name) in secret_env {
+
+        if !is_valid_env_var_name(variable_name) {
+            anyhow::bail!(
+                "{} has a secret_env variable named '{}', which is not a valid \
+                 environment variable name. A variable name may contain only ASCII \
+                 letters, digits and underscores, and may not start with a digit.",
+                subject,
+                variable_name,
+            );
+        }
+
+        if variable_name.starts_with("FLOWLITE_") {
+            anyhow::bail!(
+                "{} has a secret_env variable named '{}', which starts with FLOWLITE_. \
+                 Run metadata is applied last under that prefix and would silently \
+                 overwrite it, leaving the task without its credential.",
+                subject,
+                variable_name,
+            );
+        }
+
+        if !is_valid_secret_name(secret_name) {
+            anyhow::bail!(
+                "{} names secret '{}' for variable '{}', which is not a valid secret \
+                 name. A secret name may contain only lowercase ASCII letters, digits \
+                 and underscores: config.toml can hold other characters, but \
+                 FLOWLITE_SECRETS__* cannot reach them, so the name would work on a \
+                 development box and be unreachable in production.",
+                subject,
+                secret_name,
+                variable_name,
+            );
+        }
+
+        if env.contains_key(variable_name) {
+            anyhow::bail!(
+                "{} declares '{}' in both env and secret_env. A name may appear in \
+                 only one of the two blocks at the same level; a job-level env or \
+                 secret_env may still be overridden by the other block on a task.",
+                subject,
+                variable_name,
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// The same rule `is_valid_parameter_name` in
+/// `src/crud/multistatements/misc.rs` states for a parameter name, duplicated rather than
+/// shared: a parameter is validated at submit time in CRUD and a `secret_env` variable at
+/// parse time in the YAML layer, and the two are kept in their own layers on purpose - a
+/// job's `secret_env` can only ever come from its file, so its own parser is where its
+/// self-consistency belongs.
+fn is_valid_env_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+
+    let Some(first) = chars.next() else {
+        return false;
+    };
+
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// `FLOWLITE_SECRETS__*` is how a secret's value reaches `AppConfig` in production, and it
+/// can only carry the characters an environment variable name can - so a secret name
+/// outside that set would parse from `[secrets]` in `config.toml` on a development box
+/// and never be reachable through the env var form at all.
+fn is_valid_secret_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `from_yaml` only takes a path, so each test writes its YAML to a throwaway file
+    /// under a unique name - the same isolation `TestDb` gives a database.
+    fn parse(content: &str) -> anyhow::Result<JobYaml> {
+        let path = std::env::temp_dir().join(format!("flowlite-job-yaml-test-{}.yml", uuid::Uuid::new_v4()));
+        std::fs::write(&path, content).unwrap();
+        let result = JobYaml::from_yaml(&path);
+        let _ = std::fs::remove_file(&path);
+        result
+    }
+
+    /// `{:?}` rather than `to_string()`, because `anyhow::Error`'s `Display` shows only
+    /// the outermost context - the one `from_yaml` adds - and drops the specific cause
+    /// these tests assert on. `main.rs` prints errors the same way.
+    fn parse_error(content: &str) -> String {
+        format!("{:?}", parse(content).unwrap_err())
+    }
+
+    #[test]
+    fn a_secret_env_variable_name_that_is_not_a_valid_env_var_name_is_rejected() {
+        let error = parse_error("
+id: nightly-sync
+name: Nightly Sync
+tasks:
+  - id: ingest
+    command: ./run.sh
+    secret_env:
+      1secret: warehouse_pw
+");
+
+        assert!(error.contains("nightly-sync"), "{error}");
+        assert!(error.contains("ingest"), "{error}");
+        assert!(error.contains("1secret"), "{error}");
+    }
+
+    #[test]
+    fn a_secret_name_outside_lowercase_letters_digits_and_underscores_is_rejected() {
+        let error = parse_error("
+id: nightly-sync
+name: Nightly Sync
+secret_env:
+  DB_PASSWORD: Warehouse-PW
+");
+
+        assert!(error.contains("Warehouse-PW"), "{error}");
+        assert!(error.contains("production"), "{error}");
+    }
+
+    #[test]
+    fn a_secret_env_variable_named_with_the_flowlite_prefix_is_rejected() {
+        let error = parse_error("
+id: nightly-sync
+name: Nightly Sync
+secret_env:
+  FLOWLITE_TOKEN: warehouse_pw
+");
+
+        assert!(error.contains("nightly-sync"), "{error}");
+        assert!(error.contains("FLOWLITE_TOKEN"), "{error}");
+    }
+
+    #[test]
+    fn a_name_in_both_env_and_secret_env_of_the_same_task_is_rejected() {
+        let error = parse_error("
+id: nightly-sync
+name: Nightly Sync
+tasks:
+  - id: ingest
+    command: ./run.sh
+    env:
+      DB_PASSWORD: plain
+    secret_env:
+      DB_PASSWORD: warehouse_pw
+");
+
+        assert!(error.contains("ingest"), "{error}");
+        assert!(error.contains("DB_PASSWORD"), "{error}");
+    }
+
+    /// The same name may still appear once on the job and once on a task - a job
+    /// declaring a default that a task replaces with a secret is legitimate layering,
+    /// not the same-level collision the previous test rejects.
+    #[test]
+    fn a_valid_job_with_both_blocks_at_both_levels_parses() {
+        let job = parse("
+id: nightly-sync
+name: Nightly Sync
+env:
+  REGION: eu
+secret_env:
+  DB_PASSWORD: warehouse_pw
+tasks:
+  - id: ingest
+    command: ./run.sh
+    env:
+      DB_PASSWORD: plain
+    secret_env:
+      API_TOKEN: ingest_api_token
+").unwrap();
+
+        assert_eq!(job.secret_env.get("DB_PASSWORD").unwrap(), "warehouse_pw");
+        let task = &job.tasks[0];
+        assert_eq!(task.env.get("DB_PASSWORD").unwrap(), "plain");
+        assert_eq!(task.secret_env.get("API_TOKEN").unwrap(), "ingest_api_token");
     }
 }
