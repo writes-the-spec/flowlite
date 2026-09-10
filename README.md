@@ -512,7 +512,7 @@ flowlite -D /srv/etl status
 # serving on http://127.0.0.1:8001 (pid 41207, up 4m 12s, flowlite 0.1.0)
 
 flowlite -D /srv/etl status --json
-# {"status":"up","pid":41207,"address":"127.0.0.1","port":8001,...}
+# {"address":"127.0.0.1","pid":41207,"port":8001,"started_at":"2026-09-10T...","status":"up","uptime_seconds":...,"version":"0.1.0"}
 ```
 
 `status` reads those files rather than the database, so it answers for a server that is
