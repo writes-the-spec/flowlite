@@ -24,9 +24,10 @@ impl StatusCmd {
 
         let state = status(data_dir)?;
 
-        match self.json {
-            true => println!("{}", status_json(&state)),
-            false => println!("{}", status_line(&state)),
+        if self.json {
+            println!("{}", status_json(&state));
+        } else {
+            println!("{}", status_line(&state));
         }
 
         Ok(())
@@ -70,8 +71,10 @@ pub fn status_json(state: &ServeStatus) -> serde_json::Value {
 }
 
 
+/// Clamped for the same reason `format::duration` clamps: clock skew between this
+/// process and the one that wrote `started_at` must not surface as a negative uptime.
 fn uptime_seconds(state: &ServeState) -> i64 {
-    chrono::Utc::now().signed_duration_since(state.started_at).num_seconds()
+    chrono::Utc::now().signed_duration_since(state.started_at).num_seconds().max(0)
 }
 
 

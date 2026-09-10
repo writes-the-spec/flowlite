@@ -84,6 +84,15 @@ impl ServeLock {
             .with_context(|| format!("Failed to open the serve lock at {}", path.display()))?;
 
         if take_lock(&file, &path)? {
+            // Winning the lock is the one moment a process can prove any existing
+            // serve.json is stale - the previous holder is gone, or this acquire would
+            // have failed. This is not the shutdown cleanup the design deliberately
+            // skips: a crash between the lock and this line leaves the stale file for
+            // the next acquirer to remove instead, and in the meantime the lock is free
+            // so nothing reads the file as truth anyway. Removing it here just closes
+            // the window where a new server would otherwise be reachable as `Up` while
+            // still describing the old one.
+            let _ = std::fs::remove_file(state_path(data_dir));
             return Ok(ServeLock { _file: file });
         }
 
@@ -114,8 +123,10 @@ pub fn status(data_dir: &Path) -> Result<ServeStatus> {
     let path = lock_path(data_dir);
 
     // Deliberately not creating it: asking whether a directory is being served must not
-    // write anything into it.
-    let file = match OpenOptions::new().read(true).write(true).open(&path) {
+    // write anything into it. Read-only too: flock(LOCK_EX) succeeds on a read-only
+    // descriptor, and requiring write access would fail this for a supervisor that only
+    // has read access to the data directory, or a read-only mount.
+    let file = match OpenOptions::new().read(true).open(&path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ServeStatus::Down),
         Err(e) => return Err(e).with_context(|| format!(
@@ -166,8 +177,18 @@ pub fn write_state(data_dir: &Path, state: &ServeState) -> Result<()> {
     let written = serde_json::to_vec_pretty(state)
         .context("Failed to serialize the serve state")?;
 
-    std::fs::write(state_path(data_dir), written).with_context(|| format!(
-        "Failed to write the serve state to {}", state_path(data_dir).display(),
+    // Written beside the target and renamed over it rather than truncated in place, so a
+    // concurrent `status` never catches a half-written file and reports `Starting` for a
+    // server that is actually up.
+    let final_path = state_path(data_dir);
+    let tmp_path = final_path.with_extension("json.tmp");
+
+    std::fs::write(&tmp_path, written).with_context(|| format!(
+        "Failed to write the serve state to {}", tmp_path.display(),
+    ))?;
+
+    std::fs::rename(&tmp_path, &final_path).with_context(|| format!(
+        "Failed to move the serve state into place at {}", final_path.display(),
     ))?;
 
     Ok(())
@@ -231,6 +252,23 @@ mod tests {
     #[test]
     fn a_held_lock_with_no_state_file_is_starting() {
         let dir = temp_dir();
+
+        let _lock = ServeLock::acquire(&dir).unwrap();
+
+        assert!(matches!(status(&dir).unwrap(), ServeStatus::Starting));
+    }
+
+    /// The restart case: a state file left behind by an earlier, now-gone process must
+    /// not survive the next acquire, or `status` would report the new server as the old
+    /// one for its whole startup window - a dead pid and a possibly-stale port.
+    #[test]
+    fn acquiring_a_free_lock_removes_a_stale_state_file_so_status_reports_starting() {
+        let dir = temp_dir();
+
+        // No lock taken here: this is what a state file looks like once its writer is
+        // gone and nothing has cleaned up after it, which is the case the design leaves
+        // for the next acquirer rather than for shutdown to handle.
+        write_state(&dir, &a_state()).unwrap();
 
         let _lock = ServeLock::acquire(&dir).unwrap();
 

@@ -15,24 +15,38 @@ const BINARY: &str = env!("CARGO_BIN_EXE_flowlite");
 struct ServerGuard {
     child: Child,
     signal: libc::c_int,
+    /// Set once `stop` has signalled and reaped the child, so `Drop` knows the pid is no
+    /// longer this child's to signal - after `wait()` returns, the OS is free to hand that
+    /// pid to an unrelated process, and signalling it again would reach a stranger.
+    stopped: bool,
 }
 
 impl ServerGuard {
     fn new(child: Child, signal: libc::c_int) -> Self {
-        ServerGuard { child, signal }
+        ServerGuard { child, signal, stopped: false }
+    }
+
+    /// Signals and reaps the child. Idempotent, so a test can call this itself and still
+    /// let the guard's `Drop` run unconditionally without double-signalling.
+    fn stop(&mut self) {
+        if self.stopped {
+            return;
+        }
+
+        // SAFETY: kill takes two integers and touches no memory of ours.
+        unsafe { libc::kill(self.child.id() as libc::pid_t, self.signal) };
+
+        let _ = self.child.wait();
+        self.stopped = true;
     }
 }
 
 impl Drop for ServerGuard {
     fn drop(&mut self) {
-        // Attempt to send the signal. If the process is already dead (ESRCH), that's fine
-        // because we're cleaning up either after an assertion failure or after deliberately
-        // killing the process earlier in the test. Ignore the result.
-        // SAFETY: kill takes two integers and touches no memory of ours.
-        unsafe { libc::kill(self.child.id() as libc::pid_t, self.signal) };
-
-        // Reap the process. If it's already been reaped or doesn't exist, ignore the error.
-        let _ = self.child.wait();
+        // Only reached unstopped after a test that panicked before calling `stop` - the
+        // pid is still known to be this child's because nothing has reaped it yet, which
+        // is exactly the guarantee `stop` itself depends on.
+        self.stop();
     }
 }
 
@@ -88,12 +102,19 @@ fn is_down(dir: &Path) -> bool {
 fn a_sigkilled_server_reads_as_down_even_though_its_state_file_remains() {
     let dir = data_dir("sigkill");
 
-    let mut child = ServerGuard::new(serve(&dir, 18201), libc::SIGTERM);
+    let mut child = ServerGuard::new(serve(&dir, 18201), libc::SIGKILL);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
 
-    // SAFETY: kill takes two integers and touches no memory of ours.
-    unsafe { libc::kill(child.child.id() as libc::pid_t, libc::SIGKILL) };
-    child.child.wait().unwrap();
+    // Pin the other half of the feature before tearing anything down: the state file is
+    // supposed to publish what actually got bound, not just whatever the test happened to
+    // ask for.
+    let ServeStatus::Up(state) = status(&dir).unwrap() else {
+        panic!("expected the server to be up");
+    };
+    assert_eq!(state.pid, child.child.id());
+    assert_eq!(state.port, 18201);
+
+    child.stop();
 
     assert!(until(Duration::from_secs(30), || is_down(&dir)));
     assert!(
@@ -121,9 +142,7 @@ fn a_second_serve_on_one_data_dir_refuses_to_start() {
     assert!(!second.status.success(), "{complaint}");
     assert!(complaint.contains("already"), "{complaint}");
 
-    // SAFETY: as above.
-    unsafe { libc::kill(child.child.id() as libc::pid_t, libc::SIGTERM) };
-    child.child.wait().unwrap();
+    child.stop();
 }
 
 /// A directory whose server stopped tidily is as free as one that was never served, so
@@ -135,15 +154,26 @@ fn a_stopped_server_leaves_the_directory_startable_again() {
     let mut first = ServerGuard::new(serve(&dir, 18204), libc::SIGTERM);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
 
-    // SAFETY: as above.
-    unsafe { libc::kill(first.child.id() as libc::pid_t, libc::SIGTERM) };
-    first.child.wait().unwrap();
+    let ServeStatus::Up(first_state) = status(&dir).unwrap() else {
+        panic!("expected the first server to be up");
+    };
+
+    first.stop();
     assert!(until(Duration::from_secs(30), || is_down(&dir)));
 
     let mut second = ServerGuard::new(serve(&dir, 18204), libc::SIGTERM);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the restart never came up");
 
-    // SAFETY: as above.
-    unsafe { libc::kill(second.child.id() as libc::pid_t, libc::SIGTERM) };
-    second.child.wait().unwrap();
+    // The case a lock alone does not save you from: without clearing the old state file
+    // on acquisition, this would still read back the first server's pid for the whole
+    // startup window.
+    let ServeStatus::Up(second_state) = status(&dir).unwrap() else {
+        panic!("expected the restarted server to be up");
+    };
+    assert_ne!(
+        second_state.pid, first_state.pid,
+        "the restart must not report the first server's pid",
+    );
+
+    second.stop();
 }
