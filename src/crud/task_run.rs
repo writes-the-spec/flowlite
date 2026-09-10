@@ -150,10 +150,8 @@ pub struct TaskRun {
     pub max_retries: u32,
     pub retry_delay: u32,
     pub env: sqlx::types::Json<BTreeMap<String, String>>,
-    /// Environment variable name to secret name - never a value. `NULL` only for a run
-    /// submitted before this column existed - the insert always writes a map, so it is
-    /// never a second spelling of empty.
-    pub secret_env: Option<sqlx::types::Json<BTreeMap<String, String>>>,
+    /// Environment variable name to secret name - never a value.
+    pub secret_env: sqlx::types::Json<BTreeMap<String, String>>,
     pub working_dir: String,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,

@@ -6,7 +6,7 @@ use crate::crud::CRUD;
 use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotificationStatus, NotificationChannel, NotifyOn, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
-use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort};
+use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort, Task};
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRunStatus};
 
 
@@ -138,6 +138,51 @@ fn merge_job_and_task_maps(
     merged
 }
 
+/// One task's definition as `submit_job` builds it: `env` and `secret_env` each merged
+/// from the job's own and the task's own, with a guard `merge_job_and_task_maps` alone
+/// cannot provide.
+///
+/// `validate_secret_env_block` promises a name never appears in both `env` and
+/// `secret_env` of one declaration - but it only checks each level in isolation, so a task
+/// overriding a job's `env` name in its own `secret_env` (or vice versa) is a cross-level
+/// case that check cannot see. Merging the two blocks independently would store both
+/// values under the same name with no record of which level either came from, leaving
+/// nothing downstream able to tell which one the task actually meant. So the task's own
+/// declaration wins the name outright, in whichever block it appears: a name the task
+/// declares in its `env` is dropped from the merged `secret_env`, and a name it declares in
+/// its `secret_env` is dropped from the merged `env`. A name neither block of the task
+/// declares cannot collide, because the same-level check already rejects a job or task
+/// declaring one name in both of its own blocks.
+fn job_run_task_definition(
+    task: &Task,
+    job_env: &BTreeMap<String, String>,
+    job_secret_env: &BTreeMap<String, String>,
+) -> JobRunTaskDefinition {
+
+    let mut env = merge_job_and_task_maps(job_env, &task.env.0);
+    let mut secret_env = merge_job_and_task_maps(job_secret_env, &task.secret_env.0);
+
+    for name in task.env.0.keys() {
+        secret_env.remove(name);
+    }
+
+    for name in task.secret_env.0.keys() {
+        env.remove(name);
+    }
+
+    JobRunTaskDefinition {
+        task_id: task.task_id.clone(),
+        command: task.command.clone(),
+        depends_on: task.depends_on.0.clone(),
+        timeout: task.timeout,
+        max_retries: task.max_retries,
+        retry_delay: task.retry_delay,
+        env,
+        secret_env,
+        working_dir: task.working_dir.clone(),
+    }
+}
+
 
 fn is_valid_parameter_name(name: &str) -> bool {
     let mut chars = name.chars();
@@ -242,18 +287,8 @@ impl CRUD {
             parameters,
             scheduled_at,
             tasks: tasks
-                .into_iter()
-                .map(|task| JobRunTaskDefinition {
-                    task_id: task.task_id,
-                    command: task.command,
-                    depends_on: task.depends_on.0,
-                    timeout: task.timeout,
-                    max_retries: task.max_retries,
-                    retry_delay: task.retry_delay,
-                    env: merge_job_and_task_maps(&job_env, &task.env.0),
-                    secret_env: merge_job_and_task_maps(&job_secret_env, &task.secret_env.0),
-                    working_dir: task.working_dir.clone(),
-                })
+                .iter()
+                .map(|task| job_run_task_definition(task, &job_env, &job_secret_env))
                 .collect(),
             notifications: job_run_notification_definitions(
                 &job.on_failure_recipients.0,
@@ -404,7 +439,7 @@ impl CRUD {
                     max_retries: task_run.max_retries,
                     retry_delay: task_run.retry_delay,
                     env: task_run.env.0.clone(),
-                    secret_env: task_run.secret_env.clone().map(|json| json.0).unwrap_or_default(),
+                    secret_env: task_run.secret_env.0.clone(),
                     working_dir: task_run.working_dir.clone(),
                 })
                 .collect(),
@@ -825,33 +860,123 @@ mod tests {
         assert!(merge_job_and_task_maps(&map(&[]), &map(&[])).is_empty());
     }
 
-    /// One task's definition, with `secret_env` the only field a case varies - everything
-    /// else is filler a `task_run` row needs to exist at all.
-    fn task_definition(secret_env: BTreeMap<String, String>) -> JobRunTaskDefinition {
-        JobRunTaskDefinition {
+    /// A `mem.task` row with the given `env`/`secret_env` - everything else is filler a
+    /// `Task` needs to exist at all.
+    fn task_row(env: BTreeMap<String, String>, secret_env: BTreeMap<String, String>) -> Task {
+        Task {
             task_id: "task".to_string(),
+            job_id: "job".to_string(),
+            description: String::new(),
             command: "true".to_string(),
-            depends_on: Vec::new(),
+            depends_on: sqlx::types::Json(Vec::new()),
             timeout: 60,
             max_retries: 0,
             retry_delay: 60,
-            env: BTreeMap::new(),
-            secret_env,
+            env: sqlx::types::Json(env),
+            secret_env: sqlx::types::Json(secret_env),
             working_dir: String::new(),
         }
     }
 
-    /// Inserts one job run definition carrying a single task, and reads back that task's
-    /// `secret_env` off the `task_run` row `insert_job_run_definition` wrote.
-    ///
-    /// Goes through `insert_job_run_definition` rather than `submit_job` itself, so the
-    /// test needs no `mem.job`/`mem.task` rows: `mem` is one shared-cache database for the
-    /// whole test binary, and seeding it from a test races any other test's pooled
-    /// connection over its schema lock - confirmed by running exactly that here, which
-    /// broke two unrelated tests with "database schema is locked: mem". `submit_job`'s own
-    /// contribution once `mem` is read is one line, `merge_job_and_task_maps(&job_secret_env,
-    /// &task.secret_env.0)`, identical in shape to the `env` line beside it.
-    async fn submitted_secret_env(db: &TestDb, secret_env: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    /// `job_run_task_definition` is what `submit_job` itself calls to build each task's
+    /// definition, so exercising it directly - rather than through `submit_job` - covers
+    /// that line for real, with no `mem.job`/`mem.task` rows needed at all: `mem` is one
+    /// shared-cache database for the whole test binary, and seeding it from a test races
+    /// any other test's pooled connection over its schema lock, confirmed by running
+    /// exactly that here, which broke two unrelated tests with "database schema is locked:
+    /// mem".
+    #[test]
+    fn a_tasks_secret_env_is_merged_with_the_jobs_the_task_winning_a_shared_name() {
+
+        let task = task_row(BTreeMap::new(), map(&[("API_KEY", "task_api_key"), ("SHARED", "task_shared_secret")]));
+
+        let definition = job_run_task_definition(
+            &task,
+            &BTreeMap::new(),
+            &map(&[("DB_PASSWORD", "job_db_password"), ("SHARED", "job_shared_secret")]),
+        );
+
+        assert_eq!(definition.secret_env.get("DB_PASSWORD").unwrap(), "job_db_password");
+        assert_eq!(definition.secret_env.get("API_KEY").unwrap(), "task_api_key");
+        assert_eq!(definition.secret_env.get("SHARED").unwrap(), "task_shared_secret");
+        assert_eq!(definition.secret_env.len(), 3);
+    }
+
+    /// A job with no `secret_env:` at either level submits a task carrying an empty map,
+    /// not a null one - the insert always writes a map.
+    #[test]
+    fn a_task_declaring_no_secret_env_and_a_job_declaring_none_either_has_an_empty_map() {
+
+        let task = task_row(BTreeMap::new(), BTreeMap::new());
+
+        let definition = job_run_task_definition(&task, &BTreeMap::new(), &BTreeMap::new());
+
+        assert!(definition.secret_env.is_empty());
+    }
+
+    /// The cross-level case `validate_secret_env_block` cannot see: it only rejects a name
+    /// declared in both blocks of the *same* level, so a task overriding a job's `env` name
+    /// in its own `secret_env` is legal YAML that would otherwise land the job's value in
+    /// `env` and the task's in `secret_env` at once. The task's own `secret_env` wins the
+    /// name outright, evicting the job's `env` contribution.
+    #[test]
+    fn a_tasks_secret_env_evicts_the_jobs_env_value_of_the_same_name() {
+
+        let task = task_row(BTreeMap::new(), map(&[("FOO", "task_secret")]));
+
+        let definition = job_run_task_definition(&task, &map(&[("FOO", "job_env_value")]), &BTreeMap::new());
+
+        assert_eq!(definition.secret_env.get("FOO").unwrap(), "task_secret");
+        assert!(!definition.env.contains_key("FOO"));
+    }
+
+    /// The other direction of the same cross-level case: a task overriding a job's
+    /// `secret_env` name in its own `env` evicts the job's `secret_env` contribution.
+    #[test]
+    fn a_tasks_env_evicts_the_jobs_secret_env_value_of_the_same_name() {
+
+        let task = task_row(map(&[("FOO", "task_env_value")]), BTreeMap::new());
+
+        let definition = job_run_task_definition(&task, &BTreeMap::new(), &map(&[("FOO", "job_secret")]));
+
+        assert_eq!(definition.env.get("FOO").unwrap(), "task_env_value");
+        assert!(!definition.secret_env.contains_key("FOO"));
+    }
+
+    /// The invariant Task 4's layering depends on: whatever combination of job- and
+    /// task-level declarations produced it, a definition's `env` and `secret_env` never
+    /// share a name.
+    #[test]
+    fn a_definitions_env_and_secret_env_never_share_a_name() {
+
+        let task = task_row(
+            map(&[("FOO", "task_env"), ("BAR", "task_env_2")]),
+            map(&[("BAZ", "task_secret")]),
+        );
+
+        let definition = job_run_task_definition(
+            &task,
+            &map(&[("BAR", "job_env")]),
+            &map(&[("FOO", "job_secret"), ("QUX", "job_secret_2")]),
+        );
+
+        let shared_names: Vec<&String> = definition.env.keys()
+            .filter(|name| definition.secret_env.contains_key(*name))
+            .collect();
+
+        assert!(shared_names.is_empty(), "names in both blocks: {:?}", shared_names);
+    }
+
+    /// The DB round trip above the pure merge: `insert_job_run_definition` writes whatever
+    /// `job_run_task_definition` computed onto the `task_run` row, and JSON
+    /// (de)serialization is a place a field could silently get lost.
+    #[tokio::test]
+    async fn a_task_definitions_secret_env_reaches_the_inserted_task_run_row() {
+
+        let db = TestDb::new().await;
+
+        let task = task_row(BTreeMap::new(), map(&[("API_KEY", "task_api_key")]));
+        let task_definition = job_run_task_definition(&task, &BTreeMap::new(), &map(&[("DB_PASSWORD", "job_db_password")]));
 
         let definition = JobRunDefinition {
             job_id: "job".to_string(),
@@ -859,7 +984,7 @@ mod tests {
             job_description: String::new(),
             parameters: BTreeMap::new(),
             scheduled_at: None,
-            tasks: vec![task_definition(secret_env)],
+            tasks: vec![task_definition],
             notifications: Vec::new(),
         };
 
@@ -878,43 +1003,7 @@ mod tests {
         }).await.unwrap();
 
         assert_eq!(task_runs.len(), 1);
-        assert!(task_runs[0].secret_env.is_some(), "an inserted task_run's secret_env is never NULL");
-
-        task_runs[0].secret_env.clone().unwrap().0
-    }
-
-    /// The reference travels all the way from the two levels' `secret_env:` onto the
-    /// submitted `task_run`, and a name both levels declare is settled the same way `env`
-    /// settles it: the task's own wins.
-    #[tokio::test]
-    async fn a_submitted_run_carries_the_merged_secret_env_with_the_task_winning_a_shared_name() {
-
-        let db = TestDb::new().await;
-
-        let job_secret_env = map(&[("DB_PASSWORD", "job_db_password"), ("SHARED", "job_shared_secret")]);
-        let task_secret_env = map(&[("API_KEY", "task_api_key"), ("SHARED", "task_shared_secret")]);
-
-        let secret_env = submitted_secret_env(
-            &db,
-            merge_job_and_task_maps(&job_secret_env, &task_secret_env),
-        ).await;
-
-        assert_eq!(secret_env.get("DB_PASSWORD").unwrap(), "job_db_password");
-        assert_eq!(secret_env.get("API_KEY").unwrap(), "task_api_key");
-        assert_eq!(secret_env.get("SHARED").unwrap(), "task_shared_secret");
-        assert_eq!(secret_env.len(), 3);
-    }
-
-    /// A job naming no secret at either level submits a run with an empty map, not a null
-    /// one - the insert always writes a map, so `NULL` stays a state only a pre-migration
-    /// row can be in.
-    #[tokio::test]
-    async fn a_job_with_no_secret_env_submits_a_run_whose_map_is_empty() {
-
-        let db = TestDb::new().await;
-
-        let secret_env = submitted_secret_env(&db, merge_job_and_task_maps(&map(&[]), &map(&[]))).await;
-
-        assert!(secret_env.is_empty());
+        assert_eq!(task_runs[0].secret_env.0.get("DB_PASSWORD").unwrap(), "job_db_password");
+        assert_eq!(task_runs[0].secret_env.0.get("API_KEY").unwrap(), "task_api_key");
     }
 }

@@ -99,7 +99,7 @@ mod tests {
             max_retries: 0,
             retry_delay: 60,
             env: sqlx::types::Json(env),
-            secret_env: None,
+            secret_env: sqlx::types::Json(BTreeMap::new()),
             working_dir: String::new(),
             created_at: Utc::now(),
             started_at: None,
