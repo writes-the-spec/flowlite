@@ -208,7 +208,6 @@ impl TestDb {
         )
     }
 
-    /// What a data directory with no config.toml gets, which is what the tests run with.
     /// The config the CRUD under test is actually using, rather than a fresh default: a
     /// service built here has to agree with `data_dir()` about which directory it is
     /// serving, since that directory is what a task command is told to work on.

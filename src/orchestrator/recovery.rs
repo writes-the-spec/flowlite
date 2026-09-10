@@ -156,12 +156,17 @@ mod tests {
     use super::*;
     use crate::crud::job_run::JobRunStatus;
     use crate::crud::task_run::TaskRunStatus;
-    use crate::test_support::{has_exited, read_pid_file, TestDb};
+    use crate::test_support::{has_exited, read_pid_file, reading_the_environment, TestDb};
     use chrono::TimeDelta;
     use std::os::unix::process::CommandExt;
 
     /// Spawns a process group the way the dispatcher does — a group leader with a worker
     /// under it — and reports the leader to kill by and the worker to watch.
+    ///
+    /// Every caller holds `reading_the_environment()` for as long as it does: this is a
+    /// real spawn, and a spawned process reads `environ` at exec, which is undefined
+    /// behaviour beside another test's `set_var`. Nothing here reads a variable, but the
+    /// exec does — see `src/test_support.rs` on why that lock is not about intent.
     ///
     /// The assertion is on the **worker**, not the leader: the leader is this test's own
     /// child and nothing reaps it, so it lingers as a zombie that `kill(pid, 0)` still
@@ -184,6 +189,8 @@ mod tests {
     /// settles as is not also a leaked process.
     #[tokio::test]
     async fn an_orphaned_attempt_is_killed_and_settled_invalid() {
+
+        let _environment = reading_the_environment();
 
         let db = TestDb::new().await;
 
@@ -235,6 +242,8 @@ mod tests {
     #[tokio::test]
     async fn a_group_id_from_before_the_last_boot_is_not_killed() {
 
+        let _environment = reading_the_environment();
+
         let db = TestDb::new().await;
 
         let (mut leader, worker) = spawn_orphan(&db.data_dir().join("pid")).await;
@@ -272,6 +281,8 @@ mod tests {
     /// Unknown boot time means the guard cannot be applied, so nothing is killed.
     #[tokio::test]
     async fn an_unknown_boot_time_kills_nothing() {
+
+        let _environment = reading_the_environment();
 
         let db = TestDb::new().await;
 
