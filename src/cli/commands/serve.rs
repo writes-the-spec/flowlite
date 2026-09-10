@@ -1,6 +1,6 @@
 use clap::Args;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use crate::router::app::app::create_router;
@@ -170,6 +170,7 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use crate::app_config::AppConfig;
     use crate::serve_state::ServeLock;
 
