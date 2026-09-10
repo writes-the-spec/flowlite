@@ -10,6 +10,32 @@ use flowlite::serve_state::{state_path, status, ServeStatus};
 
 const BINARY: &str = env!("CARGO_BIN_EXE_flowlite");
 
+/// Guard that ensures a spawned server process is killed and reaped, even if assertions fail.
+/// Tolerates an already-dead process (e.g., one deliberately killed with SIGKILL).
+struct ServerGuard {
+    child: Child,
+    signal: libc::c_int,
+}
+
+impl ServerGuard {
+    fn new(child: Child, signal: libc::c_int) -> Self {
+        ServerGuard { child, signal }
+    }
+}
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        // Attempt to send the signal. If the process is already dead (ESRCH), that's fine
+        // because we're cleaning up either after an assertion failure or after deliberately
+        // killing the process earlier in the test. Ignore the result.
+        // SAFETY: kill takes two integers and touches no memory of ours.
+        unsafe { libc::kill(self.child.id() as libc::pid_t, self.signal) };
+
+        // Reap the process. If it's already been reaped or doesn't exist, ignore the error.
+        let _ = self.child.wait();
+    }
+}
+
 /// A data directory with one job in it, so it is a real service rather than an empty
 /// directory.
 fn data_dir(label: &str) -> PathBuf {
@@ -62,12 +88,12 @@ fn is_down(dir: &Path) -> bool {
 fn a_sigkilled_server_reads_as_down_even_though_its_state_file_remains() {
     let dir = data_dir("sigkill");
 
-    let mut child = serve(&dir, 18201);
+    let mut child = ServerGuard::new(serve(&dir, 18201), libc::SIGTERM);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
 
     // SAFETY: kill takes two integers and touches no memory of ours.
-    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGKILL) };
-    child.wait().unwrap();
+    unsafe { libc::kill(child.child.id() as libc::pid_t, libc::SIGKILL) };
+    child.child.wait().unwrap();
 
     assert!(until(Duration::from_secs(30), || is_down(&dir)));
     assert!(
@@ -82,7 +108,7 @@ fn a_sigkilled_server_reads_as_down_even_though_its_state_file_remains() {
 fn a_second_serve_on_one_data_dir_refuses_to_start() {
     let dir = data_dir("second");
 
-    let mut child = serve(&dir, 18202);
+    let mut child = ServerGuard::new(serve(&dir, 18202), libc::SIGTERM);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
 
     let second = Command::new(BINARY)
@@ -96,8 +122,8 @@ fn a_second_serve_on_one_data_dir_refuses_to_start() {
     assert!(complaint.contains("already"), "{complaint}");
 
     // SAFETY: as above.
-    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
-    child.wait().unwrap();
+    unsafe { libc::kill(child.child.id() as libc::pid_t, libc::SIGTERM) };
+    child.child.wait().unwrap();
 }
 
 /// A directory whose server stopped tidily is as free as one that was never served, so
@@ -106,18 +132,18 @@ fn a_second_serve_on_one_data_dir_refuses_to_start() {
 fn a_stopped_server_leaves_the_directory_startable_again() {
     let dir = data_dir("restart");
 
-    let mut first = serve(&dir, 18204);
+    let mut first = ServerGuard::new(serve(&dir, 18204), libc::SIGTERM);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
 
     // SAFETY: as above.
-    unsafe { libc::kill(first.id() as libc::pid_t, libc::SIGTERM) };
-    first.wait().unwrap();
+    unsafe { libc::kill(first.child.id() as libc::pid_t, libc::SIGTERM) };
+    first.child.wait().unwrap();
     assert!(until(Duration::from_secs(30), || is_down(&dir)));
 
-    let mut second = serve(&dir, 18204);
+    let mut second = ServerGuard::new(serve(&dir, 18204), libc::SIGTERM);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the restart never came up");
 
     // SAFETY: as above.
-    unsafe { libc::kill(second.id() as libc::pid_t, libc::SIGTERM) };
-    second.wait().unwrap();
+    unsafe { libc::kill(second.child.id() as libc::pid_t, libc::SIGTERM) };
+    second.child.wait().unwrap();
 }
