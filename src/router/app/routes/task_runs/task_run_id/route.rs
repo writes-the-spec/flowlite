@@ -22,6 +22,7 @@ pub struct TaskRunDisplay {
     pub duration: Option<String>,
     pub working_dir: String,
     pub env: Vec<(String, String)>,
+    pub secret_env: Vec<(String, String)>,
 }
 
 /// One attempt's output. The streams stay separate because a task that failed usually
@@ -157,6 +158,7 @@ pub async fn task_run_id_route(
             duration,
             working_dir: task_run.working_dir.clone(),
             env: task_run.env.0.clone().into_iter().collect(),
+            secret_env: task_run.secret_env.0.clone().into_iter().collect(),
         },
         attempts,
         attempt_note,

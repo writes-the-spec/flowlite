@@ -20,6 +20,7 @@ pub struct TaskDisplay {
     pub max_retries: u32,
     pub retry_delay: u32,
     pub env: Vec<(String, String)>,
+    pub secret_env: Vec<(String, String)>,
     pub working_dir: String,
 }
 
@@ -82,6 +83,7 @@ pub async fn task_id_route(
             max_retries: task.max_retries,
             retry_delay: task.retry_delay,
             env: task.env.0.into_iter().collect(),
+            secret_env: task.secret_env.0.into_iter().collect(),
             working_dir: task.working_dir,
         },
     };

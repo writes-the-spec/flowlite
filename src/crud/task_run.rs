@@ -309,4 +309,36 @@ mod tests {
     fn an_invalid_task_run_does_not_report_a_stop() {
         assert!(!TaskRunStatus::Invalid.is_stopped());
     }
+
+    /// `--json` (job-run get/list, job-run logs) prints this row straight through
+    /// `serde_json`. Pin the wire shape: `secret_env` carries variable name to secret
+    /// name, at the same level as `env`, never a resolved value - there is no value in
+    /// this row to serialize.
+    #[test]
+    fn task_run_serializes_secret_env_as_variable_to_secret_name() {
+        let task_run = TaskRun {
+            id: 1,
+            job_run_id: 2,
+            job_id: "job".to_string(),
+            task_id: "task".to_string(),
+            command: "sh -c true".to_string(),
+            depends_on: sqlx::types::Json(Vec::new()),
+            timeout: 60,
+            max_retries: 0,
+            retry_delay: 0,
+            env: sqlx::types::Json(BTreeMap::new()),
+            secret_env: sqlx::types::Json(BTreeMap::from([
+                ("PGPASSWORD".to_string(), "warehouse_pw".to_string()),
+            ])),
+            working_dir: "".to_string(),
+            created_at: Utc::now(),
+            started_at: None,
+            finished_at: None,
+            status: TaskRunStatus::Pending,
+        };
+
+        let value = serde_json::to_value(&task_run).unwrap();
+
+        assert_eq!(value["secret_env"], serde_json::json!({ "PGPASSWORD": "warehouse_pw" }));
+    }
 }

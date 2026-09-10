@@ -89,6 +89,24 @@
     </div>
     {% endif %}
 
+    {% if !task_run.secret_env.is_empty() %}
+    <div class="section">
+        <div class="section__head">
+            <h2 class="section__title">Secret environment</h2>
+            <span class="section__note">the secret this run will resolve into each variable when the command runs; the value is never stored, only the reference is</span>
+        </div>
+
+        <div class="meta">
+            {% for (name, secret) in task_run.secret_env %}
+            <div class="meta__item">
+                <div class="meta__label">{{ name }}</div>
+                <div class="meta__value meta__value--mono">← {{ secret }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
     <div class="section">
         <div class="section__head">
             <h2 class="section__title">Output</h2>

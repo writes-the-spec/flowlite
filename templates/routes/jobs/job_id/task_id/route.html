@@ -84,6 +84,29 @@
 
 <div class="section">
     <div class="section__head">
+        <h2 class="section__title">Secret environment</h2>
+        <span class="section__note">declared on this task, over the job's <code>secret_env:</code>; the secret's value is resolved only when the command runs, and is never stored</span>
+    </div>
+
+    {% if task.secret_env.is_empty() %}
+    <div class="empty">
+        <p>This task declares no secret environment.</p>
+        <p class="empty__do">Add them under <span class="empty__cmd">secret_env:</span> on the task in the job's YAML file.</p>
+    </div>
+    {% else %}
+    <div class="meta">
+        {% for (name, secret) in task.secret_env %}
+        <div class="meta__item">
+            <div class="meta__label">{{ name }}</div>
+            <div class="meta__value meta__value--mono">← {{ secret }}</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<div class="section">
+    <div class="section__head">
         <h2 class="section__title">Command</h2>
         <span class="section__note">run as <code>sh -c</code>, so shell syntax works</span>
     </div>
