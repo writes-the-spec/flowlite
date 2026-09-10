@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use sqlx::SqliteConnection;
 
 use crate::crud::CRUD;
-use crate::crud::job::{SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
+use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotificationStatus, NotificationChannel, NotifyOn, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
 use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort, Task};
@@ -153,14 +153,19 @@ fn merge_job_and_task_maps(
 /// its `secret_env` is dropped from the merged `env`. A name neither block of the task
 /// declares cannot collide, because the same-level check already rejects a job or task
 /// declaring one name in both of its own blocks.
+///
+/// The job side is the whole `Job` rather than its two maps: `env` and `secret_env` are
+/// both `BTreeMap<String, String>`, so passing them positionally made transposing them a
+/// change that compiled and left every test passing, while silently swapping which block
+/// each name landed in - and a plain value moved into `secret_env` is a name resolved
+/// against the secrets map. Taking the row makes that swap a type error.
 fn job_run_task_definition(
     task: &Task,
-    job_env: &BTreeMap<String, String>,
-    job_secret_env: &BTreeMap<String, String>,
+    job: &Job,
 ) -> JobRunTaskDefinition {
 
-    let mut env = merge_job_and_task_maps(job_env, &task.env.0);
-    let mut secret_env = merge_job_and_task_maps(job_secret_env, &task.secret_env.0);
+    let mut env = merge_job_and_task_maps(&job.env.0, &task.env.0);
+    let mut secret_env = merge_job_and_task_maps(&job.secret_env.0, &task.secret_env.0);
 
     for name in task.env.0.keys() {
         secret_env.remove(name);
@@ -324,9 +329,6 @@ impl CRUD {
 
         let parameters = resolve_job_parameters(job_id, &job.parameters.0, overrides)?;
 
-        let job_env = job.env.0.clone();
-        let job_secret_env = job.secret_env.0.clone();
-
         let tasks = self.select_tasks(&mut *conn, &SelectTasksData {
             filter: SelectTasksDataFilter {
                 task_id: None,
@@ -338,14 +340,16 @@ impl CRUD {
         }).await?;
 
         let definition = JobRunDefinition {
-            job_id: job.job_id,
-            job_name: job.name,
-            job_description: job.description,
+            // Cloned rather than moved so the whole row is still borrowable below: each
+            // task's definition is built against the job's own `env` and `secret_env`.
+            job_id: job.job_id.clone(),
+            job_name: job.name.clone(),
+            job_description: job.description.clone(),
             parameters,
             scheduled_at,
             tasks: tasks
                 .iter()
-                .map(|task| job_run_task_definition(task, &job_env, &job_secret_env))
+                .map(|task| job_run_task_definition(task, &job))
                 .collect(),
             notifications: job_run_notification_definitions(
                 &job.on_failure_recipients.0,
@@ -555,10 +559,26 @@ impl CRUD {
     }
 
     /// Refuses when a job's or a task's `secret_env:` names a secret `secrets` does not
-    /// define - the check that makes the spawn-time bail in `build_task_run_attempt_env`
-    /// unreachable for anything this process serves. Called from `serve.rs` alone, after
-    /// `init` and before the bind: see the comment at that call site for why it cannot live
-    /// in `init` itself.
+    /// define - the check that keeps the spawn-time bail in `build_task_run_attempt_env`
+    /// off the path of anything this process serves. Not off it entirely: this reads the
+    /// declarations `init` seeded into `mem` at startup, so a rerun replaying a row whose
+    /// YAML has since changed, or a run `job submit` created in another process from a
+    /// YAML this server never read, still reaches that bail - which is why it names the
+    /// job and the task and carries this message's remedy rather than deferring to it.
+    /// Called from `serve.rs` alone, after `init` and before the bind: see the comment at
+    /// that call site for why it cannot live in `init` itself.
+    ///
+    /// Deliberately conservative about the other thing `submit_job` knows and this does
+    /// not: `job_run_task_definition` evicts a job-level `secret_env` name from the merged
+    /// map when a task declares that same name in its own `env`, so a job whose every task
+    /// overrides `secret_env: {PW: x}` that way submits no row referencing `x` at all -
+    /// and this still refuses to start over it. That asymmetry is chosen, not overlooked.
+    /// Modelling the eviction would mean duplicating the merge here, so the two places
+    /// that reason about these declarations could then disagree about which references are
+    /// live - and the failure mode of disagreeing is a job that starts and bails at 03:00,
+    /// which is the outcome this check exists to prevent. Refusing a declaration nothing
+    /// would have read costs one YAML edit, at startup, with the job and the name in the
+    /// message; the remedy is to drop the `secret_env` entry no task uses.
     ///
     /// Its own coverage is the integration test in `tests/serve_secret_check.rs`, not a
     /// unit test: collecting real declarations here means reading real `mem.job`/
@@ -1002,6 +1022,22 @@ mod tests {
         }
     }
 
+    /// The `mem.job` row a task's definition is merged against - the same filler idea as
+    /// `task_row`, for the other side of the merge.
+    fn job_row(env: BTreeMap<String, String>, secret_env: BTreeMap<String, String>) -> Job {
+        Job {
+            job_id: "job".to_string(),
+            name: "Job".to_string(),
+            description: String::new(),
+            max_parallel_runs: 0,
+            parameters: sqlx::types::Json(BTreeMap::new()),
+            env: sqlx::types::Json(env),
+            secret_env: sqlx::types::Json(secret_env),
+            on_failure_recipients: sqlx::types::Json(BTreeMap::new()),
+            on_success_recipients: sqlx::types::Json(BTreeMap::new()),
+        }
+    }
+
     /// `job_run_task_definition` is what `submit_job` itself calls to build each task's
     /// definition, so exercising it directly - rather than through `submit_job` - covers
     /// that line for real, with no `mem.job`/`mem.task` rows needed at all: `mem` is one
@@ -1016,8 +1052,7 @@ mod tests {
 
         let definition = job_run_task_definition(
             &task,
-            &BTreeMap::new(),
-            &map(&[("DB_PASSWORD", "job_db_password"), ("SHARED", "job_shared_secret")]),
+            &job_row(BTreeMap::new(), map(&[("DB_PASSWORD", "job_db_password"), ("SHARED", "job_shared_secret")])),
         );
 
         assert_eq!(definition.secret_env.get("DB_PASSWORD").unwrap(), "job_db_password");
@@ -1033,7 +1068,7 @@ mod tests {
 
         let task = task_row(BTreeMap::new(), BTreeMap::new());
 
-        let definition = job_run_task_definition(&task, &BTreeMap::new(), &BTreeMap::new());
+        let definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), BTreeMap::new()));
 
         assert!(definition.secret_env.is_empty());
     }
@@ -1048,7 +1083,7 @@ mod tests {
 
         let task = task_row(BTreeMap::new(), map(&[("FOO", "task_secret")]));
 
-        let definition = job_run_task_definition(&task, &map(&[("FOO", "job_env_value")]), &BTreeMap::new());
+        let definition = job_run_task_definition(&task, &job_row(map(&[("FOO", "job_env_value")]), BTreeMap::new()));
 
         assert_eq!(definition.secret_env.get("FOO").unwrap(), "task_secret");
         assert!(!definition.env.contains_key("FOO"));
@@ -1061,7 +1096,7 @@ mod tests {
 
         let task = task_row(map(&[("FOO", "task_env_value")]), BTreeMap::new());
 
-        let definition = job_run_task_definition(&task, &BTreeMap::new(), &map(&[("FOO", "job_secret")]));
+        let definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), map(&[("FOO", "job_secret")])));
 
         assert_eq!(definition.env.get("FOO").unwrap(), "task_env_value");
         assert!(!definition.secret_env.contains_key("FOO"));
@@ -1080,8 +1115,7 @@ mod tests {
 
         let definition = job_run_task_definition(
             &task,
-            &map(&[("BAR", "job_env")]),
-            &map(&[("FOO", "job_secret"), ("QUX", "job_secret_2")]),
+            &job_row(map(&[("BAR", "job_env")]), map(&[("FOO", "job_secret"), ("QUX", "job_secret_2")])),
         );
 
         let shared_names: Vec<&String> = definition.env.keys()
@@ -1100,7 +1134,7 @@ mod tests {
         let db = TestDb::new().await;
 
         let task = task_row(BTreeMap::new(), map(&[("API_KEY", "task_api_key")]));
-        let task_definition = job_run_task_definition(&task, &BTreeMap::new(), &map(&[("DB_PASSWORD", "job_db_password")]));
+        let task_definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), map(&[("DB_PASSWORD", "job_db_password")])));
 
         let definition = JobRunDefinition {
             job_id: "job".to_string(),
@@ -1131,13 +1165,6 @@ mod tests {
         assert_eq!(task_runs[0].secret_env.0.get("API_KEY").unwrap(), "task_api_key");
     }
 
-    fn secrets(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_string()))
-            .collect()
-    }
-
     fn task_reference<'a>(job_id: &'a str, task_id: &'a str, variable_name: &'a str, secret_name: &'a str) -> SecretEnvReference<'a> {
         SecretEnvReference { job_id, task_id: Some(task_id), variable_name, secret_name }
     }
@@ -1148,7 +1175,7 @@ mod tests {
 
     #[test]
     fn no_references_at_all_is_satisfied() {
-        assert!(first_unsatisfied_secret_reference(&[], &secrets(&[])).is_none());
+        assert!(first_unsatisfied_secret_reference(&[], &map(&[])).is_none());
     }
 
     #[test]
@@ -1158,7 +1185,7 @@ mod tests {
             job_reference("nightly-sync", "API_KEY", "api_key"),
         ];
 
-        let available = secrets(&[("warehouse_pw", "hunter2"), ("api_key", "abc")]);
+        let available = map(&[("warehouse_pw", "hunter2"), ("api_key", "abc")]);
 
         assert!(first_unsatisfied_secret_reference(&references, &available).is_none());
     }
@@ -1169,7 +1196,7 @@ mod tests {
     fn an_undefined_task_level_reference_is_reported() {
         let references = [task_reference("nightly-sync", "load", "PGPASSWORD", "warehouse_pw")];
 
-        let reference = first_unsatisfied_secret_reference(&references, &secrets(&[])).unwrap();
+        let reference = first_unsatisfied_secret_reference(&references, &map(&[])).unwrap();
 
         assert_eq!(reference.job_id, "nightly-sync");
         assert_eq!(reference.task_id, Some("load"));
@@ -1183,7 +1210,7 @@ mod tests {
     fn an_undefined_job_level_reference_is_reported_with_no_task() {
         let references = [job_reference("nightly-sync", "API_KEY", "api_key")];
 
-        let reference = first_unsatisfied_secret_reference(&references, &secrets(&[])).unwrap();
+        let reference = first_unsatisfied_secret_reference(&references, &map(&[])).unwrap();
 
         assert_eq!(reference.job_id, "nightly-sync");
         assert!(reference.task_id.is_none());
@@ -1200,7 +1227,7 @@ mod tests {
             task_reference("nightly-sync", "load", "PGPASSWORD", "warehouse_pw"),
         ];
 
-        let available = secrets(&[("api_key", "abc")]);
+        let available = map(&[("api_key", "abc")]);
 
         let reference = first_unsatisfied_secret_reference(&references, &available).unwrap();
 
@@ -1214,7 +1241,7 @@ mod tests {
 
         // An empty string is still a defined secret - "nothing defines it" is about the
         // name being absent from the map, not about the value being non-empty.
-        let available = secrets(&[("warehouse_pw", "")]);
+        let available = map(&[("warehouse_pw", "")]);
 
         assert!(first_unsatisfied_secret_reference(&references, &available).is_none());
     }
