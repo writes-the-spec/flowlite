@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use anyhow::Context;
-use sqlx::Acquire;
+use sqlx::{Acquire, SqliteConnection};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::fs;
 use crate::crud::job::{InsertJobData, InsertJobDataInput};
 use crate::crud::job_run_notification::NotificationChannel;
@@ -52,14 +52,14 @@ impl CRUD {
         Self { toolkit }
     }
 
-    pub async fn init<'e, E>(&self, executor: E) -> anyhow::Result<()>
+    pub async fn init<'e, E>(&self, executor: E) -> anyhow::Result<u64>
     where
         E: Acquire<'e, Database = sqlx::Sqlite>,
     {
         let data_dir = PathBuf::from(&self.toolkit.app_config.data_dir);
 
-        // What a job, task or schedule gets for a field its YAML leaves out.
-        let job_defaults = &self.toolkit.app_config.job_defaults;
+        // What a schedule gets for a field its YAML leaves out. The job side of this
+        // lives in seed_job, which is the only place a job file becomes rows.
         let schedule_defaults = &self.toolkit.app_config.schedule_defaults;
 
         let mut conn = executor.acquire().await
@@ -76,102 +76,7 @@ impl CRUD {
                 if Self::is_yaml_file(&job_path) {
                     let job_yaml = JobYaml::from_yaml(&job_path)?;
 
-                    Self::validate_job_tasks(&job_yaml)
-                        .with_context(|| format!(
-                            "Invalid tasks of job '{}' at {}",
-                            job_yaml.id,
-                            job_path.display(),
-                        ))?;
-
-                    self.validate_job_notifications(&job_yaml)
-                        .with_context(|| format!(
-                            "Invalid notifications of job '{}' at {}",
-                            job_yaml.id,
-                            job_path.display(),
-                        ))?;
-
-                    self.validate_job_limits(&job_yaml)
-                        .with_context(|| format!(
-                            "Invalid limits of job '{}' at {}",
-                            job_yaml.id,
-                            job_path.display(),
-                        ))?;
-
-                    row_id += 1;
-                    self.insert_job(&mut *tx, &InsertJobData {
-                        input: InsertJobDataInput {
-                            row_id,
-                            job_id: job_yaml.id.clone(),
-                            name: job_yaml.name,
-                            description: job_yaml.description,
-                            max_parallel_runs: job_yaml.max_parallel_runs
-                                .unwrap_or(job_defaults.max_parallel_runs),
-                            parameters: job_yaml.parameters.clone(),
-                            env: job_yaml.env.clone(),
-                            secret_env: job_yaml.secret_env.clone(),
-                            on_failure_recipients: job_notify_recipients(&job_yaml.on_failure),
-                            on_success_recipients: job_notify_recipients(&job_yaml.on_success),
-                            limits: job_yaml.limits.clone(),
-                        }
-                    })
-                        .await
-                        .with_context(|| format!(
-                            "Failed to insert job '{}' from {}",
-                            job_yaml.id,
-                            job_path.display(),
-                        ))?;
-
-                    for task_yaml in job_yaml.tasks {
-                        row_id += 1;
-                        self.insert_task(&mut *tx, &InsertTaskData {
-                            input: InsertTaskDataInput {
-                                row_id,
-                                task_id: task_yaml.id.clone(),
-                                job_id: job_yaml.id.clone(),
-                                description: task_yaml.description,
-                                command: task_yaml.command,
-                                depends_on: task_yaml.depends_on.clone(),
-                                limits: task_yaml.limits.clone(),
-                                timeout: task_yaml.timeout
-                                    .unwrap_or(job_defaults.timeout_seconds),
-                                max_retries: task_yaml.max_retries
-                                    .unwrap_or(job_defaults.max_retries),
-                                retry_delay: task_yaml.retry_delay
-                                    .unwrap_or(job_defaults.retry_delay_seconds),
-                                env: task_yaml.env.clone(),
-                                secret_env: task_yaml.secret_env.clone(),
-                                working_dir: task_yaml.working_dir.clone(),
-                            }
-                        })
-                            .await
-                            .with_context(|| format!(
-                                "Failed to insert task '{}' of job '{}' from {}",
-                                task_yaml.id,
-                                job_yaml.id,
-                                job_path.display(),
-                            ))?;
-
-                        for dependent_task_id in task_yaml.depends_on {
-                            row_id += 1;
-                            self.insert_task_dependent(&mut *tx, &InsertTaskDependentData {
-                                input: InsertTaskDependentDataInput {
-                                    row_id,
-                                    job_id: job_yaml.id.clone(),
-                                    task_id: task_yaml.id.clone(),
-                                    dependent_task_id: dependent_task_id.clone(),
-                                }
-                            })
-                                .await
-                                .with_context(|| format!(
-                                    "Failed to insert dependency '{}' of task '{}' of job '{}' from {}",
-                                    dependent_task_id,
-                                    task_yaml.id,
-                                    job_yaml.id,
-                                    job_path.display(),
-                                ))?;
-                        }
-
-                    }
+                    row_id = self.seed_job(&mut tx, job_yaml, &job_path, row_id).await?;
                 }
             }
         }
@@ -247,7 +152,128 @@ impl CRUD {
                 data_dir.display(),
             ))?;
 
-        Ok(())
+        Ok(row_id)
+    }
+
+
+    /// Seeds one parsed job file into `mem`, returning the row_id it stopped at.
+    ///
+    /// The only place a JobYaml becomes rows. `init` calls it once per file in the data
+    /// directory; `job submit -f` calls it for a file that is never installed there. A
+    /// run's definition is built from these rows either way, so the two must not drift.
+    ///
+    /// `row_id` is threaded through rather than counted here because it is UNIQUE across
+    /// `mem.job` and across `mem.task` - a second caller starting from its own zero is a
+    /// constraint violation - and because within a job it is the order `submit_job` reads
+    /// the tasks back in.
+    pub(crate) async fn seed_job(
+        &self,
+        conn: &mut SqliteConnection,
+        job_yaml: JobYaml,
+        job_path: &Path,
+        mut row_id: u64,
+    ) -> anyhow::Result<u64> {
+
+        let job_defaults = &self.toolkit.app_config.job_defaults;
+
+        Self::validate_job_tasks(&job_yaml)
+            .with_context(|| format!(
+                "Invalid tasks of job '{}' at {}",
+                job_yaml.id,
+                job_path.display(),
+            ))?;
+
+        self.validate_job_notifications(&job_yaml)
+            .with_context(|| format!(
+                "Invalid notifications of job '{}' at {}",
+                job_yaml.id,
+                job_path.display(),
+            ))?;
+
+        self.validate_job_limits(&job_yaml)
+            .with_context(|| format!(
+                "Invalid limits of job '{}' at {}",
+                job_yaml.id,
+                job_path.display(),
+            ))?;
+
+        row_id += 1;
+        self.insert_job(&mut *conn, &InsertJobData {
+            input: InsertJobDataInput {
+                row_id,
+                job_id: job_yaml.id.clone(),
+                name: job_yaml.name,
+                description: job_yaml.description,
+                max_parallel_runs: job_yaml.max_parallel_runs
+                    .unwrap_or(job_defaults.max_parallel_runs),
+                parameters: job_yaml.parameters.clone(),
+                env: job_yaml.env.clone(),
+                secret_env: job_yaml.secret_env.clone(),
+                on_failure_recipients: job_notify_recipients(&job_yaml.on_failure),
+                on_success_recipients: job_notify_recipients(&job_yaml.on_success),
+                limits: job_yaml.limits.clone(),
+            }
+        })
+            .await
+            .with_context(|| format!(
+                "Failed to insert job '{}' from {}",
+                job_yaml.id,
+                job_path.display(),
+            ))?;
+
+        for task_yaml in job_yaml.tasks {
+            row_id += 1;
+            self.insert_task(&mut *conn, &InsertTaskData {
+                input: InsertTaskDataInput {
+                    row_id,
+                    task_id: task_yaml.id.clone(),
+                    job_id: job_yaml.id.clone(),
+                    description: task_yaml.description,
+                    command: task_yaml.command,
+                    depends_on: task_yaml.depends_on.clone(),
+                    limits: task_yaml.limits.clone(),
+                    timeout: task_yaml.timeout
+                        .unwrap_or(job_defaults.timeout_seconds),
+                    max_retries: task_yaml.max_retries
+                        .unwrap_or(job_defaults.max_retries),
+                    retry_delay: task_yaml.retry_delay
+                        .unwrap_or(job_defaults.retry_delay_seconds),
+                    env: task_yaml.env.clone(),
+                    secret_env: task_yaml.secret_env.clone(),
+                    working_dir: task_yaml.working_dir.clone(),
+                }
+            })
+                .await
+                .with_context(|| format!(
+                    "Failed to insert task '{}' of job '{}' from {}",
+                    task_yaml.id,
+                    job_yaml.id,
+                    job_path.display(),
+                ))?;
+
+            for dependent_task_id in task_yaml.depends_on {
+                row_id += 1;
+                self.insert_task_dependent(&mut *conn, &InsertTaskDependentData {
+                    input: InsertTaskDependentDataInput {
+                        row_id,
+                        job_id: job_yaml.id.clone(),
+                        task_id: task_yaml.id.clone(),
+                        dependent_task_id: dependent_task_id.clone(),
+                    }
+                })
+                    .await
+                    .with_context(|| format!(
+                        "Failed to insert dependency '{}' of task '{}' of job '{}' from {}",
+                        dependent_task_id,
+                        task_yaml.id,
+                        job_yaml.id,
+                        job_path.display(),
+                    ))?;
+            }
+
+        }
+
+        Ok(row_id)
     }
 
     /// Rejects a job that asks to be told over a channel this box cannot deliver on. Read
