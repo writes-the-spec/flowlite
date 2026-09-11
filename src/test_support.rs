@@ -218,6 +218,24 @@ impl TestDb {
         )
     }
 
+    /// The same dispatcher, over a config carrying the given named concurrency limits -
+    /// `app_config()` otherwise always answers an empty map, since nothing under test
+    /// configures a `[concurrency_limits]` section of its own. Follows
+    /// `task_run_attempt_dispatcher_with_max_running_attempts`'s pattern: the one field a
+    /// test needs is overridden on top of the real config.
+    pub fn task_run_attempt_dispatcher_with_concurrency_limits(&self, concurrency_limits: BTreeMap<String, u32>) -> TaskRunAttemptDispatcher {
+        TaskRunAttemptDispatcher::new(
+            self.crud.clone(),
+            self.conn_pool.clone(),
+            self.children.clone(),
+            self.signals.clone(),
+            AppConfig {
+                concurrency_limits,
+                ..self.app_config()
+            },
+        )
+    }
+
     pub fn task_run_attempt_monitor(&self) -> TaskRunAttemptMonitor {
         TaskRunAttemptMonitor::new(
             self.crud.clone(),
@@ -405,6 +423,34 @@ impl TestDb {
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
                     status: TaskRunStatus::Pending,
+                },
+            },
+        ).await.unwrap();
+
+        self.task_run(id).await
+    }
+
+    /// A task run claiming the given named limits, for the tests that fill or clear a
+    /// slot.
+    pub async fn insert_task_run_with_limits(&self, job_run_id: i64, limits: Vec<String>) -> TaskRun {
+
+        let id = self.crud.insert_task_run(
+            &*self.conn_pool,
+            &InsertTaskRunData {
+                input: InsertTaskRunDataInput {
+                    job_run_id,
+                    job_id: "job".to_string(),
+                    task_id: format!("task-{}", uuid::Uuid::new_v4()),
+                    command: "true".to_string(),
+                    depends_on: Vec::new(),
+                    limits,
+                    timeout: 3600,
+                    max_retries: 0,
+                    retry_delay: 60,
+                    env: BTreeMap::new(),
+                    secret_env: BTreeMap::new(),
+                    working_dir: String::new(),
+                    status: TaskRunStatus::Running,
                 },
             },
         ).await.unwrap();

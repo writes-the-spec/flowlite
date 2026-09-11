@@ -599,6 +599,47 @@ impl CRUD {
         Ok(running_attempts.len() as u32)
     }
 
+    /// How many running task run attempts currently claim each named limit - what
+    /// `settle_as_pending`'s named-limit gate counts against. A name claimed by three
+    /// Running attempts' task runs maps to `3`; a name nothing running claims is absent
+    /// rather than `0`. Tallied from Running attempts only, the same as
+    /// `count_running_attempts`.
+    pub async fn claimed_limit_slots(&self, conn: &mut SqliteConnection) -> anyhow::Result<BTreeMap<String, u32>> {
+
+        let running_attempts = self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
+            filter: SelectTaskRunAttemptsDataFilter {
+                task_run_id: None,
+                job_run_id: None,
+                task_id: None,
+                status: Some(TaskRunAttemptStatus::Running),
+            },
+            sort: None,
+        }).await?;
+
+        let mut claimed_limit_slots = BTreeMap::new();
+
+        for running_attempt in &running_attempts {
+
+            let task_run = self.select_task_run(&mut *conn, &SelectTaskRunsData {
+                filter: SelectTaskRunsDataFilter {
+                    id: Some(running_attempt.task_run_id),
+                    job_run_id: None,
+                    job_id: None,
+                    task_id: None,
+                    status: None,
+                },
+                sort: None,
+            }).await?
+                .ok_or_else(|| anyhow::anyhow!("Task run not found: {}", running_attempt.task_run_id))?;
+
+            for limit in &task_run.limits.0 {
+                *claimed_limit_slots.entry(limit.clone()).or_insert(0) += 1;
+            }
+        }
+
+        Ok(claimed_limit_slots)
+    }
+
     /// Refuses when a job's or a task's `secret_env:` names a secret `secrets` does not
     /// define - the check that keeps the spawn-time bail in `build_task_run_attempt_env`
     /// off the path of anything this process serves. Not off it entirely: this reads the
