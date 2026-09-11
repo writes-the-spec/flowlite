@@ -430,4 +430,30 @@ mod tests {
 
         assert!(!serialized.contains("hunter2"), "{serialized}");
     }
+
+    #[test]
+    fn max_running_attempts_in_the_config_file_is_read() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+        std::fs::write(
+            dir.join("config.toml"),
+            "[orchestrator]\nmax_running_attempts = 8\n",
+        ).unwrap();
+
+        let config = AppConfig::load(Some(dir)).unwrap();
+
+        assert_eq!(config.orchestrator.max_running_attempts, 8);
+    }
+
+    #[test]
+    fn max_running_attempts_defaults_to_32_when_not_in_the_config_file() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+
+        let config = AppConfig::load(Some(dir)).unwrap();
+
+        assert_eq!(config.orchestrator.max_running_attempts, 32);
+    }
 }

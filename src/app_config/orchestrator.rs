@@ -19,6 +19,8 @@ pub struct AppConfigOrchestrator {
     pub max_stream_bytes: usize,
     /// One read from a child's pipe.
     pub read_buffer_bytes: usize,
+    /// The most task run attempts that may be running at once, across every job. 0 for no limit.
+    pub max_running_attempts: u32,
 }
 
 impl Default for AppConfigOrchestrator {
@@ -29,6 +31,7 @@ impl Default for AppConfigOrchestrator {
             reader_eof_timeout_seconds: 2,
             max_stream_bytes: 1024 * 1024,
             read_buffer_bytes: 8192,
+            max_running_attempts: 32,
         }
     }
 }
