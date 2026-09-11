@@ -13,8 +13,12 @@
         <p class="view-sub">{{ job.description }}</p>
     </div>
 
-    <div class="controls">
+    <div class="controls controls--stack">
         <button class="btn btn--primary" onclick="document.getElementById('submit_job').showModal()">Submit run</button>
+        <div>
+            <div class="meta__label">or use the CLI</div>
+            <code class="cmd">flowlite job submit {{ job.job_id }}</code>
+        </div>
     </div>
 </div>
 
@@ -163,8 +167,6 @@
             {% endfor %}
         </div>
         {% endif %}
-
-        <p class="dialog__body"><code class="cmd">flowlite job submit {{ job.job_id }}</code></p>
 
         <div class="dialog__actions">
             <button type="submit" formmethod="dialog" class="btn btn--quiet">Cancel</button>

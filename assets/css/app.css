@@ -218,6 +218,14 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
     flex-wrap: wrap;
 }
 
+/* The job page stacks its action over the CLI line that does the same thing, rather than
+   sitting them side by side as peers. */
+.controls--stack {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.5rem;
+}
+
 .field, .btn {
     font-family: inherit;
     font-size: 0.8125rem;
