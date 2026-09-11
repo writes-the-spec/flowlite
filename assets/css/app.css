@@ -726,6 +726,8 @@ dialog::backdrop { background: rgba(10, 8, 14, 0.7); }
 
 .dialog__scroll .meta__item { width: 100%; }
 .dialog__scroll .meta__value { overflow-wrap: anywhere; }
+/* A parameter row in the submit dialog is a label over a full-width input. */
+.dialog__scroll .field { width: 100%; margin-top: 0.25rem; }
 
 /* ---------- Attempt output (task run detail) ---------- */
 

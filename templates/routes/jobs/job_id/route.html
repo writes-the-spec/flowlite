@@ -14,13 +14,7 @@
     </div>
 
     <div class="controls">
-        <div>
-            <div class="meta__label">Run it</div>
-            <code class="cmd">flowlite job submit {{ job.job_id }}</code>
-        </div>
-        <div>
-            <button class="btn btn--primary" onclick="document.getElementById('submit_job').showModal()">Submit run</button>
-        </div>
+        <button class="btn btn--primary" onclick="document.getElementById('submit_job').showModal()">Submit run</button>
     </div>
 </div>
 
@@ -151,18 +145,32 @@
     {% endif %}
 </div>
 
-<dialog id="submit_job">
-    <h2 class="dialog__title">Submit a run of {{ job.name }}?</h2>
-    <p class="dialog__body">A new run is submitted with the job's current definition and its declared parameter defaults. Use <code>flowlite job submit {{ job.job_id }} --param name=value</code> to override one.</p>
+<dialog id="submit_job" class="dialog--data">
+    <form action="/jobs/{{ job.job_id }}/submit" method="POST">
+        <h2 class="dialog__title">Submit a run of {{ job.name }}?</h2>
 
-    <div class="dialog__actions">
-        <form method="dialog">
-            <button class="btn btn--quiet">Cancel</button>
-        </form>
-        <form action="/jobs/{{ job.job_id }}/submit" method="POST">
+        {% if job.parameters.is_empty() %}
+        <p class="dialog__body">This job declares no parameters, so the run is submitted with its current definition as it stands.</p>
+        {% else %}
+        <p class="dialog__body">Each value starts at the job's declared default. Changing one here changes it for this run only — the job's YAML is untouched, and the run records what it was submitted with.</p>
+
+        <div class="dialog__scroll">
+            {% for (name, value) in job.parameters.0 %}
+            <div class="meta__item">
+                <label class="meta__label" for="param_{{ name }}">{{ name }}</label>
+                <input class="field" type="text" id="param_{{ name }}" name="{{ name }}" value="{{ value }}">
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <p class="dialog__body"><code class="cmd">flowlite job submit {{ job.job_id }}</code></p>
+
+        <div class="dialog__actions">
+            <button type="submit" formmethod="dialog" class="btn btn--quiet">Cancel</button>
             <button type="submit" class="btn btn--primary">Submit run</button>
-        </form>
-    </div>
+        </div>
+    </form>
 </dialog>
 
 {% endblock %}

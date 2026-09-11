@@ -1,7 +1,7 @@
 use axum::extract::{State, Path};
 use axum::response::{Html, IntoResponse, Redirect};
 use askama::Template;
-use axum::Extension;
+use axum::{Extension, Form};
 
 use crate::crud::CRUD;
 use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
@@ -74,12 +74,22 @@ pub async fn job_id_route(
 
 
 /// Submits a run of this job from its page, the browser equivalent of
-/// `flowlite job submit <job_id>`.
+/// `flowlite job submit <job_id> --param name=value`.
 ///
-/// Overrides are empty, so the run takes the job's declared `parameters:` defaults. A
-/// browser form that could set them would be the first thing on this dashboard taking free
-/// text from a viewer, and it needs its own validation and error surface; the CLI's
-/// `--param` remains the way to override one.
+/// The form posts one field per parameter the job declares, so `overrides` arrives already
+/// shaped like the map `submit_job` takes. A job declaring none posts an empty body and
+/// gets an empty map, which is the same submit the button made before it had a form.
+///
+/// Only values are editable - the names come from the job's own `parameters:`, rendered as
+/// the field names - so a viewer cannot invent a name `submit_job` would reject. A crafted
+/// POST still can, and that is left to `submit_job`'s own validation rather than
+/// re-checked here: it is the same check the CLI's `--param` goes through, and duplicating
+/// it would give two places to disagree about what a parameter is.
+///
+/// Taking a form means the request needs a form content type, which a browser always sends
+/// and a bare `curl -X POST` with no body does not - that now answers 415 where it used to
+/// submit. The CLI is the supported scriptable path, so this is a deliberate narrowing of
+/// the endpoint to what the page posts rather than an accident.
 ///
 /// Unlike stop and rerun, this is not idempotent - every submit is another run - so the
 /// page asks for confirmation first, the same way rerun does. What a stray confirmation
@@ -89,6 +99,8 @@ pub async fn submit_job_route(
     State(state): State<AppState>,
     Extension(crud): Extension<CRUD>,
     Path(job_id): Path<String>,
+    // Last, because it consumes the request body.
+    Form(overrides): Form<BTreeMap<String, String>>,
 ) -> impl IntoResponse {
 
     let mut conn = match state.conn_pool.acquire().await {
@@ -99,7 +111,7 @@ pub async fn submit_job_route(
         }
     };
 
-    match crud.submit_job(&mut conn, &job_id, &BTreeMap::new(), None).await {
+    match crud.submit_job(&mut conn, &job_id, &overrides, None).await {
         Ok(job_run_id) => {
             state.signals.publish();
             Redirect::to(&format!("/job-runs/{}", job_run_id)).into_response()

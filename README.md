@@ -760,9 +760,13 @@ nothing to configure.
 **Submit is the one that is not idempotent.** Stop writes a stop row and rerun replays a
 fixed snapshot, so pressing either twice changes nothing the first press did not; submitting
 twice is two runs. What that costs is bounded rather than free: the extra run queues, since
-`max_parallel_runs` and `max_running_attempts` decide what actually executes. It submits
-with the job's declared parameter defaults — use `flowlite job submit <job> --param
-name=value` to override one, which the browser deliberately cannot do.
+`max_parallel_runs` and `max_running_attempts` decide what actually executes.
+
+The submit dialog lists the job's declared parameters with their defaults filled in, and each
+is editable for that run. Only the values are: the names come from the job's `parameters:`
+block, so the browser can change what a run is submitted with but not what the job accepts —
+that stays a file in git. The run records the values it was submitted with, so a rerun
+replays them.
 
 ## Configuration
 
