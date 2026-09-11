@@ -87,9 +87,11 @@ pub fn limit_rows(
 }
 
 
-/// A limit configured `0` never reaches `FULL` and prints its max as `-`: `0` means
-/// nothing may ever run under that name, so "full" would be the wrong word for a slot
-/// count that is permanently zero-of-zero.
+/// A limit configured `0` never reaches `FULL` and prints its max as `-`: throughout this
+/// codebase `0` means no ceiling at all - the dispatcher skips the check entirely for it
+/// (`max_running_attempts > 0` and `configured_max == 0` in
+/// `task_run_attempt_dispatcher.rs`) - so there is no maximum for anything to be full
+/// against.
 pub fn limits_table(rows: &[LimitRow]) -> String {
 
     let mut lines = vec![format!("{:<12} {:>6} {:>4}", "NAME", "IN USE", "MAX")];
@@ -180,8 +182,9 @@ mod tests {
         assert!(!openai_line.ends_with("FULL"), "{openai_line}");
     }
 
-    /// A limit configured `0` means "never allowed to run" - `FULL` would misdescribe a
-    /// slot count of zero-of-zero, so the table prints a dash instead.
+    /// A limit configured `0` means unlimited, not zero slots - the dispatcher skips the
+    /// check entirely for it - so there is no maximum to be full against and the table
+    /// prints a dash instead.
     #[test]
     fn a_zero_max_prints_a_dash_and_is_never_full() {
         let rows = vec![LimitRow { name: "disabled".to_string(), in_use: 0, max: 0 }];
@@ -196,6 +199,16 @@ mod tests {
     #[test]
     fn in_use_below_a_non_zero_max_is_not_full() {
         let rows = vec![LimitRow { name: "openai_api".to_string(), in_use: 1, max: 5 }];
+
+        let table = limits_table(&rows);
+        assert!(!table.contains("FULL"), "{table}");
+    }
+
+    /// One below the max is the boundary an off-by-one (`in_use >= max - 1`) would get
+    /// wrong: 4 of 5 must not read as FULL.
+    #[test]
+    fn one_below_a_non_zero_max_is_not_full() {
+        let rows = vec![LimitRow { name: "openai_api".to_string(), in_use: 4, max: 5 }];
 
         let table = limits_table(&rows);
         assert!(!table.contains("FULL"), "{table}");
