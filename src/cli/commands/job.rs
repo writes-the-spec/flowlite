@@ -1,4 +1,6 @@
+use std::path::Path;
 use clap::{Args, Subcommand};
+use crate::serve_state::{status, ServeStatus};
 use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
 use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
@@ -95,6 +97,12 @@ impl JobSubmitCmd {
 
         let poll_interval = toolkit.app_config.orchestrator.poll_interval();
 
+        // Before the run is written, so a wait that cannot be serviced leaves no queued
+        // run behind for a server that is not there to run it.
+        if self.wait {
+            ensure_data_dir_is_served(&toolkit.app_config.data_dir)?;
+        }
+
         let mut conn = toolkit.get_conn().await?;
         let crud = CRUD::new(std::sync::Arc::new(toolkit));
 
@@ -180,6 +188,28 @@ async fn select_job_run(
     }
 }
 
+/// Refuses a `--wait` that nothing would ever end.
+///
+/// The waits below poll a row that only the serve process writes, so waiting on a data
+/// directory nothing is serving blocks for ever on a row that cannot change - silently,
+/// which is worse than failing. Read once, before the wait rather than on every pass: a
+/// wait is allowed to span a deliberate restart of serve, which is a reasonable thing to
+/// do to a server while a long run is in flight.
+///
+/// `Starting` counts as served. That server has the lock and will reach the row.
+pub(crate) fn ensure_data_dir_is_served(data_dir: &str) -> anyhow::Result<()> {
+
+    if matches!(status(Path::new(data_dir))?, ServeStatus::Down) {
+        anyhow::bail!(
+            "Data directory {} is not being served, so --wait would never return. Start \
+             flowlite serve against it, or drop --wait.",
+            data_dir,
+        );
+    }
+
+    Ok(())
+}
+
 /// Blocks until the run has settled, and reports it as it settled.
 ///
 /// Signals never leave the process that publishes them, and the run is executed by the
@@ -246,7 +276,37 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use crate::crud::job_run::{UpdateJobRunsData, UpdateJobRunsDataFilter, UpdateJobRunsDataInput};
+    use crate::serve_state::ServeLock;
     use crate::test_support::TestDb;
+
+    /// The hang this guards against: nothing is serving the directory, so the row the
+    /// wait polls has no writer and the command would sit there for ever.
+    #[test]
+    fn waiting_on_an_unserved_data_dir_is_refused_naming_it() {
+
+        let data_dir = std::env::temp_dir().join(format!("flowlite-unserved-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let error = ensure_data_dir_is_served(&data_dir.to_string_lossy())
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains(&data_dir.to_string_lossy().to_string()), "{error}");
+        assert!(error.contains("--wait"), "{error}");
+    }
+
+    /// The lock is what `serve` holds for as long as it runs, so holding it here is the
+    /// directory looking served to anything that asks.
+    #[test]
+    fn waiting_on_a_served_data_dir_is_allowed() {
+
+        let data_dir = std::env::temp_dir().join(format!("flowlite-served-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let _lock = ServeLock::acquire(&data_dir).unwrap();
+
+        assert!(ensure_data_dir_is_served(&data_dir.to_string_lossy()).is_ok());
+    }
 
     #[test]
     fn a_pair_splits_into_name_and_value() {

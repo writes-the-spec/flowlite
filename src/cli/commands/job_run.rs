@@ -9,7 +9,7 @@ use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, Select
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt};
 use crate::crud::task_run_attempt_output::{group_task_run_attempt_output, SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort, TaskRunAttemptOutputStreams};
 use crate::router::app::format;
-use super::job::wait_for_job_run;
+use super::job::{ensure_data_dir_is_served, wait_for_job_run};
 
 #[derive(Args)]
 pub struct JobRunCmd {
@@ -301,6 +301,12 @@ impl JobRunStopCmd {
     pub async fn run(&self, toolkit: Toolkit, json: bool) -> anyhow::Result<()> {
 
         let poll_interval = toolkit.app_config.orchestrator.poll_interval();
+
+        // Before the row is written, for the reason `job submit --wait` checks before
+        // submitting: a wait nothing can service should change nothing.
+        if self.wait {
+            ensure_data_dir_is_served(&toolkit.app_config.data_dir)?;
+        }
 
         let mut conn = toolkit.get_conn().await?;
 

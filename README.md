@@ -591,7 +591,10 @@ echo $?     # 0 only when the run succeeded
 Every ending that is not a success exits 1 — failed, timed out, aborted, skipped or invalid
 — so a Makefile, a CI step or a parent job can treat a flowlite run like any other command.
 The wait polls the run's row, so it works from a different process, shell or container to
-the one running `flowlite serve`.
+the one running `flowlite serve` — and is refused outright when nothing is serving the
+data directory, because the row it would poll has no writer and the command would
+otherwise block for ever. Only the wait is refused: submitting into a directory whose
+server is down still queues the run for whenever it comes up.
 
 The run history is readable without opening the dashboard:
 
@@ -617,7 +620,7 @@ flowlite job-run stop 42 --wait && flowlite job-run rerun 42
 
 Unlike `job submit --wait` it exits 0 whichever status the run settled to: the stop did
 what it was asked either way, and how the run itself ended is the run's outcome to report,
-not this command's.
+not this command's. It makes the same unserved-directory check, and refuses the same way.
 
 ### JSON output
 
