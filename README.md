@@ -494,6 +494,76 @@ of creating a run is held to it alike — `job submit`, a rerun, and the schedul
 that takes longer than its schedule interval will therefore queue pending runs and work
 through them back to back.
 
+## Concurrency limits
+
+`max_parallel_runs` bounds runs of *one job*. These two knobs bound something orthogonal:
+how many task run *attempts* are running at once, regardless of which job or run they
+belong to.
+
+```toml
+[orchestrator]
+max_running_attempts = 32   # 0 for no limit
+```
+
+That is the one ceiling with no name — every attempt anywhere counts against it.
+`[concurrency_limits]` adds ceilings with a name, for a resource narrower than "the whole
+server":
+
+```toml
+[concurrency_limits]
+warehouse = 3   # 0 for no limit, same as above
+```
+
+A task opts into one with `limits:`, at job level, task level, or both. A job's limits are
+claimed by *every* one of its tasks; a task's own are added to them, not substituted for
+them:
+
+```yaml
+id: nightly-sync
+name: Nightly Sync
+limits: [warehouse]       # every task below claims warehouse too
+tasks:
+  - id: load
+    command: ./load.sh
+    limits: [openai_api]  # this task claims warehouse AND openai_api
+```
+
+A limit name that is not a key of `[concurrency_limits]` is a **startup error** — the same
+reason a `secret_env:` naming a value nothing defines fails `serve` rather than the run that
+needed it. A typo cannot silently become a task with no limit at all.
+
+This is the split `secret_env:` already draws between a credential's name and its value
+(see [Secrets](#secrets) and
+[`env:` is for what you'd commit...](#env-is-for-what-youd-commit-secret_env-for-what-you-wouldnt)):
+**the number is config, the name is YAML.** A job file names the resource it competes for
+and stays committable as-is; how much of that resource exists is a `config.toml` question,
+answered per deployment without editing a single job.
+
+`global` is reserved and rejected in `[concurrency_limits]`, because `flowlite limits`
+prints the combined cap across every job under that name:
+
+```bash
+$ flowlite limits
+NAME         IN USE  MAX
+global            0   32
+openai_api        0    -
+warehouse         0    3
+```
+
+A limit configured `0` means no ceiling at all, not zero slots, and this table renders it as
+`-` rather than a number it could be confused with — the dashboard's own panel spells the
+same `0` out as `unlimited`. `--json` keeps it as the number `0` either way, so a script
+comparing it against `in_use` never has to special-case a dash:
+
+```bash
+flowlite limits --json
+```
+
+It reads `config.toml` for the maxima and the on-disk database for the counts directly, so
+it answers for a data directory whose server is down as readily as one whose server is
+up — needing no running `serve` at all, the same guarantee `status` makes by reading the
+lock file instead of asking the process.
+
 ## Runs from the command line
 
 `job submit` returns as soon as the run is written, which is what an unattended scheduler
@@ -684,6 +754,7 @@ error_backoff_seconds = 5       # pause before a failed service restarts
 reader_eof_timeout_seconds = 2  # wait for a finished attempt's output to end
 max_stream_bytes = 1048576      # per stream, per attempt, then truncated
 read_buffer_bytes = 8192        # one read from a running command's pipe
+max_running_attempts = 32       # running task attempts across every job, 0 for no limit
 
 [ui]
 page_size = 25                  # rows per page on the run, job and schedule lists
@@ -734,6 +805,21 @@ reason the SMTP password does. A secret name is restricted to `[a-z0-9_]+` with 
 it precisely so either spelling reaches the same name — `config.toml` can quote a name
 `FLOWLITE_SECRETS__*` could never spell, and `__` inside a name is how that form separates
 nested keys rather than part of the name.
+
+`[concurrency_limits]` is where a job's `limits:` resolves the name it claims to a maximum
+— see [Concurrency limits](#concurrency-limits). It is read the same two ways as
+`[secrets]`, a name here or `FLOWLITE_CONCURRENCY_LIMITS__WAREHOUSE=3` in the environment,
+but there is nothing to hide in it: unlike a credential, a wrong limit should be visible
+rather than redacted.
+
+```toml
+[concurrency_limits]
+warehouse = 3   # 0 for no limit
+```
+
+`global` is reserved here and refused at startup — `flowlite limits` prints the combined
+cap across every job under that name, and a job-named limit sharing it would make that row
+ambiguous.
 
 `[job_defaults]` and `[schedule_defaults]` fill in what a job's or schedule's YAML leaves
 out, and they are read when the YAML is — at startup. So a task with no `timeout:` takes
