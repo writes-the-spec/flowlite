@@ -1,5 +1,5 @@
 use axum::extract::{State, Path};
-use axum::response::{Html, IntoResponse};
+use axum::response::{Html, IntoResponse, Redirect};
 use askama::Template;
 use axum::Extension;
 
@@ -8,6 +8,7 @@ use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter, SelectJobsData
 use crate::crud::task::{Task, SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort};
 use crate::router::app::app_state::AppState;
 use crate::router::app::routes::jobs::job_id::dag::{self, Dag};
+use std::collections::BTreeMap;
 
 #[derive(Template)]
 #[template(path = "routes/jobs/job_id/route.html")]
@@ -68,5 +69,44 @@ pub async fn job_id_route(
             eprintln!("Template rendering error: {}", err);
             Html("Error rendering template".to_string()).into_response()
         },
+    }
+}
+
+
+/// Submits a run of this job from its page, the browser equivalent of
+/// `flowlite job submit <job_id>`.
+///
+/// Overrides are empty, so the run takes the job's declared `parameters:` defaults. A
+/// browser form that could set them would be the first thing on this dashboard taking free
+/// text from a viewer, and it needs its own validation and error surface; the CLI's
+/// `--param` remains the way to override one.
+///
+/// Unlike stop and rerun, this is not idempotent - every submit is another run - so the
+/// page asks for confirmation first, the same way rerun does. What a stray confirmation
+/// costs is one queued run: `max_parallel_runs` and the global attempt cap decide what
+/// actually executes, so an extra submit waits rather than piling on.
+pub async fn submit_job_route(
+    State(state): State<AppState>,
+    Extension(crud): Extension<CRUD>,
+    Path(job_id): Path<String>,
+) -> impl IntoResponse {
+
+    let mut conn = match state.conn_pool.acquire().await {
+        Ok(conn) => conn,
+        Err(err) => {
+            eprintln!("Error submitting job: {}", err);
+            return Html("Error submitting job").into_response();
+        }
+    };
+
+    match crud.submit_job(&mut conn, &job_id, &BTreeMap::new(), None).await {
+        Ok(job_run_id) => {
+            state.signals.publish();
+            Redirect::to(&format!("/job-runs/{}", job_run_id)).into_response()
+        }
+        Err(err) => {
+            eprintln!("Error submitting job: {}", err);
+            Html("Error submitting job").into_response()
+        }
     }
 }

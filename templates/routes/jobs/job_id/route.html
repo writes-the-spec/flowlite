@@ -18,6 +18,9 @@
             <div class="meta__label">Run it</div>
             <code class="cmd">flowlite job submit {{ job.job_id }}</code>
         </div>
+        <div>
+            <button class="btn btn--primary" onclick="document.getElementById('submit_job').showModal()">Submit run</button>
+        </div>
     </div>
 </div>
 
@@ -147,5 +150,19 @@
 </div>
     {% endif %}
 </div>
+
+<dialog id="submit_job">
+    <h2 class="dialog__title">Submit a run of {{ job.name }}?</h2>
+    <p class="dialog__body">A new run is submitted with the job's current definition and its declared parameter defaults. Use <code>flowlite job submit {{ job.job_id }} --param name=value</code> to override one.</p>
+
+    <div class="dialog__actions">
+        <form method="dialog">
+            <button class="btn btn--quiet">Cancel</button>
+        </form>
+        <form action="/jobs/{{ job.job_id }}/submit" method="POST">
+            <button type="submit" class="btn btn--primary">Submit run</button>
+        </form>
+    </div>
+</dialog>
 
 {% endblock %}

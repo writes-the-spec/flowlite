@@ -12,6 +12,7 @@ pub fn create_router(app_state: AppState) -> Router {
         .route("/job-run-table", get(app::routes::home::job_run_table::route::job_run_table_route))
         .route("/jobs", get(app::routes::jobs::route::jobs_route))
         .route("/jobs/{job_id}", get(app::routes::jobs::job_id::route::job_id_route))
+        .route("/jobs/{job_id}/submit", post(app::routes::jobs::job_id::route::submit_job_route))
         .route("/jobs/{job_id}/tasks/{task_id}", get(app::routes::jobs::job_id::task_id::route::task_id_route))
         .route("/schedules", get(app::routes::schedules::route::schedules_route))
         .route("/schedules/{schedule_id}", get(app::routes::schedules::schedule_id::route::schedule_id_route))

@@ -750,8 +750,19 @@ it. In development, a `Justfile` or a `Procfile` does the same job.
 
 The dashboard is served out of the binary. `flowlite serve` binds `127.0.0.1:8000` unless
 `--address` and `--port` say otherwise; visit it for the job list, the run history, a
-job's dependency graph and the output of any task. The only writes it offers are the **Stop** and **Rerun**
-buttons on a run's page — the same two things `job-run stop` and `job-run rerun` do.
+job's dependency graph and the output of any task.
+
+It offers three writes, each the browser equivalent of a command: **Stop** and **Rerun** on a
+run's page, and **Submit run** on a job's page — `job-run stop`, `job-run rerun` and
+`job submit`. Every one asks for confirmation first, and there is still no build step and
+nothing to configure.
+
+**Submit is the one that is not idempotent.** Stop writes a stop row and rerun replays a
+fixed snapshot, so pressing either twice changes nothing the first press did not; submitting
+twice is two runs. What that costs is bounded rather than free: the extra run queues, since
+`max_parallel_runs` and `max_running_attempts` decide what actually executes. It submits
+with the job's declared parameter defaults — use `flowlite job submit <job> --param
+name=value` to override one, which the browser deliberately cannot do.
 
 ## Configuration
 
