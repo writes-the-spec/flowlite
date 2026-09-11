@@ -670,24 +670,33 @@ impl CRUD {
     /// policy this delegates to, `first_unsatisfied_secret_reference`, carries the
     /// exhaustive unit coverage instead; this function does only a query each, a collect,
     /// and the delegate.
-    pub async fn check_secret_env_is_satisfied<'e, E>(
+    /// `job_id` scopes the check. `serve` passes `None` and asks about the whole data
+    /// directory, which is what it is about to run. `job submit -f` passes its own id and
+    /// must not ask about anything else: by then this same `mem` also holds every installed
+    /// job, and an installed job's unsatisfied secret is no reason to refuse a submit that
+    /// has nothing to do with it.
+    pub async fn check_secret_env_is_satisfied(
         &self,
-        executor: E,
+        conn: &mut SqliteConnection,
         secrets: &BTreeMap<String, String>,
-    ) -> anyhow::Result<()>
-    where
-        E: sqlx::Executor<'e, Database = sqlx::Sqlite> + Copy,
-    {
+        job_id: Option<&str>,
+    ) -> anyhow::Result<()> {
 
-        let jobs = self.select_jobs(executor, &SelectJobsData {
-            filter: SelectJobsDataFilter { job_id: None, name_like: None },
+        let jobs = self.select_jobs(&mut *conn, &SelectJobsData {
+            filter: SelectJobsDataFilter {
+                job_id: job_id.map(str::to_string),
+                name_like: None,
+            },
             sort: Some(SelectJobsDataSort::RowId),
             limit: None,
             offset: None,
         }).await?;
 
-        let tasks = self.select_tasks(executor, &SelectTasksData {
-            filter: SelectTasksDataFilter { task_id: None, job_id: None },
+        let tasks = self.select_tasks(&mut *conn, &SelectTasksData {
+            filter: SelectTasksDataFilter {
+                task_id: None,
+                job_id: job_id.map(str::to_string),
+            },
             sort: Some(SelectTasksDataSort::RowId),
             limit: None,
             offset: None,

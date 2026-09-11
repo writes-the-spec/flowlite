@@ -58,7 +58,12 @@ impl ServeCmd {
         // never require the credentials that run used. This is the one process that will
         // actually spawn a command, so it is the one place this fails before the bind
         // rather than at 03:00.
-        crud.check_secret_env_is_satisfied(&*conn_pool, &toolkit.app_config.secrets).await?;
+        let mut secret_check_conn = conn_pool.acquire().await?;
+        crud.check_secret_env_is_satisfied(
+            &mut secret_check_conn,
+            &toolkit.app_config.secrets,
+            None,
+        ).await?;
 
         let signals = Arc::new(Signals::new());
 
