@@ -187,7 +187,7 @@ async fn select_job_run(
 /// table is the only channel between the two, and polling it is the whole mechanism.
 /// The interval is the orchestrator's own, since a run cannot settle any sooner than the
 /// pass that settles it.
-async fn wait_for_job_run(
+pub(crate) async fn wait_for_job_run(
     crud: &CRUD,
     conn: &mut sqlx::SqliteConnection,
     job_run_id: i64,

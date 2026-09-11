@@ -9,6 +9,7 @@ use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, Select
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt};
 use crate::crud::task_run_attempt_output::{group_task_run_attempt_output, SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort, TaskRunAttemptOutputStreams};
 use crate::router::app::format;
+use super::job::wait_for_job_run;
 
 #[derive(Args)]
 pub struct JobRunCmd {
@@ -64,6 +65,10 @@ pub struct JobRunLogsCmd {
 #[derive(Args)]
 pub struct JobRunStopCmd {
     pub job_run_id: i64,
+
+    /// Wait for the run to settle, instead of returning once the stop has been queued.
+    #[arg(long)]
+    pub wait: bool,
 }
 
 /// Submit a fresh run of the definition this run executed.
@@ -290,9 +295,12 @@ impl JobRunLogsCmd {
 }
 
 impl JobRunStopCmd {
-    /// Reads no config: a stop is a row against a run, whose definition is already
-    /// snapshotted onto it.
+    /// Seeds no config: a stop is a row against a run, whose definition is already
+    /// snapshotted onto it. `--wait` polls at the orchestrator's interval, which comes
+    /// from config.toml - read, not seeded.
     pub async fn run(&self, toolkit: Toolkit, json: bool) -> anyhow::Result<()> {
+
+        let poll_interval = toolkit.app_config.orchestrator.poll_interval();
 
         let mut conn = toolkit.get_conn().await?;
 
@@ -300,14 +308,28 @@ impl JobRunStopCmd {
 
         stop_job_run(&crud, &mut conn, self.job_run_id).await?;
 
+        if !self.wait {
+            match json {
+                true => println!("{}", serde_json::json!({
+                    "job_run_id": self.job_run_id,
+                    "stop_requested": true,
+                })),
+                // "Requested" rather than "stopped": the serve process acts on the row on
+                // a later pass, and this process never sees it happen.
+                false => println!("Stop requested for job run {}", self.job_run_id),
+            }
+
+            return Ok(());
+        }
+
+        let job_run = wait_for_job_run(&crud, &mut conn, self.job_run_id, poll_interval).await?;
+
+        // No settled status is a failure here, unlike `job submit --wait`: this command
+        // asked for the run to settle and it settled. Which status it settled to is the
+        // run's outcome, not this command's, so it is reported rather than exited on.
         match json {
-            true => println!("{}", serde_json::json!({
-                "job_run_id": self.job_run_id,
-                "stop_requested": true,
-            })),
-            // "Requested" rather than "stopped": the serve process acts on the row on a
-            // later pass, and this process never sees it happen.
-            false => println!("Stop requested for job run {}", self.job_run_id),
+            true => println!("{}", serde_json::to_string_pretty(&job_run)?),
+            false => println!("Job run {} {}", job_run.id, format::job_run_word(job_run.status)),
         }
 
         Ok(())
@@ -527,6 +549,7 @@ fn accepted_statuses() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crud::job_run::{UpdateJobRunsData, UpdateJobRunsDataFilter, UpdateJobRunsDataInput};
     use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
     use crate::test_support::TestDb;
 
@@ -610,6 +633,48 @@ mod tests {
         let error = stop_job_run(&db.crud, &mut conn, 404).await.unwrap_err().to_string();
 
         assert!(error.contains("404"), "{error}");
+    }
+
+    /// What `--wait` runs end to end: the row goes in, and the wait returns only once
+    /// somebody else settles the run - the serve process, here another connection. The
+    /// stop is still on the table while the wait is in progress, which is what lets the
+    /// serve process see it at all.
+    #[tokio::test]
+    async fn stopping_with_wait_returns_once_the_run_settles() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        stop_job_run(&db.crud, &mut conn, job_run.id).await.unwrap();
+
+        let crud = db.crud.clone();
+        let conn_pool = db.conn_pool.clone();
+        let job_run_id = job_run.id;
+
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+            crud.update_job_runs(&*conn_pool, &UpdateJobRunsData {
+                filter: UpdateJobRunsDataFilter { id: Some(job_run_id) },
+                input: UpdateJobRunsDataInput {
+                    status: Some(JobRunStatus::Aborted),
+                    started_at: None,
+                    finished_at: None,
+                },
+            }).await.unwrap();
+        });
+
+        let settled = wait_for_job_run(
+            &db.crud,
+            &mut conn,
+            job_run.id,
+            std::time::Duration::from_millis(1),
+        ).await.unwrap();
+
+        assert_eq!(settled.status, JobRunStatus::Aborted);
+        assert!(job_run_stop(&db, job_run.id).await.is_some());
     }
 
     async fn job_run_stop(db: &TestDb, job_run_id: i64) -> Option<crate::crud::job_run_stop::JobRunStop> {

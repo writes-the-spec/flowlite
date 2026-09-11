@@ -600,11 +600,24 @@ flowlite job-run list                                  # the 20 newest runs
 flowlite job-run list --job nightly --status failed
 flowlite job-run get 42                                # one run and its task runs
 flowlite job-run stop 42                               # ask a running run to stop
+flowlite job-run stop 42 --wait                        # ...and block until it has settled
 ```
 
 `stop` writes a request rather than killing anything itself — the `serve` process notices
 it on a later pass and kills the task's process group. A run that has already finished is
 refused rather than silently accepted.
+
+Without `--wait` the command returns once that request is written, while the run is still
+going. `--wait` blocks until the run has settled, which is what a caller that means to
+start something else next wants:
+
+```bash
+flowlite job-run stop 42 --wait && flowlite job-run rerun 42
+```
+
+Unlike `job submit --wait` it exits 0 whichever status the run settled to: the stop did
+what it was asked either way, and how the run itself ended is the run's outcome to report,
+not this command's.
 
 ### JSON output
 
