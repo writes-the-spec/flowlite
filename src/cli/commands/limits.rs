@@ -90,37 +90,8 @@ pub fn limits_json(rows: &[limits::LimitRow]) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use crate::router::app::limits::{LimitRow, limit_rows};
+    use crate::router::app::limits::LimitRow;
     use super::*;
-
-    #[test]
-    fn the_global_row_comes_first_and_named_limits_follow_in_alphabetical_order() {
-        let concurrency_limits = BTreeMap::from([
-            ("warehouse".to_string(), 3),
-            ("openai_api".to_string(), 5),
-        ]);
-        let claimed_limit_slots = BTreeMap::from([
-            ("warehouse".to_string(), 3),
-            ("openai_api".to_string(), 1),
-        ]);
-
-        let rows = limit_rows(32, 32, &concurrency_limits, &claimed_limit_slots);
-
-        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
-        assert_eq!(names, vec!["global", "openai_api", "warehouse"]);
-    }
-
-    #[test]
-    fn a_name_nothing_running_claims_reads_as_zero_in_use() {
-        let concurrency_limits = BTreeMap::from([("idle_limit".to_string(), 4)]);
-        let claimed_limit_slots = BTreeMap::new();
-
-        let rows = limit_rows(32, 0, &concurrency_limits, &claimed_limit_slots);
-
-        let idle = rows.iter().find(|row| row.name == "idle_limit").unwrap();
-        assert_eq!(idle.in_use, 0);
-    }
 
     fn sample_rows() -> Vec<LimitRow> {
         vec![

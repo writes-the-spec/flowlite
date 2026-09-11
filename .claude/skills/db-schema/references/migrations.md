@@ -15,7 +15,7 @@ Each is a separate `sqlx::migrate!` call in [src/toolkit.rs](../../../../src/too
 
 ## Naming
 
-`YYYYMMDDHHMMSS_create_<table>_table.sql`, or `..._<verb>_<table>_<what>.sql` for a change to an existing table — `20260908120100_drop_task_run_attempt_output_columns.sql`.
+`YYYYMMDDHHMMSS_create_<table>_table.sql`, or `..._<verb>_<table>_<what>.sql` for a change to an existing table — `20260910210000_add_task_run_secret_env.sql` was one, before the pre-release fold put its column into the create. Every disk migration is currently a `create_*`; the second form is what a change will be named once the schema has shipped and editing a create is no longer allowed.
 
 sqlx sorts by that leading version, so **the timestamp is the declared order** — and on a fresh database it is also the order things actually run in.
 

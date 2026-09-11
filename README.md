@@ -550,10 +550,23 @@ openai_api        0    -
 warehouse         0    3
 ```
 
+A row whose in-use count has reached a non-zero max is marked `FULL`, which is the answer to
+"why is nothing running": every task claiming that name is waiting for a slot, and the run
+holding one has to finish before the next starts.
+
+```bash
+$ flowlite limits
+NAME         IN USE  MAX
+global           32   32  FULL
+openai_api        0    -
+warehouse         3    3  FULL
+```
+
 A limit configured `0` means no ceiling at all, not zero slots, and this table renders it as
 `-` rather than a number it could be confused with — the dashboard's own panel spells the
-same `0` out as `unlimited`. `--json` keeps it as the number `0` either way, so a script
-comparing it against `in_use` never has to special-case a dash:
+same `0` out as `unlimited`. A `0` limit is therefore never `FULL`, however much is running
+under it. `--json` keeps it as the number `0` either way, so a script comparing it against
+`in_use` never has to special-case a dash:
 
 ```bash
 flowlite limits --json
@@ -838,29 +851,37 @@ fresh in-memory database on every start. Nothing has ever persisted one of its m
 so while flowlite is pre-release a change there edits the migration that created the table,
 and an upgrade asks nothing of you.
 
-The **disk** schema holds run history, which outlives the process — so once one of its
-migrations has shipped, a change there is a new file rather than an edit. `sqlx` checksums
-every migration it has applied, and an edited one makes an existing database refuse to
-start, with no hint at the remedy:
+The **disk** schema holds run history, which outlives the process. Once flowlite is
+released, a change there will be a new migration file rather than an edit, because `sqlx`
+checksums every migration it has applied and an edited one makes an existing database
+refuse to start:
 
 ```
 migration 20260703234500 was previously applied but has been modified
 ```
 
-Upgrading is therefore just starting the new binary: any pending disk migration runs on the
-first start and your history comes through it. The `secret_env` column this release adds to
-`task_run` is the first one to rebuild a table in place, and it carries every existing row
-across. **Do not delete `flowlite.db` as part of an upgrade** — nothing recreates a run.
+**While flowlite is pre-release, the disk schema is edited in place too**, on the same
+reasoning as the memory one: a history of how the tables got here is worth less than a
+history that describes them as they are. This release does exactly that — `secret_env`,
+`process_group_id`, `notify_on` and `limits` moved into the `CREATE TABLE` files that
+declare their tables, and the four migrations that used to add them are gone.
 
-Deleting it is the remedy for one thing only, the checksum error above, on a database whose
-migration you edited yourself:
+So an upgrade across a pre-release version can ask something of you. Start the new binary;
+if it refuses with the checksum error above, the remedy is to delete the database:
 
 ```bash
 rm <data_dir>/flowlite.db
 ```
 
-Jobs and schedules survive that, since they are read from the YAML on every start. The run
-history does not.
+**That is not a safe operation — it is the cost of a pre-release schema.** Jobs and
+schedules survive it, since they are read from the YAML on every start. The run history
+does not, and nothing recreates a run. If a run history matters to you, copy the file
+before upgrading; once flowlite is released this stops being a thing an upgrade does.
+
+This release also adds `max_running_attempts`, which defaults to `32`. A deployment that
+previously fanned a wide job out past that will now run 32 attempts at a time and queue the
+rest, which is a behaviour change even though nothing in your config asked for it. See
+[Concurrency limits](#concurrency-limits).
 
 ## Status
 

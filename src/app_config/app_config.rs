@@ -46,7 +46,7 @@ pub struct AppConfig {
     /// every credential at once by accident.
     #[serde(default, skip_serializing)]
     pub secrets: BTreeMap<String, String>,
-    /// Named concurrency caps a job's `concurrency:` names, by name. Filled the same way
+    /// Named concurrency caps a job's `limits:` names, by name. Filled the same way
     /// `secrets` is, from `[concurrency_limits]` in config.toml or from
     /// `FLOWLITE_CONCURRENCY_LIMITS__*`.
     ///

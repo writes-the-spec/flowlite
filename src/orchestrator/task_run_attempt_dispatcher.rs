@@ -213,11 +213,17 @@ impl TaskRunAttemptDispatcher {
     /// snapshotted) is already at its configured maximum.
     ///
     /// A claimed name absent from `self.app_config.concurrency_limits` is treated as
-    /// unlimited rather than blocked, and warns once naming the attempt and the limit.
-    /// Task 5's startup validation rejects an unconfigured name at submit time, so this
-    /// can only arise when the config changed after the run was already submitted -
-    /// blocking here would stall that run forever with no way out, the exact failure the
-    /// `Invalid` status exists to remove.
+    /// unlimited rather than blocked. Startup validation rejects an unconfigured name at
+    /// submit time, so this can only arise when the config changed after the run was
+    /// already submitted - blocking here would stall that run forever with no way out, the
+    /// exact failure the `Invalid` status exists to remove.
+    ///
+    /// The warning for such a name is emitted only once the attempt is admitted, not while
+    /// deciding. An attempt claiming both an unconfigured name and a full one is asked
+    /// again on every poll pass, so warning as each name was examined printed the same line
+    /// once a second for as long as the full limit was held - a smaller version of the
+    /// stall this method exists to avoid. Emitting after the decision means exactly one
+    /// line per attempt, on the pass it actually starts.
     async fn a_claimed_limit_is_full(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
 
         let task_run = self.get_task_run(task_run_attempt).await?;
@@ -230,16 +236,12 @@ impl TaskRunAttemptDispatcher {
 
         let claimed_limit_slots = self.crud.claimed_limit_slots(&mut conn).await?;
 
+        let mut unconfigured = Vec::new();
+
         for limit in &task_run.limits.0 {
 
             let Some(configured_max) = self.app_config.concurrency_limits.get(limit) else {
-                eprintln!(
-                    "Task run attempt {} claims limit '{}', which is not in \
-                     [concurrency_limits]. Treating it as unlimited rather than blocking \
-                     it - this can only happen if the config changed after its run was \
-                     submitted.",
-                    task_run_attempt.id, limit,
-                );
+                unconfigured.push(limit);
                 continue;
             };
 
@@ -252,6 +254,16 @@ impl TaskRunAttemptDispatcher {
             if claimed >= *configured_max {
                 return Ok(true);
             }
+        }
+
+        for limit in unconfigured {
+            eprintln!(
+                "Task run attempt {} claims limit '{}', which is not in \
+                 [concurrency_limits]. Treating it as unlimited rather than blocking \
+                 it - this can only happen if the config changed after its run was \
+                 submitted.",
+                task_run_attempt.id, limit,
+            );
         }
 
         Ok(false)
@@ -809,6 +821,43 @@ mod tests {
 
         assert_eq!(db.task_run_attempt(claimant_attempt.id).await.status, TaskRunAttemptStatus::Pending);
         assert_eq!(db.task_run_attempt(non_claimant_attempt.id).await.status, TaskRunAttemptStatus::Running);
+    }
+
+    /// A task run claiming several names is blocked by ANY of them being full, not only by
+    /// the first one examined. Without this, narrowing the loop to return its last
+    /// comparison - a plausible simplification - would let a task claiming one free name and
+    /// one full name run, escaping the full one.
+    #[tokio::test]
+    async fn a_claim_on_two_names_is_blocked_when_either_one_is_full() {
+
+        let _environment = reading_the_environment();
+
+        let db = TestDb::new().await;
+
+        let running_job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let holder_task_run = db.insert_task_run_with_limits(running_job_run.id, vec!["warehouse".to_string()]).await;
+        db.insert_task_run_attempt(&holder_task_run, 1, TaskRunAttemptStatus::Running).await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        // The free name comes first, so a loop that stopped at its own verdict would admit
+        // this attempt and never look at the full one.
+        let claimant_task_run = db.insert_task_run_with_limits(
+            job_run.id,
+            vec!["openai_api".to_string(), "warehouse".to_string()],
+        ).await;
+        let claimant_attempt = db.insert_task_run_attempt(&claimant_task_run, 1, TaskRunAttemptStatus::Pending).await;
+
+        let dispatcher = db.task_run_attempt_dispatcher_with_concurrency_limits(
+            BTreeMap::from([
+                ("openai_api".to_string(), 5),
+                ("warehouse".to_string(), 1),
+            ]),
+        );
+
+        dispatcher.handle(&claimant_attempt).await.unwrap();
+
+        assert_eq!(db.task_run_attempt(claimant_attempt.id).await.status, TaskRunAttemptStatus::Pending);
     }
 
     /// 0 is "no limit" for a named limit too, the same as the global cap.

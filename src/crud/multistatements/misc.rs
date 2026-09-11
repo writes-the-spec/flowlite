@@ -913,6 +913,48 @@ mod tests {
         assert_eq!(task_runs[0].status, TaskRunStatus::Pending);
     }
 
+    /// A rerun replays the concurrency limits the original run was submitted with, so it
+    /// queues behind the same resources the first attempt did.
+    ///
+    /// This is the one field here that has already been wrong once: every insert path
+    /// bound an empty vec when `task_run.limits` was introduced, and a rerun would have
+    /// been admitted claiming nothing — running outside the limit, invisibly, on the path
+    /// a human reaches by clicking rerun on a failed nightly job. Nothing failed when that
+    /// line was reverted, which is why the assertion exists rather than being left to the
+    /// fields around it.
+    #[tokio::test]
+    async fn a_rerun_replays_the_original_limits() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Failed).await;
+
+        db.insert_task_run_with_limits(
+            job_run.id,
+            vec!["openai_api".to_string(), "warehouse".to_string()],
+        ).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id).await.unwrap();
+
+        let task_runs = db.crud.select_task_runs(
+            &*db.conn_pool,
+            &crate::crud::task_run::SelectTaskRunsData {
+                filter: crate::crud::task_run::SelectTaskRunsDataFilter {
+                    id: None,
+                    job_run_id: Some(rerun_id),
+                    job_id: None,
+                    task_id: None,
+                    status: None,
+                },
+                sort: None,
+            },
+        ).await.unwrap();
+
+        assert_eq!(task_runs.len(), 1);
+        assert_eq!(task_runs[0].limits.0, vec!["openai_api".to_string(), "warehouse".to_string()]);
+    }
+
     /// A rerun replays who to tell along with everything else it replays: the original
     /// run's own notifications, not whatever the job's YAML says now — which is what
     /// keeps a rerun of a deleted job notifiable at all.
