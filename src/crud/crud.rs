@@ -90,6 +90,13 @@ impl CRUD {
                             job_path.display(),
                         ))?;
 
+                    self.validate_job_limits(&job_yaml)
+                        .with_context(|| format!(
+                            "Invalid limits of job '{}' at {}",
+                            job_yaml.id,
+                            job_path.display(),
+                        ))?;
+
                     row_id += 1;
                     self.insert_job(&mut *tx, &InsertJobData {
                         input: InsertJobDataInput {
@@ -281,6 +288,45 @@ impl CRUD {
                         recipients.join(", "),
                         section,
                         channel,
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Rejects a job that claims a concurrency limit `[concurrency_limits]` in config.toml
+    /// never named. A name is valid by being a key of that map - the number behind it is
+    /// irrelevant here, so a limit configured `0` is still a name a job may claim. Checking
+    /// this at startup rather than at enforcement is what makes a typo'd name fail loudly
+    /// instead of quietly running unbounded, indistinguishable from a job that never named
+    /// a limit at all. `global` can never be a key (see `AppConfig::load`), so a job that
+    /// claims it fails here with no special case.
+    fn validate_job_limits(&self, job_yaml: &JobYaml) -> anyhow::Result<()> {
+
+        let concurrency_limits = &self.toolkit.app_config.concurrency_limits;
+
+        for limit in &job_yaml.limits {
+            if !concurrency_limits.contains_key(limit) {
+                anyhow::bail!(
+                    "Job '{}' claims limit '{}', which is not a key of \
+                     [concurrency_limits] in config.toml",
+                    job_yaml.id,
+                    limit,
+                );
+            }
+        }
+
+        for task_yaml in &job_yaml.tasks {
+            for limit in &task_yaml.limits {
+                if !concurrency_limits.contains_key(limit) {
+                    anyhow::bail!(
+                        "Job '{}' task '{}' claims limit '{}', which is not a key of \
+                         [concurrency_limits] in config.toml",
+                        job_yaml.id,
+                        task_yaml.id,
+                        limit,
                     );
                 }
             }
@@ -627,6 +673,78 @@ mod tests {
         assert_eq!(read_back, recipients);
     }
 
+    fn crud_with_limits(concurrency_limits: BTreeMap<String, u32>) -> CRUD {
+        CRUD::new(Arc::new(Toolkit::new(AppConfig { concurrency_limits, ..AppConfig::default() })))
+    }
+
+    /// A job's own claim is checked the same way a task's is, and the error names the job
+    /// and the limit - a typo'd name must never be mistaken for an unbounded job.
+    #[test]
+    fn a_job_naming_an_unconfigured_limit_is_refused() {
+
+        let crud = crud_with_limits(BTreeMap::new());
+
+        let job: JobYaml = serde_yaml::from_str("
+id: nightly-sync
+name: Nightly Sync
+limits: [warehouse]
+tasks:
+  - id: ingest
+    command: ./run.sh
+").unwrap();
+
+        let error = crud.validate_job_limits(&job).unwrap_err().to_string();
+
+        assert!(error.contains("nightly-sync"), "{}", error);
+        assert!(error.contains("warehouse"), "{}", error);
+    }
+
+    /// Same check at task level, and the error names the task too, since a job may have
+    /// several and only one of them claimed the bad name.
+    #[test]
+    fn a_task_naming_an_unconfigured_limit_is_refused_naming_the_task() {
+
+        let crud = crud_with_limits(BTreeMap::from([("warehouse".to_string(), 3)]));
+
+        let job: JobYaml = serde_yaml::from_str("
+id: nightly-sync
+name: Nightly Sync
+tasks:
+  - id: ingest
+    command: ./run.sh
+    limits: [warehouse, api]
+").unwrap();
+
+        let error = crud.validate_job_limits(&job).unwrap_err().to_string();
+
+        assert!(error.contains("nightly-sync"), "{}", error);
+        assert!(error.contains("ingest"), "{}", error);
+        assert!(error.contains("api"), "{}", error);
+    }
+
+    /// A limit configured `0` is still a real name - `0` means no limit, not missing - so
+    /// claiming it at either level is accepted rather than treated as unconfigured.
+    #[test]
+    fn a_job_and_task_naming_only_configured_limits_are_accepted() {
+
+        let crud = crud_with_limits(BTreeMap::from([
+            ("warehouse".to_string(), 3),
+            ("api".to_string(), 0),
+        ]));
+
+        let job: JobYaml = serde_yaml::from_str("
+id: nightly-sync
+name: Nightly Sync
+limits: [warehouse]
+tasks:
+  - id: ingest
+    command: ./run.sh
+    limits: [warehouse, api]
+").unwrap();
+
+        assert!(crud.validate_job_limits(&job).is_ok());
+    }
+
     /// A private `mem` schema, migrated onto its own uniquely-named in-memory database
     /// rather than the shared-cache `flowlite_mem` name `TestDb` leaves unmigrated on
     /// purpose (see its doc comment) - every test in this binary would otherwise share that
@@ -637,7 +755,10 @@ mod tests {
     /// expect - mirroring `Toolkit::get_memory_conn` and `Toolkit::get_conn_pool` exactly,
     /// just under a name nothing else in the suite can collide with. `mem_conn` is only
     /// ever kept alive: a `mode=memory` database is dropped the instant nothing has it open.
-    async fn crud_with_private_mem(data_dir: &std::path::Path) -> (CRUD, sqlx::SqliteConnection, sqlx::SqliteConnection) {
+    async fn crud_with_private_mem(
+        data_dir: &std::path::Path,
+        concurrency_limits: BTreeMap<String, u32>,
+    ) -> (CRUD, sqlx::SqliteConnection, sqlx::SqliteConnection) {
         use sqlx::Connection;
 
         let mem_uri = format!("file:flowlite-mem-test-{}?mode=memory&cache=shared", uuid::Uuid::new_v4());
@@ -655,6 +776,7 @@ mod tests {
 
         let crud = CRUD::new(Arc::new(Toolkit::new(AppConfig {
             data_dir: data_dir.to_string_lossy().into_owned(),
+            concurrency_limits,
             ..AppConfig::default()
         })));
 
@@ -685,7 +807,10 @@ tasks:
     limits: [warehouse, api]
 ");
 
-        let (crud, mut main_conn, _mem_conn) = crud_with_private_mem(&data_dir).await;
+        let (crud, mut main_conn, _mem_conn) = crud_with_private_mem(&data_dir, BTreeMap::from([
+            ("warehouse".to_string(), 3),
+            ("api".to_string(), 1),
+        ])).await;
 
         crud.init(&mut main_conn).await.unwrap();
 
@@ -727,7 +852,7 @@ tasks:
     command: ./run.sh
 ");
 
-        let (crud, mut main_conn, _mem_conn) = crud_with_private_mem(&data_dir).await;
+        let (crud, mut main_conn, _mem_conn) = crud_with_private_mem(&data_dir, BTreeMap::new()).await;
 
         crud.init(&mut main_conn).await.unwrap();
 
