@@ -26,7 +26,7 @@ Check the default location too, which is where a dev instance lands if nobody pa
 - macOS — `~/Library/Application Support/flowlite/flowlite.db`
 - Linux — `~/.local/share/flowlite/flowlite.db`
 
-**A memory migration is a different case entirely.** `mem` is rebuilt from nothing on every startup, so no memory migration is ever "already applied" anywhere but the running process — editing one is always safe.
+**None of this applies to `mem`.** The memory schema is built from nothing on every startup, so no memory migration is ever "already applied" anywhere but the running process. There is no checksum to break and no database to reset, which means **a `mem` table never needs a migration at all**: change its `CREATE TABLE` and restart. Do not check `_sqlx_migrations` for a memory migration, and do not add an `add_*` file beside a memory `create_*` file — the question this page answers only arises on the disk side.
 
 ## The call
 
@@ -35,6 +35,7 @@ Check the default location too, which is where a dev instance lands if nobody pa
 | **Nothing has applied it** — a table added minutes ago, pre-release, on a branch nobody has run | **Edit the original** | One migration describing the table as it actually is beats a create plus an alter that undoes half of it. The history stays a description of the schema rather than a diary of your afternoon. |
 | **Something has applied it** — someone's dev database, a deployed instance, CI with a persisted volume | **Add a new migration.** Never edit | The checksum will refuse to start their process, and they cannot fix it without losing data. |
 | **Unsure** | **Add a new one** | An unnecessary migration costs one file. A broken checksum costs somebody's database. |
+| **It is a `mem` table** | **Edit the `CREATE TABLE`.** Never add a migration | Nothing has applied it but the running process, and the next startup rebuilds the schema from scratch. A memory `add_*` file is always the wrong answer. |
 
 When an edit is the right call and a stale dev database is the only thing in the way, deleting that database is the fix — it holds runs, not config, and config comes back from YAML on the next startup. **Say so out loud rather than doing it silently:** it is somebody's run history, and it is theirs to spend.
 

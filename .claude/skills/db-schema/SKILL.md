@@ -12,8 +12,17 @@ Two databases, two independent migration histories, and no `DEFAULT` clauses any
 | Files | `db/schemas/disk/migrations/` | `db/schemas/memory/migrations/` |
 | Holds | runs — data that must survive a restart | config parsed from YAML, re-seeded every startup |
 | Lives | `<data_dir>/flowlite.db` | `file:flowlite_mem?mode=memory&cache=shared` |
+| Changing a table | a real history: a file some database has applied can never be edited | **never needs a migration — edit the initial `CREATE TABLE`** |
 
-**Answer this first, because it decides the rest:** *if the process restarts, should this row still exist?* Yes means disk, no means `mem`. That one answer settles which migration directory you write in, how the table is keyed, and — for a `mem` table — whether editing an existing migration is safe at all. The [entities skill](../entities/SKILL.md) has the longer version and the map of what already exists.
+**Answer this first, because it decides the rest:** *if the process restarts, should this row still exist?* Yes means disk, no means `mem`. That one answer settles which migration directory you write in, how the table is keyed, and whether you are writing a migration at all. The [entities skill](../entities/SKILL.md) has the longer version and the map of what already exists.
+
+## `mem` never needs a migration
+
+The memory schema is created from nothing on every startup and thrown away on every shutdown. There is no `_sqlx_migrations` row anywhere but in the running process, so nothing has "already applied" a memory migration and nothing can be broken by changing one.
+
+So **a change to a `mem` table is an edit to its `CREATE TABLE`, always** — add the column where it belongs, drop the one nobody reads, change a type. Never add `20260911..._add_task_limits.sql` beside `20260705153000_create_task_table.sql`; put the column in the create. The files under `db/schemas/memory/migrations/` are not a history to preserve, they are the schema written once, and they should read like a description of the tables as they are today.
+
+The "two independent migration histories" framing below is about the disk side. On the memory side there is really only a schema.
 
 ## Read the topic you need
 

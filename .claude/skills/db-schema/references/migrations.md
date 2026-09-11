@@ -11,6 +11,8 @@ Two databases, two independent migration histories. Which one a change belongs t
 
 Each is a separate `sqlx::migrate!` call in [src/toolkit.rs](../../../../src/toolkit.rs) with its own `_sqlx_migrations` table, so versions never collide across the two and a disk migration knows nothing about a memory one.
 
+**Only the disk side is a history.** `mem` is created empty in every new process, so its `_sqlx_migrations` table starts empty every time and nothing is ever "already applied". A memory table is therefore changed by editing its `CREATE TABLE`, never by adding an `add_*` file beside it — see [editing-vs-adding.md](editing-vs-adding.md).
+
 ## Naming
 
 `YYYYMMDDHHMMSS_create_<table>_table.sql`, or `..._<verb>_<table>_<what>.sql` for a change to an existing table — `20260908120100_drop_task_run_attempt_output_columns.sql`.

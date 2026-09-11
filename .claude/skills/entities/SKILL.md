@@ -34,7 +34,7 @@ The disk tables mirror the `mem` ones, but they are not views onto them: **a run
 - `Toolkit::get_memory_conn` connects to `mem` *without* the disk file, for standalone memory-schema setup only.
 - Two independent migration histories: `Toolkit::update_disk_schema` runs `db/schemas/disk/migrations`, `update_memory_schema` runs `db/schemas/memory/migrations`.
 
-Each history is a separate `sqlx::migrate!` with its own checksums, which is why **whether an existing migration may be edited depends on what has already applied it** — the [db-schema skill](../db-schema/SKILL.md) has that call and the rest of the mechanics.
+Each history is a separate `sqlx::migrate!` with its own checksums, which is why **whether an existing disk migration may be edited depends on what has already applied it** — the [db-schema skill](../db-schema/SKILL.md) has that call and the rest of the mechanics. The memory side has no such question: `mem` starts empty in every process, so **a `mem` table never needs a migration at all** — change its `CREATE TABLE` and restart.
 
 ## Conventions every entity obeys
 
@@ -45,7 +45,7 @@ Each history is a separate `sqlx::migrate!` with its own checksums, which is why
 ## Adding a new table
 
 1. Decide the database with the restart question above.
-2. Write the migration per the [db-schema skill](../db-schema/SKILL.md) — where the file goes, how it is named, whether an existing one may be edited instead, and how the table is keyed and its columns declared. Step 1's answer decides the keys and most of the nullability, so it is not a matter of preference. One thing worth repeating here: no schema prefix inside the migration, since each runs against its own database. The `mem.` prefix appears only later, in the SQL your CRUD methods write.
+2. Write the migration per the [db-schema skill](../db-schema/SKILL.md) — where the file goes, how it is named, whether an existing one may be edited instead (on the memory side it always may, and a new `add_*` file is always wrong), and how the table is keyed and its columns declared. Step 1's answer decides the keys and most of the nullability, so it is not a matter of preference. One thing worth repeating here: no schema prefix inside the migration, since each runs against its own database. The `mem.` prefix appears only later, in the SQL your CRUD methods write.
 3. If it is YAML-seeded, wire the insert into `CRUD::init`, incrementing the shared `row_id` counter, inside the existing transaction.
 4. Build the CRUD file per the [crud skill](../crud/SKILL.md), which also owns how a method takes its database handle.
 5. Add a reference file here.
