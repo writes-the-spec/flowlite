@@ -23,6 +23,25 @@ pub struct Toolkit {
     pub mem_name: String,
 }
 
+/// Serializes every schema migration this process runs, disk or memory.
+///
+/// Discovered while building the MCP `submit_job` tool's concurrency test (the regression
+/// test for `with_fresh_mem` itself, in `src/mcp/tools.rs`): two connections each attaching
+/// a `cache=shared` database and migrating at the same time can raise
+/// `SQLITE_LOCKED_SHAREDCACHE` ("database schema is locked") against the *other* database
+/// the racing connection has open, not only the one being migrated - a genuine SQLite
+/// hazard, not anything this crate's own SQL does, and one no per-call `mem` name can dodge
+/// because every call still migrates the *disk* schema on the *same* file. A CLI command
+/// never hit this because it is the only connection its process ever opens; `serve` and
+/// `mcp` are the first long-lived processes where a second migration can start before the
+/// first has finished.
+///
+/// A migration is a handful of queries per call - `list_applied_migrations` and nothing
+/// else once the schema is current - so serializing every one of them costs nothing worth
+/// measuring, and it is far simpler to reason about than trying to prove which combination
+/// of concurrent calls is safe to migrate in parallel.
+static MIGRATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 
 impl Toolkit {
 
@@ -108,7 +127,10 @@ impl Toolkit {
     /// methods, here hit one layer down inside sqlx's own `Migrator::run`.
     /// `run_direct(None, conn, false)` is `.run()`'s own body (`sqlx-core`'s
     /// `migrator.rs`), so behavior is unchanged.
+    ///
+    /// Serialized on `MIGRATION_LOCK` - see that constant for why.
     async fn update_disk_schema(&self, conn: &mut SqliteConnection) -> anyhow::Result<()> {
+        let _guard = MIGRATION_LOCK.lock().await;
         sqlx::migrate!("./db/schemas/disk/migrations").run_direct(None, conn, false).await?;
         Ok(())
     }
@@ -117,7 +139,13 @@ impl Toolkit {
     /// plain connection, sidestepping `.run()`'s `Acquire<'e>` bound entirely rather than
     /// hitting the "not general enough" failure inside a caller that must itself be `Send`
     /// for a lifetime this fn cannot see (an rmcp `#[tool]` fn's boxed future).
+    ///
+    /// Serialized on `MIGRATION_LOCK` too, for the same reason `update_disk_schema` is -
+    /// this one is safe on its own today, since `with_fresh_mem` gives every MCP call a
+    /// name nothing else shares, but a shared lock for every migration is one invariant to
+    /// hold rather than a rule with an exception for the schema that happens to be safe now.
     pub async fn update_memory_schema(&self, conn: &mut SqliteConnection) -> anyhow::Result<()> {
+        let _guard = MIGRATION_LOCK.lock().await;
         sqlx::migrate!("./db/schemas/memory/migrations").run_direct(None, conn, false).await?;
 
         Ok(())

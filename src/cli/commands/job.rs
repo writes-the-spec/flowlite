@@ -5,6 +5,7 @@ use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
 use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
+use crate::crud::multistatements::misc::JobIdAlreadyInstalled;
 use crate::router::app::format;
 use crate::yaml_models::job_yaml::JobYaml;
 
@@ -200,7 +201,9 @@ pub(crate) async fn installed_job_id(
 ///
 /// The collision check, the seed and the secret check are `CRUD::seed_ad_hoc_job` - shared
 /// with the MCP `submit_job` tool's `file` and `yaml` arguments, which run this same
-/// sequence over a definition of their own. Only the remedy sentence is this command's own.
+/// sequence over a definition of their own. Only the remedy sentence is this command's own:
+/// a collision comes back as a typed `JobIdAlreadyInstalled`, and this is where it becomes
+/// the CLI's own words for "submit it by name instead."
 async fn seed_job_file(
     crud: &CRUD,
     conn: &mut sqlx::SqliteConnection,
@@ -209,9 +212,18 @@ async fn seed_job_file(
 ) -> anyhow::Result<String> {
 
     let job_yaml = JobYaml::from_yaml(file)?;
-    let remedy = format!("Drop -f to submit it: flowlite job submit {}", job_yaml.id);
 
-    crud.seed_ad_hoc_job(&mut *conn, job_yaml, file, row_id, &remedy).await
+    match crud.seed_ad_hoc_job(&mut *conn, job_yaml, file, row_id).await {
+        Ok(job_id) => Ok(job_id),
+        Err(err) => match err.downcast::<JobIdAlreadyInstalled>() {
+            Ok(collision) => anyhow::bail!(
+                "{}. Drop -f to submit it: flowlite job submit {}",
+                collision,
+                collision.job_id,
+            ),
+            Err(err) => Err(err),
+        },
+    }
 }
 
 /// The run, or an error naming the id nothing matched.

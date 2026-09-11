@@ -23,6 +23,7 @@ use crate::cli::commands::job::{installed_job_id, select_job_run};
 use crate::cli::commands::job_run::{parse_job_run_status, JobRunDetail, TaskRunAttemptLog};
 use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
+use crate::crud::multistatements::misc::JobIdAlreadyInstalled;
 use crate::crud::task_run_attempt::TaskRunAttempt;
 use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStreams;
 use crate::crud::CRUD;
@@ -246,11 +247,19 @@ fn resolve_definition(args: &SubmitJob) -> anyhow::Result<SubmitJobDefinition> {
     }
 }
 
-/// The sentence `CRUD::seed_ad_hoc_job`'s collision refusal appends for this tool: unlike
-/// the CLI's `-f`, nothing here was a flag to drop, so the remedy is the shape this tool
-/// itself takes for an installed job.
-fn submit_by_name_remedy(job_id: &str) -> String {
-    format!(r#"Submit it by name instead: {{ "job": "{}" }}"#, job_id)
+/// Turns `seed_ad_hoc_job`'s typed collision into this tool's own words for "submit it by
+/// name instead": unlike the CLI's `-f`, nothing here was a flag to drop, so the remedy is
+/// the shape this tool itself takes for an installed job. Any other error passes through
+/// unchanged.
+fn describe_ad_hoc_job_collision(err: anyhow::Error) -> anyhow::Error {
+    match err.downcast::<JobIdAlreadyInstalled>() {
+        Ok(collision) => anyhow::anyhow!(
+            r#"{}. Submit it by name instead: {{ "job": "{}" }}"#,
+            collision,
+            collision.job_id,
+        ),
+        Err(err) => err,
+    }
 }
 
 /// `submit_job`'s own connection: a fresh `mem`, seeded exactly as `job submit` seeds its
@@ -274,23 +283,28 @@ async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(J
         SubmitJobDefinition::File(file) => {
             let path = PathBuf::from(file);
             let job_yaml = JobYaml::from_yaml(&path)?;
-            let remedy = submit_by_name_remedy(&job_yaml.id);
 
-            crud.seed_ad_hoc_job(&mut conn, job_yaml, &path, row_id, &remedy).await?
+            crud.seed_ad_hoc_job(&mut conn, job_yaml, &path, row_id).await
+                .map_err(describe_ad_hoc_job_collision)?
         }
 
         SubmitJobDefinition::Yaml(yaml) => {
             let job_yaml = JobYaml::from_yaml_str(&yaml, INLINE_YAML_LABEL)?;
-            let remedy = submit_by_name_remedy(&job_yaml.id);
 
-            crud.seed_ad_hoc_job(&mut conn, job_yaml, Path::new(INLINE_YAML_LABEL), row_id, &remedy).await?
+            crud.seed_ad_hoc_job(&mut conn, job_yaml, Path::new(INLINE_YAML_LABEL), row_id).await
+                .map_err(describe_ad_hoc_job_collision)?
         }
     };
 
     let job_run_id = crud.submit_job(&mut conn, &job_id, &overrides, None).await?;
     let job_run = select_job_run(&crud, &mut conn, job_run_id).await?;
 
-    let warning = unserved_directory_warning(&crud.toolkit.app_config.data_dir)?;
+    // A lookup failure here is not a failure to submit - the run is already written by
+    // this point, so surfacing it as a tool error would read as "the submit failed" to an
+    // agent whose obvious next move is to retry, queuing a duplicate run for one that
+    // already exists. Degrading to a warning instead keeps the run's id in the agent's
+    // hands either way.
+    let warning = unserved_directory_warning(&crud.toolkit.app_config.data_dir);
 
     Ok((job_run, warning))
 }
@@ -314,16 +328,26 @@ fn submit_job_result(job_run: JobRun, warning: Option<String>) -> CallToolResult
 /// lock and will reach the row this run is queued in. Queuing work for a server that is not
 /// up yet is legitimate; an agent that got back `pending` with no warning would poll a run
 /// that cannot start until something else changes.
-fn unserved_directory_warning(data_dir: &str) -> anyhow::Result<Option<String>> {
-    if matches!(status(Path::new(data_dir))?, ServeStatus::Down) {
-        return Ok(Some(format!(
+///
+/// Never propagates: this runs after `crud.submit_job` has already written the row, so a
+/// failed lookup here is a fact about the warning, not about the submit. `status` can fail
+/// on an unreadable lock file or state file, and turning that into a tool error would read
+/// as "the submit failed" to an agent whose obvious next move is to retry - which would
+/// only queue a duplicate of a run that already exists. A lookup failure becomes a warning
+/// that says so instead, so the run's id still reaches the caller either way.
+fn unserved_directory_warning(data_dir: &str) -> Option<String> {
+    match status(Path::new(data_dir)) {
+        Ok(ServeStatus::Down) => Some(format!(
             "Nothing is serving {}, so this run will not start until flowlite serve runs \
              against it.",
             data_dir,
-        )));
+        )),
+        Ok(ServeStatus::Starting | ServeStatus::Up(_)) => None,
+        Err(err) => Some(format!(
+            "Could not tell whether {} is being served: {:#}",
+            data_dir, err,
+        )),
     }
-
-    Ok(None)
 }
 
 /// `list_job_runs`'s own connection. Reads the disk `job_run` table only, but still takes
@@ -407,7 +431,47 @@ fn truncated_task_run_attempt_log(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_config::AppConfig;
     use crate::crud::task_run_attempt::TaskRunAttemptStatus;
+
+    /// The regression test for the whole fresh-mem mechanism this cut exists for: two
+    /// `submit_job_run` calls seeding the same inline id, joined so they genuinely run
+    /// concurrently over one `Toolkit` - not one after the other, which would prove nothing:
+    /// `mem` is a shared-cache database that SQLite drops the instant nothing has it open
+    /// (`src/toolkit.rs`), so a sequential first call's rows are already gone by the time a
+    /// later, second call starts, and there would be nothing left to collide with.
+    ///
+    /// Relies on `src/toolkit.rs`'s `MIGRATION_LOCK` to keep the two calls' own disk-schema
+    /// migrations (each call's `get_conn` runs one) from racing each other on the file both
+    /// calls share - a real hazard, but a separate one from the `mem` collision this test
+    /// exists to catch, and not one either call here is supposed to be exercising.
+    #[tokio::test]
+    async fn two_joined_submits_of_the_same_inline_id_do_not_collide() {
+        let data_dir = std::env::temp_dir().join(format!("flowlite-mcp-concurrent-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(data_dir.join("jobs")).unwrap();
+
+        let toolkit = Toolkit::new(AppConfig {
+            data_dir: data_dir.to_string_lossy().into_owned(),
+            ..AppConfig::default()
+        });
+
+        let yaml = "id: probe\nname: Probe\ntasks:\n  - id: say\n    command: \"true\"\n".to_string();
+        let args = || SubmitJob { job: None, file: None, yaml: Some(yaml.clone()), params: None };
+
+        let (first, second) = tokio::join!(
+            submit_job_run(&toolkit, args()),
+            submit_job_run(&toolkit, args()),
+        );
+
+        let (first_run, _) = first.unwrap();
+        let (second_run, _) = second.unwrap();
+
+        assert_eq!(first_run.job_id, "probe");
+        assert_eq!(second_run.job_id, "probe");
+        assert_ne!(first_run.id, second_run.id, "two submits must get two different run ids");
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
 
     fn submit_job_args(job: Option<&str>, file: Option<&str>, yaml: Option<&str>) -> SubmitJob {
         SubmitJob {
@@ -429,20 +493,48 @@ mod tests {
 
     /// Two together is refused too, and the message says which two - this is the case a
     /// clap `ArgGroup` would catch for free, and precisely why this needs its own test.
+    ///
+    /// Asserted on the tail (`ends_with`) rather than `contains("job")`/`contains("file")`:
+    /// the static prefix "Name exactly one of job, file or yaml..." already contains all
+    /// three field names, so a `contains` check here would pass no matter which pair was
+    /// actually given - or even if the "got ..." tail naming them were dropped entirely.
     #[test]
-    fn resolving_a_definition_with_two_of_the_three_given_is_refused() {
+    fn resolving_a_definition_with_job_and_file_given_names_both_in_the_refusal() {
         let error = resolve_definition(&submit_job_args(Some("etl"), Some("f.yaml"), None))
             .unwrap_err()
             .to_string();
 
-        assert!(error.contains("job"), "{error}");
-        assert!(error.contains("file"), "{error}");
+        assert!(error.ends_with("got job and file."), "{error}");
     }
 
-    /// All three at once is refused the same way as any other pair.
+    /// The other two pairs, each checked against its own tail so a bug that always reports
+    /// "job and file" regardless of what was actually given would be caught here.
     #[test]
-    fn resolving_a_definition_with_all_three_given_is_refused() {
-        assert!(resolve_definition(&submit_job_args(Some("etl"), Some("f.yaml"), Some("id: x"))).is_err());
+    fn resolving_a_definition_with_job_and_yaml_given_names_both_in_the_refusal() {
+        let error = resolve_definition(&submit_job_args(Some("etl"), None, Some("id: x")))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.ends_with("got job and yaml."), "{error}");
+    }
+
+    #[test]
+    fn resolving_a_definition_with_file_and_yaml_given_names_both_in_the_refusal() {
+        let error = resolve_definition(&submit_job_args(None, Some("f.yaml"), Some("id: x")))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.ends_with("got file and yaml."), "{error}");
+    }
+
+    /// All three at once is refused the same way as any other pair, naming all three.
+    #[test]
+    fn resolving_a_definition_with_all_three_given_names_all_three_in_the_refusal() {
+        let error = resolve_definition(&submit_job_args(Some("etl"), Some("f.yaml"), Some("id: x")))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.ends_with("got job and file and yaml."), "{error}");
     }
 
     #[test]

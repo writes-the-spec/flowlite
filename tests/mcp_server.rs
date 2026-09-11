@@ -11,6 +11,7 @@
 //! handshake tests are: that a real client, over real pipes, gets back what the tool
 //! promises.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
@@ -45,6 +46,12 @@ struct McpClient {
     stdin: Option<ChildStdin>,
     lines: Receiver<String>,
     next_id: i64,
+    /// A response read while waiting for a different id, kept here until the caller that
+    /// id belongs to asks for it. Needed once two requests are ever sent before either
+    /// response is read: rmcp dispatches each `tools/call` to its own task
+    /// (src/mcp/mod.rs), so responses to overlapping requests can come back in either
+    /// order, not the order the requests were sent in.
+    buffered_responses: HashMap<i64, Value>,
 }
 
 impl McpClient {
@@ -78,6 +85,7 @@ impl McpClient {
             stdin: Some(stdin),
             lines,
             next_id: 1,
+            buffered_responses: HashMap::new(),
         }
     }
 
@@ -98,9 +106,12 @@ impl McpClient {
         }
     }
 
-    /// Sends a request and returns the `result` of its response, failing on a JSON-RPC
-    /// error - which for these cases is never the expected answer.
-    fn request(&mut self, method: &str, params: Value) -> Value {
+    /// Sends a request without waiting for its response, and returns the id to read it back
+    /// with later. This is what lets a second request be sent while the first is still in
+    /// flight, so two `tools/call`s can genuinely overlap inside the server rather than the
+    /// second only starting once the first has already returned and dropped its
+    /// connections - see `receive_response`.
+    fn send_request(&mut self, method: &str, params: Value) -> i64 {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -111,15 +122,45 @@ impl McpClient {
             "params": params,
         }));
 
-        let line = self.read_line();
+        id
+    }
 
-        let response: Value = serde_json::from_str(&line)
-            .unwrap_or_else(|e| panic!("stdout was not one JSON object per line: {e}: {line}"));
+    /// Reads lines until the response for `id` arrives, buffering any other response that
+    /// arrives first. Two requests sent before either is read can answer in either order -
+    /// rmcp dispatches each to its own task - so this cannot assume the next line on the
+    /// wire is the one this call is waiting for.
+    fn receive_response(&mut self, id: i64) -> Value {
+        let response = match self.buffered_responses.remove(&id) {
+            Some(response) => response,
+            None => loop {
+                let line = self.read_line();
 
-        assert_eq!(response["id"], json!(id), "answered a different request: {line}");
-        assert!(response["error"].is_null(), "{method} failed: {line}");
+                let response: Value = serde_json::from_str(&line)
+                    .unwrap_or_else(|e| panic!("stdout was not one JSON object per line: {e}: {line}"));
+
+                let response_id = response["id"].as_i64()
+                    .unwrap_or_else(|| panic!("response carried no integer id: {line}"));
+
+                if response_id == id {
+                    break response;
+                }
+
+                self.buffered_responses.insert(response_id, response);
+            },
+        };
+
+        assert!(response["error"].is_null(), "request {id} failed: {response}");
 
         response["result"].clone()
+    }
+
+    /// Sends a request and returns the `result` of its response, failing on a JSON-RPC
+    /// error - which for these cases is never the expected answer. Sequential convenience
+    /// over `send_request` + `receive_response`, for every call that does not need the two
+    /// separated.
+    fn request(&mut self, method: &str, params: Value) -> Value {
+        let id = self.send_request(method, params);
+        self.receive_response(id)
     }
 
     fn notify(&mut self, method: &str) {
@@ -147,6 +188,11 @@ impl McpClient {
     /// this method, distinguished by `result["isError"]`.
     fn call_tool(&mut self, name: &str, arguments: Value) -> Value {
         self.request("tools/call", json!({ "name": name, "arguments": arguments }))
+    }
+
+    /// Sends a `tools/call` without waiting for its response - see `send_request`.
+    fn send_call_tool(&mut self, name: &str, arguments: Value) -> i64 {
+        self.send_request("tools/call", json!({ "name": name, "arguments": arguments }))
     }
 
     /// Closes stdin, which is how an MCP client stops a server it spawned, and reports how
@@ -397,22 +443,42 @@ fn submitting_an_inline_yaml_definition_succeeds() {
     assert_eq!(job_run["status"], json!("pending"), "{job_run}");
 }
 
-/// The regression test for the whole fresh-mem mechanism this cut exists for: two calls in
-/// the same long-lived session seeding the same inline id must not collide, because each
-/// call seeds a `mem` nothing else has the name of. Without `with_fresh_mem`, the second
-/// call would hit a primary-key violation on the first's `mem.job` row.
+/// The regression test for the whole fresh-mem mechanism this cut exists for: two calls
+/// seeding the same inline id must not collide, because each seeds a `mem` nothing else has
+/// the name of.
+///
+/// Both `tools/call` requests are sent before either response is read, so they genuinely
+/// overlap inside the server rather than running one after the other: rmcp dispatches each
+/// to its own task (src/mcp/mod.rs's own doc comment says calls run concurrently), so two
+/// calls in flight at once is the real shape of the hazard `with_fresh_mem` exists to
+/// prevent. A version of this test that waited for the first response before sending the
+/// second would not catch a regression here: `mem` is a shared-cache database that SQLite
+/// drops the instant nothing has it open (`src/toolkit.rs`), so a fully sequential first
+/// call's rows are already gone by the time a second, later call starts - there would be
+/// nothing left to collide with, and the test would pass even with `with_fresh_mem` deleted.
+/// (Confirmed by hand while fixing this: temporarily replacing `with_fresh_mem()` with a
+/// plain `.clone()` in `submit_job_run` still passed the old sequential version of this
+/// test, which is exactly why it is written this way now.)
+///
+/// Relies on `src/toolkit.rs`'s `MIGRATION_LOCK` to keep the two calls' own disk-schema
+/// migrations (each call's `get_conn` runs one) from racing each other on the file both
+/// calls share - a real hazard, discovered while building this test, but a separate one
+/// from the `mem` collision this test exists to catch.
 #[test]
-fn the_same_inline_yaml_id_submits_twice_in_one_session() {
-    let dir = data_dir("submit-inline-twice");
+fn two_concurrent_submits_of_the_same_inline_id_do_not_collide() {
+    let dir = data_dir("submit-inline-concurrent");
     let yaml = "id: probe\nname: Probe\ntasks:\n  - id: say\n    command: \"true\"\n";
 
     let mut client = McpClient::start(&dir);
     client.handshake();
 
-    let first = client.call_tool("submit_job", json!({ "yaml": yaml }));
-    assert_ne!(first["isError"], json!(true), "{first}");
+    let first_id = client.send_call_tool("submit_job", json!({ "yaml": yaml }));
+    let second_id = client.send_call_tool("submit_job", json!({ "yaml": yaml }));
 
-    let second = client.call_tool("submit_job", json!({ "yaml": yaml }));
+    let first = client.receive_response(first_id);
+    let second = client.receive_response(second_id);
+
+    assert_ne!(first["isError"], json!(true), "{first}");
     assert_ne!(second["isError"], json!(true), "{second}");
 
     let first_run: Value = serde_json::from_str(tool_text(&first)).unwrap();
