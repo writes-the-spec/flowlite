@@ -622,6 +622,51 @@ Unlike `job submit --wait` it exits 0 whichever status the run settled to: the s
 what it was asked either way, and how the run itself ended is the run's outcome to report,
 not this command's. It makes the same unserved-directory check, and refuses the same way.
 
+### A run from a file
+
+A job normally has to live under `jobs/` in the data directory before it can be run. `-f`
+submits a definition that does not:
+
+```bash
+flowlite job submit -f ./pipeline.yaml
+flowlite job submit -f ./pipeline.yaml --param region=eu-west-1 --wait
+```
+
+The file is read where it lies and never copied anywhere: it does not appear in
+`flowlite job list`, on the dashboard, or in what the next `serve` picks up. What it
+produces is an ordinary run — it has an id, it shows in `job-run list`, `--wait` and
+`--json` mean the same thing, and the dashboard renders it like any other.
+
+This is for the one-off: a backfill, a migration, a pipeline an agent generated to run once.
+Anything you want to keep, or to schedule, is a file under `jobs/` and `flowlite job submit
+<id>` — a schedule names an installed job by id, and a definition that was never installed
+has no id to name.
+
+The file is held to every rule an installed job is held to. A cycle, a duplicate task id, a
+dependency on a task that isn't there, a notification channel this box cannot send on, a
+`limits:` name that `[concurrency_limits]` does not define, or a `secret_env:` naming a
+secret that nothing configures — each is refused before any run is written, naming the file
+rather than a job in the data directory. An id that is already a job in the data directory
+is refused too, since that id is what every filter and link resolves through afterwards:
+
+```
+$ flowlite job submit -f etl.yaml
+error: 'etl' is already a job in /srv/etl/jobs. Drop -f to submit it: flowlite job submit etl
+```
+
+Because the run snapshots its own definition, it stays readable and rerunnable after the
+file is gone:
+
+```bash
+flowlite job submit -f ./once.yaml --json | jq -r .id    # 42
+rm ./once.yaml
+flowlite job-run rerun 42                                # still replays what run 42 ran
+```
+
+`max_parallel_runs` does not apply to such a run — it bounds concurrent runs of one job, and
+there is no other run of a definition that exists for one command. The global
+`max_running_attempts` cap and any named `limits:` it claims still do.
+
 ### JSON output
 
 Every `job` and `job-run` command takes `--json`, which prints the rows themselves instead
