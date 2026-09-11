@@ -58,7 +58,10 @@ impl Toolkit {
             })
             .connect(&connection_string)
             .await?;
-        self.update_disk_schema(&conn_pool).await?;
+
+        let mut conn = conn_pool.acquire().await?;
+        self.update_disk_schema(&mut conn).await?;
+
         Ok(conn_pool)
     }
 
@@ -95,22 +98,27 @@ impl Toolkit {
         Ok(connection_string)
     }
 
-    async fn update_disk_schema<'e, E>(&self, executor: E) -> anyhow::Result<()>
-    where
-        E: sqlx::Acquire<'e, Database = sqlx::Sqlite>,
-    {
-        let mut conn = executor.acquire().await?;
-        sqlx::migrate!("./db/schemas/disk/migrations").run(&mut *conn).await?;
+    /// Migrates over a plain connection with `Migrator::run_direct`, sqlx's own documented
+    /// escape from `.run()`'s `E: Acquire<'e, ..>` bound - an `async fn` generic over a
+    /// single `Acquire<'e>` lifetime cannot be proven `Send` inside a caller that itself
+    /// must be `Send` for an unrelated, unnamed lifetime (a boxed `dyn Future` behind a
+    /// trait object, which is what an rmcp `#[tool]` fn compiles down to), and rustc
+    /// rejects it with "implementation of `sqlx::Acquire` is not general enough" - the
+    /// exact failure this repo's own `crud` skill warns about for our own multistatement
+    /// methods, here hit one layer down inside sqlx's own `Migrator::run`.
+    /// `run_direct(None, conn, false)` is `.run()`'s own body (`sqlx-core`'s
+    /// `migrator.rs`), so behavior is unchanged.
+    async fn update_disk_schema(&self, conn: &mut SqliteConnection) -> anyhow::Result<()> {
+        sqlx::migrate!("./db/schemas/disk/migrations").run_direct(None, conn, false).await?;
         Ok(())
     }
 
-    pub async fn update_memory_schema<'e, E>(&self, executor: E) -> anyhow::Result<()>
-    where
-        E: sqlx::Acquire<'e, Database = sqlx::Sqlite> + Send,
-        <E as sqlx::Acquire<'e>>::Connection: sqlx::Executor<'e, Database = sqlx::Sqlite>,
-    {
-        let mut conn = executor.acquire().await?;
-        sqlx::migrate!("./db/schemas/memory/migrations").run(&mut *conn).await?;
+    /// Concrete for the same reason as `update_disk_schema`: `Migrator::run_direct` over a
+    /// plain connection, sidestepping `.run()`'s `Acquire<'e>` bound entirely rather than
+    /// hitting the "not general enough" failure inside a caller that must itself be `Send`
+    /// for a lifetime this fn cannot see (an rmcp `#[tool]` fn's boxed future).
+    pub async fn update_memory_schema(&self, conn: &mut SqliteConnection) -> anyhow::Result<()> {
+        sqlx::migrate!("./db/schemas/memory/migrations").run_direct(None, conn, false).await?;
 
         Ok(())
     }

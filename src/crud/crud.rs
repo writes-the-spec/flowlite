@@ -52,107 +52,126 @@ impl CRUD {
         Self { toolkit }
     }
 
-    pub async fn init<'e, E>(&self, executor: E) -> anyhow::Result<u64>
+    /// Written as a plain fn returning `impl Future` rather than `async fn`, with `E`'s own
+    /// `Acquire<'e>` lifetime kept independent of `'s` (`&self`'s lifetime, which the
+    /// returned future is bounded by): an `async fn` generic over a single `Acquire<'e>`
+    /// lifetime is exactly the shape sqlx's own doc comment on `Acquire` warns about - a
+    /// caller that must itself be `Send` for a lifetime this fn cannot see (an rmcp
+    /// `#[tool]` fn compiles its body down to a boxed `dyn Future` behind a trait object)
+    /// cannot re-derive `Send` for it, and rustc rejects it with "implementation of
+    /// `sqlx::Acquire` is not general enough". Two independent lifetime parameters on `E`
+    /// is the fix sqlx's own doc comment gives for it; every existing caller here already
+    /// passes a `&mut SqliteConnection` or a pool reference that outlives the call, so
+    /// nothing about what can be passed in changes.
+    ///
+    /// `#[allow(clippy::manual_async_fn)]`: clippy's suggested `async fn` rewrite is
+    /// exactly the shape this fn stopped being, on purpose - collapsing back to it
+    /// reintroduces the single-lifetime `Acquire<'e>` bound the whole rewrite exists to
+    /// avoid.
+    #[allow(clippy::manual_async_fn)]
+    pub fn init<'e, 's, E>(&'s self, executor: E) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send + 's
     where
-        E: Acquire<'e, Database = sqlx::Sqlite>,
+        E: Acquire<'e, Database = sqlx::Sqlite> + Send + 's,
     {
-        let data_dir = PathBuf::from(&self.toolkit.app_config.data_dir);
+        async move {
+            let data_dir = PathBuf::from(&self.toolkit.app_config.data_dir);
 
-        // What a schedule gets for a field its YAML leaves out. The job side of this
-        // lives in seed_job, which is the only place a job file becomes rows.
-        let schedule_defaults = &self.toolkit.app_config.schedule_defaults;
+            // What a schedule gets for a field its YAML leaves out. The job side of this
+            // lives in seed_job, which is the only place a job file becomes rows.
+            let schedule_defaults = &self.toolkit.app_config.schedule_defaults;
 
-        let mut conn = executor.acquire().await
-            .context("Failed to acquire a database connection to read the configuration into")?;
+            let mut conn = executor.acquire().await
+                .context("Failed to acquire a database connection to read the configuration into")?;
 
-        let mut tx = conn.begin().await
-            .context("Failed to begin the configuration transaction")?;
+            let mut tx = conn.begin().await
+                .context("Failed to begin the configuration transaction")?;
 
-        let mut row_id = 0;
+            let mut row_id = 0;
 
-        let jobs_dir = data_dir.join("jobs");
-        if jobs_dir.exists() {
-            for job_path in CRUD::read_dir_sorted(&jobs_dir)? {
-                if Self::is_yaml_file(&job_path) {
-                    let job_yaml = JobYaml::from_yaml(&job_path)?;
+            let jobs_dir = data_dir.join("jobs");
+            if jobs_dir.exists() {
+                for job_path in CRUD::read_dir_sorted(&jobs_dir)? {
+                    if Self::is_yaml_file(&job_path) {
+                        let job_yaml = JobYaml::from_yaml(&job_path)?;
 
-                    row_id = self.seed_job(&mut tx, job_yaml, &job_path, row_id).await?;
+                        row_id = self.seed_job(&mut tx, job_yaml, &job_path, row_id).await?;
+                    }
                 }
             }
-        }
 
-        let schedules_dir = data_dir.join("schedules");
-        if schedules_dir.exists() {
-            for schedule_path in CRUD::read_dir_sorted(&schedules_dir)? {
-                if Self::is_yaml_file(&schedule_path) {
-                    let schedule_yaml = ScheduleYaml::from_yaml(&schedule_path)?;
+            let schedules_dir = data_dir.join("schedules");
+            if schedules_dir.exists() {
+                for schedule_path in CRUD::read_dir_sorted(&schedules_dir)? {
+                    if Self::is_yaml_file(&schedule_path) {
+                        let schedule_yaml = ScheduleYaml::from_yaml(&schedule_path)?;
 
-                    // Resolved once: the trigger that computes the first next_run and the
-                    // row it is stored on must read the cron in the same zone.
-                    let timezone = schedule_yaml.timezone
-                        .unwrap_or(schedule_defaults.timezone);
+                        // Resolved once: the trigger that computes the first next_run and the
+                        // row it is stored on must read the cron in the same zone.
+                        let timezone = schedule_yaml.timezone
+                            .unwrap_or(schedule_defaults.timezone);
 
-                    let cron_trigger = CronTrigger::new(
-                        schedule_yaml.cron.clone(),
-                        timezone,
-                        schedule_yaml.start_date,
-                        schedule_yaml.end_date,
-                    );
-
-                    let next_run = cron_trigger.get_next_run(None);
-
-                    row_id += 1;
-                    self.insert_schedule(&mut *tx, &InsertScheduleData {
-                        input: InsertScheduleDataInput {
-                            row_id,
-                            schedule_id: schedule_yaml.id.clone(),
-                            name: schedule_yaml.name,
-                            description: schedule_yaml.description,
-                            cron: schedule_yaml.cron,
+                        let cron_trigger = CronTrigger::new(
+                            schedule_yaml.cron.clone(),
                             timezone,
-                            start_date: schedule_yaml.start_date,
-                            end_date: schedule_yaml.end_date,
-                            disabled: schedule_yaml.disabled,
-                            next_run,
-                        }
-                    })
-                        .await
-                        .with_context(|| format!(
-                            "Failed to insert schedule '{}' from {}",
-                            schedule_yaml.id,
-                            schedule_path.display(),
-                        ))?;
+                            schedule_yaml.start_date,
+                            schedule_yaml.end_date,
+                        );
 
-                    for schedule_job_yaml in schedule_yaml.jobs {
+                        let next_run = cron_trigger.get_next_run(None);
+
                         row_id += 1;
-                        self.insert_schedule_job(&mut *tx, &InsertScheduleJobData {
-                            input: InsertScheduleJobDataInput {
+                        self.insert_schedule(&mut *tx, &InsertScheduleData {
+                            input: InsertScheduleDataInput {
                                 row_id,
                                 schedule_id: schedule_yaml.id.clone(),
-                                job_id: schedule_job_yaml.id.clone(),
-                                parameters: schedule_job_yaml.parameters,
+                                name: schedule_yaml.name,
+                                description: schedule_yaml.description,
+                                cron: schedule_yaml.cron,
+                                timezone,
+                                start_date: schedule_yaml.start_date,
+                                end_date: schedule_yaml.end_date,
+                                disabled: schedule_yaml.disabled,
+                                next_run,
                             }
                         })
                             .await
                             .with_context(|| format!(
-                                "Failed to insert job '{}' of schedule '{}' from {}",
-                                schedule_job_yaml.id,
+                                "Failed to insert schedule '{}' from {}",
                                 schedule_yaml.id,
                                 schedule_path.display(),
                             ))?;
-                    }
 
+                        for schedule_job_yaml in schedule_yaml.jobs {
+                            row_id += 1;
+                            self.insert_schedule_job(&mut *tx, &InsertScheduleJobData {
+                                input: InsertScheduleJobDataInput {
+                                    row_id,
+                                    schedule_id: schedule_yaml.id.clone(),
+                                    job_id: schedule_job_yaml.id.clone(),
+                                    parameters: schedule_job_yaml.parameters,
+                                }
+                            })
+                                .await
+                                .with_context(|| format!(
+                                    "Failed to insert job '{}' of schedule '{}' from {}",
+                                    schedule_job_yaml.id,
+                                    schedule_yaml.id,
+                                    schedule_path.display(),
+                                ))?;
+                        }
+
+                    }
                 }
             }
+
+            tx.commit().await
+                .with_context(|| format!(
+                    "Failed to commit the configuration read from {}",
+                    data_dir.display(),
+                ))?;
+
+            Ok(row_id)
         }
-
-        tx.commit().await
-            .with_context(|| format!(
-                "Failed to commit the configuration read from {}",
-                data_dir.display(),
-            ))?;
-
-        Ok(row_id)
     }
 
 

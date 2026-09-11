@@ -6,16 +6,19 @@
 //! ends it. None of the three is observable from inside the library.
 //!
 //! MCP over stdio is newline-delimited JSON-RPC 2.0: one JSON object per line in, one per
-//! line out. Later cuts add the tools to this file, so the helpers here take a method and
-//! params rather than knowing any particular call.
+//! line out. This cut's four read tools are exercised here too, rather than in a file of
+//! their own, because the property under test is the same one the handshake tests are:
+//! that a real client, over real pipes, gets back what the tool promises.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+
+use flowlite::serve_state::{status, ServeStatus};
 
 mod common;
 use common::ServerGuard;
@@ -33,6 +36,43 @@ fn data_dir(label: &str) -> PathBuf {
     std::fs::create_dir_all(dir.join("jobs")).unwrap();
 
     dir
+}
+
+fn install_job(dir: &Path, name: &str, yaml: &str) {
+    std::fs::write(dir.join("jobs").join(name), yaml).unwrap();
+}
+
+fn flowlite(dir: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(BINARY)
+        .args(["--data-dir", &dir.to_string_lossy()])
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+fn serve(dir: &Path, port: u16) -> Child {
+    Command::new(BINARY)
+        .args(["--data-dir", &dir.to_string_lossy(), "serve", "--port", &port.to_string()])
+        .spawn()
+        .unwrap()
+}
+
+fn until(timeout: Duration, mut ready: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+
+    while Instant::now() < deadline {
+        if ready() {
+            return true;
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    false
+}
+
+fn is_up(dir: &Path) -> bool {
+    matches!(status(dir), Ok(ServeStatus::Up(_)))
 }
 
 /// A client speaking to `flowlite mcp` over real pipes.
@@ -134,11 +174,34 @@ impl McpClient {
         }))
     }
 
+    /// The handshake every test below needs before it can call a tool: `initialize`, then
+    /// the notification that ends it. Neither response is used by the caller.
+    fn handshake(&mut self) {
+        self.initialize();
+        self.notify("notifications/initialized");
+    }
+
+    /// Calls a tool and returns its `CallToolResult` - a JSON-RPC *success*, per the
+    /// design's "errors are tool results, not protocol errors": `request` already asserts
+    /// there is no protocol-level `error`, so a domain failure is still reached through
+    /// this method, distinguished by `result["isError"]`.
+    fn call_tool(&mut self, name: &str, arguments: Value) -> Value {
+        self.request("tools/call", json!({ "name": name, "arguments": arguments }))
+    }
+
     /// Closes stdin, which is how an MCP client stops a server it spawned, and reports how
     /// the process ended.
     fn close_stdin(&mut self) {
         self.stdin.take();
     }
+}
+
+/// The text content of a tool result - what every MCP client can read, per the design's
+/// rule that structured content rides alongside it rather than replacing it.
+fn tool_text(result: &Value) -> &str {
+    result["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no text content in {result}"))
 }
 
 /// The first thing any client does, and the answer a client shows the user when it lists
@@ -154,10 +217,12 @@ fn initialize_names_the_server_and_its_version() {
     assert_eq!(result["serverInfo"]["version"], json!(env!("CARGO_PKG_VERSION")));
 }
 
-/// The capability is what makes a client ask for tools at all, so an empty list has to be
-/// reached by declaring tools and having none - not by declining to have the capability.
+/// The capability is what makes a client ask for tools at all - the durable half of this
+/// test, true whether zero tools are registered or four. The other half, replaced from cut
+/// 2's "and lists none yet", is this cut's own: the four read tools, and nothing else,
+/// named by `tools/list`.
 #[test]
-fn the_handshake_declares_tools_and_lists_none_yet() {
+fn the_handshake_declares_tools_and_lists_the_four_read_tools() {
     let dir = data_dir("tools");
     let mut client = McpClient::start(&dir);
 
@@ -171,7 +236,15 @@ fn the_handshake_declares_tools_and_lists_none_yet() {
 
     let listed = client.request("tools/list", json!({}));
 
-    assert_eq!(listed["tools"], json!([]), "a tool is registered in this cut");
+    let mut names: Vec<&str> = listed["tools"]
+        .as_array()
+        .expect("tools/list did not return an array")
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    names.sort();
+
+    assert_eq!(names, vec!["get_job_run", "get_task_output", "list_job_runs", "list_jobs"]);
 }
 
 /// The only way a client stops a server it spawned. A process that lingered would outlive
@@ -190,4 +263,130 @@ fn closing_stdin_ends_the_process_cleanly() {
 
     let status = status.expect("the server was still running after its stdin was closed");
     assert!(status.success(), "the server exited with {status}");
+}
+
+/// The projection `list_jobs` exists for: a job installed in the data directory is exactly
+/// what `job list --json` would print, read back through MCP instead of the CLI.
+#[test]
+fn list_jobs_shows_a_job_installed_in_the_data_directory() {
+    let dir = data_dir("list-jobs");
+    install_job(&dir, "hello.yaml", "id: hello\nname: Hello\ntasks:\n  - id: say\n    command: \"true\"\n");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("list_jobs", json!({}));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let jobs: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    let job_ids: Vec<&str> = jobs.as_array().unwrap().iter().map(|job| job["job_id"].as_str().unwrap()).collect();
+
+    assert_eq!(job_ids, vec!["hello"]);
+}
+
+/// The staleness half of the fresh-mem mechanism: `mem` is seeded once per call, not once
+/// per process, so a file written into `jobs/` after this long-lived server started is
+/// still visible on the very next call - the whole reason a CLI command's "read config,
+/// then exit" cannot simply be ported unchanged into a server.
+#[test]
+fn a_job_file_written_after_the_server_started_is_visible_to_list_jobs() {
+    let dir = data_dir("late-job");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let before: Value = serde_json::from_str(tool_text(&client.call_tool("list_jobs", json!({})))).unwrap();
+    assert_eq!(before.as_array().unwrap().len(), 0, "{before}");
+
+    install_job(&dir, "late.yaml", "id: late\nname: Late\ntasks:\n  - id: say\n    command: \"true\"\n");
+
+    let after: Value = serde_json::from_str(tool_text(&client.call_tool("list_jobs", json!({})))).unwrap();
+    let job_ids: Vec<&str> = after.as_array().unwrap().iter().map(|job| job["job_id"].as_str().unwrap()).collect();
+
+    assert_eq!(job_ids, vec!["late"], "the file written after startup was not picked up: {after}");
+}
+
+/// `anyhow::bail!("Job run {} not found", ...)` is the sentence `job-run get` already
+/// raises; the tool error carries it verbatim rather than a protocol error the model
+/// cannot read.
+#[test]
+fn get_job_run_on_an_unknown_id_is_a_tool_error_naming_the_id() {
+    let dir = data_dir("unknown-run");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("get_job_run", json!({ "job_run_id": 404 }));
+
+    assert_eq!(result["isError"], json!(true), "{result}");
+    assert!(tool_text(&result).contains("404"), "{result}");
+}
+
+/// End to end: a real run, executed by a real `serve` process, read back through MCP - the
+/// same task output `job-run logs --json` would print, since there is no `submit_job` tool
+/// yet to reach it any other way.
+#[test]
+fn get_task_output_returns_what_a_tasks_command_echoed() {
+    let dir = data_dir("task-output");
+    install_job(&dir, "echoer.yaml", "id: echoer\nname: Echoer\ntasks:\n  - id: say\n    command: echo mcp-task-output\n");
+
+    let mut server = ServerGuard::new(serve(&dir, 18230), libc::SIGTERM);
+    assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
+
+    let submitted = flowlite(&dir, &["job", "submit", "echoer", "--wait", "--json"]);
+    assert!(submitted.status.success(), "{}", String::from_utf8_lossy(&submitted.stderr));
+
+    let run: Value = serde_json::from_slice(&submitted.stdout).unwrap();
+    let job_run_id = run["id"].as_i64().unwrap();
+
+    server.stop();
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("get_task_output", json!({ "job_run_id": job_run_id }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let logs: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    let stdout = logs[0]["stdout"].as_str().unwrap();
+
+    assert!(stdout.contains("mcp-task-output"), "{stdout}");
+}
+
+/// `max_bytes` bends the "identical to `--json`" rule only in length, by an amount it
+/// states: a stream longer than the limit comes back carrying the truncation marker this
+/// cut's unit tests pin the exact wording of.
+#[test]
+fn a_long_stream_comes_back_truncated_carrying_the_marker() {
+    let dir = data_dir("truncated");
+    install_job(
+        &dir,
+        "verbose.yaml",
+        "id: verbose\nname: Verbose\ntasks:\n  - id: say\n    command: echo 0123456789\n",
+    );
+
+    let mut server = ServerGuard::new(serve(&dir, 18231), libc::SIGTERM);
+    assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
+
+    let submitted = flowlite(&dir, &["job", "submit", "verbose", "--wait", "--json"]);
+    assert!(submitted.status.success(), "{}", String::from_utf8_lossy(&submitted.stderr));
+
+    let run: Value = serde_json::from_slice(&submitted.stdout).unwrap();
+    let job_run_id = run["id"].as_i64().unwrap();
+
+    server.stop();
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    // "echo 0123456789" writes "0123456789\n" - 11 bytes; keeping 4 keeps only "789\n".
+    let result = client.call_tool("get_task_output", json!({ "job_run_id": job_run_id, "max_bytes": 4 }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let logs: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    let stdout = logs[0]["stdout"].as_str().unwrap();
+
+    assert!(stdout.starts_with("[truncated: "), "{stdout}");
+    assert!(stdout.contains("earlier bytes dropped]"), "{stdout}");
+    assert!(stdout.ends_with("789\n"), "{stdout}");
 }

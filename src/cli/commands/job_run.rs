@@ -5,9 +5,9 @@ use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
 use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
-use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRun};
-use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt};
-use crate::crud::task_run_attempt_output::{group_task_run_attempt_output, SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort, TaskRunAttemptOutputStreams};
+use crate::crud::task_run::TaskRun;
+use crate::crud::task_run_attempt::TaskRunAttempt;
+use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStreams;
 use crate::router::app::format;
 use super::job::{ensure_data_dir_is_served, wait_for_job_run};
 
@@ -79,20 +79,26 @@ pub struct JobRunRerunCmd {
 
 /// A run and the task runs under it, flattened so that `.status` reads off the run itself
 /// - the same field name `job submit --json` prints, rather than one nested a level down.
+///
+/// `pub(crate)` rather than private: the MCP `get_job_run` tool (`src/mcp/tools.rs`)
+/// prints the identical shape and imports this rather than declaring its own.
 #[derive(Serialize)]
-struct JobRunDetail {
+pub(crate) struct JobRunDetail {
     #[serde(flatten)]
-    job_run: JobRun,
-    task_runs: Vec<TaskRun>,
+    pub(crate) job_run: JobRun,
+    pub(crate) task_runs: Vec<TaskRun>,
 }
 
 /// One attempt with what it wrote, which is the shape the whole command exists to report.
+///
+/// `pub(crate)` for the same reason as `JobRunDetail`: the MCP `get_task_output` tool
+/// prints this shape too, with `stdout`/`stderr` possibly truncated rather than copied.
 #[derive(Serialize)]
-struct TaskRunAttemptLog {
+pub(crate) struct TaskRunAttemptLog {
     #[serde(flatten)]
-    task_run_attempt: TaskRunAttempt,
-    stdout: String,
-    stderr: String,
+    pub(crate) task_run_attempt: TaskRunAttempt,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
 }
 
 impl JobRunCmd {
@@ -161,31 +167,9 @@ impl JobRunGetCmd {
 
         let crud = CRUD::new(std::sync::Arc::new(toolkit));
 
-        let job_run = crud.select_job_run(&mut conn, &SelectJobRunsData {
-            filter: SelectJobRunsDataFilter {
-                id: Some(self.job_run_id),
-                job_id: None,
-                status: None,
-            },
-            sort: None,
-            limit: Some(1),
-            offset: None,
-        }).await?;
-
-        let Some(job_run) = job_run else {
-            anyhow::bail!("Job run {} not found", self.job_run_id);
-        };
-
-        let task_runs = crud.select_task_runs(&mut conn, &SelectTaskRunsData {
-            filter: SelectTaskRunsDataFilter {
-                id: None,
-                job_run_id: Some(self.job_run_id),
-                job_id: None,
-                task_id: None,
-                status: None,
-            },
-            sort: Some(SelectTaskRunsDataSort::Id),
-        }).await?;
+        let (job_run, task_runs) = crud
+            .select_job_run_with_task_runs(&mut conn, self.job_run_id)
+            .await?;
 
         if json {
             let detail = JobRunDetail { job_run, task_runs };
@@ -206,30 +190,9 @@ impl JobRunLogsCmd {
 
         let crud = CRUD::new(std::sync::Arc::new(toolkit));
 
-        let job_run = crud.select_job_run(&mut conn, &SelectJobRunsData {
-            filter: SelectJobRunsDataFilter {
-                id: Some(self.job_run_id),
-                job_id: None,
-                status: None,
-            },
-            sort: None,
-            limit: Some(1),
-            offset: None,
-        }).await?;
-
-        if job_run.is_none() {
-            anyhow::bail!("Job run {} not found", self.job_run_id);
-        }
-
-        let task_run_attempts = crud.select_task_run_attempts(&mut conn, &SelectTaskRunAttemptsData {
-            filter: SelectTaskRunAttemptsDataFilter {
-                task_run_id: None,
-                job_run_id: Some(self.job_run_id),
-                task_id: self.task.clone(),
-                status: None,
-            },
-            sort: Some(SelectTaskRunAttemptsDataSort::Id),
-        }).await?;
+        let (task_run_attempts, mut task_run_attempt_output) = crud
+            .select_task_run_attempt_logs(&mut conn, self.job_run_id, self.task.as_deref())
+            .await?;
 
         // An empty run still answers in JSON, as an empty array - a caller parsing the
         // output should not have to read a sentence to learn there was nothing.
@@ -240,24 +203,6 @@ impl JobRunLogsCmd {
             }
             return Ok(());
         }
-
-        // Filtered exactly as the attempts above were - the same job run, narrowed by the
-        // same `--task` - so this reads only the output it is about to print rather than
-        // every task's to print one task's.
-        let task_run_attempt_output = crud.select_task_run_attempt_outputs(&mut conn, &SelectTaskRunAttemptOutputsData {
-            filter: SelectTaskRunAttemptOutputsDataFilter {
-                id: None,
-                task_run_attempt_id: None,
-                task_run_id: None,
-                job_run_id: Some(self.job_run_id),
-                job_id: None,
-                task_id: self.task.clone(),
-                stream: None,
-            },
-            sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),
-        }).await?;
-
-        let mut task_run_attempt_output = group_task_run_attempt_output(task_run_attempt_output);
 
         if json {
             let logs: Vec<TaskRunAttemptLog> = task_run_attempts
@@ -532,7 +477,10 @@ fn print_task_run_attempt(
 ///
 /// Derived from `JobRunStatus::ALL` rather than matched by hand: a status added to the
 /// enum reaches this parser and its error message without anyone remembering to come here.
-fn parse_job_run_status(raw: &str) -> Result<JobRunStatus, String> {
+///
+/// `pub(crate)` so the MCP `list_job_runs` tool (`src/mcp/tools.rs`) parses `status`
+/// through the identical words this CLI flag accepts, rather than a second spelling.
+pub(crate) fn parse_job_run_status(raw: &str) -> Result<JobRunStatus, String> {
 
     let status = JobRunStatus::ALL
         .into_iter()
