@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use sqlx::SqliteConnection;
 
@@ -37,6 +37,7 @@ struct JobRunTaskDefinition {
     task_id: String,
     command: String,
     depends_on: Vec<String>,
+    limits: Vec<String>,
     timeout: u32,
     max_retries: u32,
     retry_delay: u32,
@@ -139,6 +140,23 @@ fn merge_job_and_task_maps(
     merged
 }
 
+/// Claims a task run stores at submit time: the job's own `limits` plus the task's own,
+/// as one set. Unlike `merge_job_and_task_maps`, there is no name to win here - claiming
+/// `warehouse` and `openai_api` is strictly more constrained than claiming either alone, so
+/// the two lists union rather than one overriding the other. A `BTreeSet` gives the dedup
+/// and the sort the stored snapshot needs in one step: a claim list that reordered between
+/// runs would be a diff nobody could read.
+fn union_job_and_task_limits(job_limits: &[String], task_limits: &[String]) -> Vec<String> {
+
+    job_limits
+        .iter()
+        .chain(task_limits)
+        .cloned()
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect()
+}
+
 /// One task's definition as `submit_job` builds it: `env` and `secret_env` each merged
 /// from the job's own and the task's own, with a guard `merge_job_and_task_maps` alone
 /// cannot provide.
@@ -180,6 +198,7 @@ fn job_run_task_definition(
         task_id: task.task_id.clone(),
         command: task.command.clone(),
         depends_on: task.depends_on.0.clone(),
+        limits: union_job_and_task_limits(&job.limits.0, &task.limits.0),
         timeout: task.timeout,
         max_retries: task.max_retries,
         retry_delay: task.retry_delay,
@@ -394,7 +413,7 @@ impl CRUD {
                         task_id: task.task_id.clone(),
                         command: task.command.clone(),
                         depends_on: task.depends_on.clone(),
-                        limits: Vec::new(),
+                        limits: task.limits.clone(),
                         timeout: task.timeout,
                         max_retries: task.max_retries,
                         retry_delay: task.retry_delay,
@@ -498,6 +517,7 @@ impl CRUD {
                     task_id: task_run.task_id,
                     command: task_run.command,
                     depends_on: task_run.depends_on.0,
+                    limits: task_run.limits.0,
                     timeout: task_run.timeout,
                     max_retries: task_run.max_retries,
                     retry_delay: task_run.retry_delay,
@@ -1025,16 +1045,16 @@ mod tests {
         assert!(merge_job_and_task_maps(&map(&[]), &map(&[])).is_empty());
     }
 
-    /// A `mem.task` row with the given `env`/`secret_env` - everything else is filler a
-    /// `Task` needs to exist at all.
-    fn task_row(env: BTreeMap<String, String>, secret_env: BTreeMap<String, String>) -> Task {
+    /// A `mem.task` row with the given `env`/`secret_env`/`limits` - everything else is
+    /// filler a `Task` needs to exist at all.
+    fn task_row(env: BTreeMap<String, String>, secret_env: BTreeMap<String, String>, limits: Vec<String>) -> Task {
         Task {
             task_id: "task".to_string(),
             job_id: "job".to_string(),
             description: String::new(),
             command: "true".to_string(),
             depends_on: sqlx::types::Json(Vec::new()),
-            limits: sqlx::types::Json(Vec::new()),
+            limits: sqlx::types::Json(limits),
             timeout: 60,
             max_retries: 0,
             retry_delay: 60,
@@ -1046,7 +1066,7 @@ mod tests {
 
     /// The `mem.job` row a task's definition is merged against - the same filler idea as
     /// `task_row`, for the other side of the merge.
-    fn job_row(env: BTreeMap<String, String>, secret_env: BTreeMap<String, String>) -> Job {
+    fn job_row(env: BTreeMap<String, String>, secret_env: BTreeMap<String, String>, limits: Vec<String>) -> Job {
         Job {
             job_id: "job".to_string(),
             name: "Job".to_string(),
@@ -1057,7 +1077,7 @@ mod tests {
             secret_env: sqlx::types::Json(secret_env),
             on_failure_recipients: sqlx::types::Json(BTreeMap::new()),
             on_success_recipients: sqlx::types::Json(BTreeMap::new()),
-            limits: sqlx::types::Json(Vec::new()),
+            limits: sqlx::types::Json(limits),
         }
     }
 
@@ -1071,11 +1091,11 @@ mod tests {
     #[test]
     fn a_tasks_secret_env_is_merged_with_the_jobs_the_task_winning_a_shared_name() {
 
-        let task = task_row(BTreeMap::new(), map(&[("API_KEY", "task_api_key"), ("SHARED", "task_shared_secret")]));
+        let task = task_row(BTreeMap::new(), map(&[("API_KEY", "task_api_key"), ("SHARED", "task_shared_secret")]), Vec::new());
 
         let definition = job_run_task_definition(
             &task,
-            &job_row(BTreeMap::new(), map(&[("DB_PASSWORD", "job_db_password"), ("SHARED", "job_shared_secret")])),
+            &job_row(BTreeMap::new(), map(&[("DB_PASSWORD", "job_db_password"), ("SHARED", "job_shared_secret")]), Vec::new()),
         );
 
         assert_eq!(definition.secret_env.get("DB_PASSWORD").unwrap(), "job_db_password");
@@ -1089,9 +1109,9 @@ mod tests {
     #[test]
     fn a_task_declaring_no_secret_env_and_a_job_declaring_none_either_has_an_empty_map() {
 
-        let task = task_row(BTreeMap::new(), BTreeMap::new());
+        let task = task_row(BTreeMap::new(), BTreeMap::new(), Vec::new());
 
-        let definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), BTreeMap::new()));
+        let definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), BTreeMap::new(), Vec::new()));
 
         assert!(definition.secret_env.is_empty());
     }
@@ -1104,9 +1124,9 @@ mod tests {
     #[test]
     fn a_tasks_secret_env_evicts_the_jobs_env_value_of_the_same_name() {
 
-        let task = task_row(BTreeMap::new(), map(&[("FOO", "task_secret")]));
+        let task = task_row(BTreeMap::new(), map(&[("FOO", "task_secret")]), Vec::new());
 
-        let definition = job_run_task_definition(&task, &job_row(map(&[("FOO", "job_env_value")]), BTreeMap::new()));
+        let definition = job_run_task_definition(&task, &job_row(map(&[("FOO", "job_env_value")]), BTreeMap::new(), Vec::new()));
 
         assert_eq!(definition.secret_env.get("FOO").unwrap(), "task_secret");
         assert!(!definition.env.contains_key("FOO"));
@@ -1117,9 +1137,9 @@ mod tests {
     #[test]
     fn a_tasks_env_evicts_the_jobs_secret_env_value_of_the_same_name() {
 
-        let task = task_row(map(&[("FOO", "task_env_value")]), BTreeMap::new());
+        let task = task_row(map(&[("FOO", "task_env_value")]), BTreeMap::new(), Vec::new());
 
-        let definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), map(&[("FOO", "job_secret")])));
+        let definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), map(&[("FOO", "job_secret")]), Vec::new()));
 
         assert_eq!(definition.env.get("FOO").unwrap(), "task_env_value");
         assert!(!definition.secret_env.contains_key("FOO"));
@@ -1134,11 +1154,12 @@ mod tests {
         let task = task_row(
             map(&[("FOO", "task_env"), ("BAR", "task_env_2")]),
             map(&[("BAZ", "task_secret")]),
+            Vec::new(),
         );
 
         let definition = job_run_task_definition(
             &task,
-            &job_row(map(&[("BAR", "job_env")]), map(&[("FOO", "job_secret"), ("QUX", "job_secret_2")])),
+            &job_row(map(&[("BAR", "job_env")]), map(&[("FOO", "job_secret"), ("QUX", "job_secret_2")]), Vec::new()),
         );
 
         let shared_names: Vec<&String> = definition.env.keys()
@@ -1146,6 +1167,56 @@ mod tests {
             .collect();
 
         assert!(shared_names.is_empty(), "names in both blocks: {:?}", shared_names);
+    }
+
+    /// `limits` has no override semantics: a task's claim set is the job's plus its own,
+    /// never one replacing the other. Covers the job-only, task-only and both-declare
+    /// cases, a name declared at both levels, and the case where neither declares any.
+    #[test]
+    fn a_jobs_limits_reach_the_task_when_the_task_declares_none() {
+
+        let task = task_row(BTreeMap::new(), BTreeMap::new(), Vec::new());
+        let definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), BTreeMap::new(), vec!["warehouse".to_string()]));
+
+        assert_eq!(definition.limits, vec!["warehouse".to_string()]);
+    }
+
+    #[test]
+    fn a_tasks_limits_reach_the_definition_when_the_job_declares_none() {
+
+        let task = task_row(BTreeMap::new(), BTreeMap::new(), vec!["openai_api".to_string()]);
+        let definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), BTreeMap::new(), Vec::new()));
+
+        assert_eq!(definition.limits, vec!["openai_api".to_string()]);
+    }
+
+    #[test]
+    fn a_job_and_a_task_declaring_different_limits_union() {
+
+        let task = task_row(BTreeMap::new(), BTreeMap::new(), vec!["openai_api".to_string()]);
+        let definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), BTreeMap::new(), vec!["warehouse".to_string()]));
+
+        assert_eq!(definition.limits, vec!["openai_api".to_string(), "warehouse".to_string()]);
+    }
+
+    /// A name declared at both levels is one claim, not two - the union is a set, not a
+    /// concatenation.
+    #[test]
+    fn a_limit_declared_at_both_levels_appears_once() {
+
+        let task = task_row(BTreeMap::new(), BTreeMap::new(), vec!["warehouse".to_string()]);
+        let definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), BTreeMap::new(), vec!["warehouse".to_string()]));
+
+        assert_eq!(definition.limits, vec!["warehouse".to_string()]);
+    }
+
+    #[test]
+    fn a_job_and_task_declaring_no_limits_has_an_empty_list() {
+
+        let task = task_row(BTreeMap::new(), BTreeMap::new(), Vec::new());
+        let definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), BTreeMap::new(), Vec::new()));
+
+        assert!(definition.limits.is_empty());
     }
 
     /// The DB round trip above the pure merge: `insert_job_run_definition` writes whatever
@@ -1156,8 +1227,8 @@ mod tests {
 
         let db = TestDb::new().await;
 
-        let task = task_row(BTreeMap::new(), map(&[("API_KEY", "task_api_key")]));
-        let task_definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), map(&[("DB_PASSWORD", "job_db_password")])));
+        let task = task_row(BTreeMap::new(), map(&[("API_KEY", "task_api_key")]), Vec::new());
+        let task_definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), map(&[("DB_PASSWORD", "job_db_password")]), Vec::new()));
 
         let definition = JobRunDefinition {
             job_id: "job".to_string(),
@@ -1186,6 +1257,45 @@ mod tests {
         assert_eq!(task_runs.len(), 1);
         assert_eq!(task_runs[0].secret_env.0.get("DB_PASSWORD").unwrap(), "job_db_password");
         assert_eq!(task_runs[0].secret_env.0.get("API_KEY").unwrap(), "task_api_key");
+    }
+
+    /// `insert_job_run_definition` writes the union `job_run_task_definition` computed, not
+    /// an empty placeholder - the same round-trip guard as `secret_env` above, for the
+    /// column `insert_task_run` had to carry empty until this task filled it in.
+    #[tokio::test]
+    async fn a_task_definitions_limits_reach_the_inserted_task_run_row() {
+
+        let db = TestDb::new().await;
+
+        let task = task_row(BTreeMap::new(), BTreeMap::new(), vec!["openai_api".to_string()]);
+        let task_definition = job_run_task_definition(&task, &job_row(BTreeMap::new(), BTreeMap::new(), vec!["warehouse".to_string()]));
+
+        let definition = JobRunDefinition {
+            job_id: "job".to_string(),
+            job_name: "Job".to_string(),
+            job_description: String::new(),
+            parameters: BTreeMap::new(),
+            scheduled_at: None,
+            tasks: vec![task_definition],
+            notifications: Vec::new(),
+        };
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let job_run_id = db.crud.insert_job_run_definition(&mut conn, &definition).await.unwrap();
+
+        let task_runs = db.crud.select_task_runs(&*db.conn_pool, &SelectTaskRunsData {
+            filter: SelectTaskRunsDataFilter {
+                id: None,
+                job_run_id: Some(job_run_id),
+                job_id: None,
+                task_id: None,
+                status: None,
+            },
+            sort: None,
+        }).await.unwrap();
+
+        assert_eq!(task_runs.len(), 1);
+        assert_eq!(task_runs[0].limits.0, vec!["openai_api".to_string(), "warehouse".to_string()]);
     }
 
     fn task_reference<'a>(job_id: &'a str, task_id: &'a str, variable_name: &'a str, secret_name: &'a str) -> SecretEnvReference<'a> {
