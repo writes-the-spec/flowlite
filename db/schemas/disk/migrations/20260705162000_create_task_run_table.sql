@@ -9,6 +9,7 @@ CREATE TABLE task_run (
     max_retries INTEGER NOT NULL,
     retry_delay INTEGER NOT NULL,
     env TEXT NOT NULL,
+    secret_env TEXT NOT NULL,
     working_dir TEXT NOT NULL,
     limits TEXT NOT NULL,
     created_at DATETIME NOT NULL,

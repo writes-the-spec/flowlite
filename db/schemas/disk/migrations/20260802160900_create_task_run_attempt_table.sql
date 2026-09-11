@@ -9,8 +9,11 @@ CREATE TABLE task_run_attempt (
     finished_at DATETIME,
     attempt INTEGER NOT NULL,
     status TEXT NOT NULL,
-    stdout TEXT NOT NULL,
-    stderr TEXT NOT NULL,
+    -- Nullable: an attempt that never spawned has no process group. The id is the
+    -- spawned child's pid, since the command is spawned with process_group(0). It is on
+    -- the row because TaskRunAttemptChildren is memory: after a restart this is the only
+    -- way back to a process that is still running.
+    process_group_id INTEGER,
     FOREIGN KEY (task_run_id) REFERENCES task_run (id),
     FOREIGN KEY (job_run_id) REFERENCES job_run (id)
 );

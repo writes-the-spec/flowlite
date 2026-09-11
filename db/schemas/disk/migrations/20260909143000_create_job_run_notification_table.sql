@@ -2,6 +2,7 @@ CREATE TABLE job_run_notification (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_run_id INTEGER NOT NULL,
     job_id TEXT NOT NULL,
+    notify_on TEXT NOT NULL,
     channel TEXT NOT NULL,
     recipients TEXT NOT NULL,
     status TEXT NOT NULL,
