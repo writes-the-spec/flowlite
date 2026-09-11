@@ -1,0 +1,23 @@
+<div class="scroller">
+<table class="deftable">
+    <thead>
+        <tr>
+            <th>limit</th>
+            <th>in use</th>
+            <th>max</th>
+            <th></th>
+        </tr>
+    </thead>
+
+    <tbody>
+        {% for row in limit_rows %}
+        <tr>
+            <td class="deftable__id">{{ row.name }}</td>
+            <td>{{ row.in_use }}</td>
+            <td>{% if row.max == 0 %}<span class="none">unlimited</span>{% else %}{{ row.max }}{% endif %}</td>
+            <td>{% if row.full %}<span class="state state--failed">FULL</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>

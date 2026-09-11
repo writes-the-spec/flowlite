@@ -10,6 +10,7 @@ pub fn create_router(app_state: AppState) -> Router {
     let main_routes = Router::new()
         .route("/", get(app::routes::home::route::home_route))
         .route("/job-run-table", get(app::routes::home::job_run_table::route::job_run_table_route))
+        .route("/limits-panel", get(app::routes::home::limits_panel::route::limits_panel_route))
         .route("/jobs", get(app::routes::jobs::route::jobs_route))
         .route("/jobs/{job_id}", get(app::routes::jobs::job_id::route::job_id_route))
         .route("/jobs/{job_id}/submit", post(app::routes::jobs::job_id::route::submit_job_route))
