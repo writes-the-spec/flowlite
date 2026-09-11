@@ -140,6 +140,7 @@ mod tests {
             task_id: "extract".to_string(),
             command: "true".to_string(),
             depends_on: sqlx::types::Json(Vec::new()),
+            limits: sqlx::types::Json(Vec::new()),
             timeout: 3600,
             max_retries: 0,
             retry_delay: 60,

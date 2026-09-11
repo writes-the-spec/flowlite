@@ -588,6 +588,7 @@ mod tests {
             task_id: task_id.to_string(),
             command: "./sync.sh".to_string(),
             depends_on: sqlx::types::Json(Vec::new()),
+            limits: sqlx::types::Json(Vec::new()),
             timeout: 3600,
             max_retries: 2,
             retry_delay: 60,

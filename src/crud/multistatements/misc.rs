@@ -394,6 +394,7 @@ impl CRUD {
                         task_id: task.task_id.clone(),
                         command: task.command.clone(),
                         depends_on: task.depends_on.clone(),
+                        limits: Vec::new(),
                         timeout: task.timeout,
                         max_retries: task.max_retries,
                         retry_delay: task.retry_delay,

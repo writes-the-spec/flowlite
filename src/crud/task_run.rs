@@ -83,6 +83,7 @@ pub struct InsertTaskRunDataInput {
     pub task_id: String,
     pub command: String,
     pub depends_on: Vec<String>,
+    pub limits: Vec<String>,
     pub timeout: u32,
     pub max_retries: u32,
     pub retry_delay: u32,
@@ -153,6 +154,10 @@ pub struct TaskRun {
     /// Environment variable name to secret name - never a value.
     pub secret_env: sqlx::types::Json<BTreeMap<String, String>>,
     pub working_dir: String,
+    /// Named concurrency limits this task run claims - part of the snapshot, so a run is
+    /// capped by what it was submitted with rather than by the YAML as it now stands. See
+    /// `JobYamlTask::limits`.
+    pub limits: sqlx::types::Json<Vec<String>>,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
@@ -165,13 +170,14 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO task_run (job_run_id, job_id, task_id, command, depends_on, timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO task_run (job_run_id, job_id, task_id, command, depends_on, limits, timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(data.input.job_run_id)
             .bind(&data.input.job_id)
             .bind(&data.input.task_id)
             .bind(&data.input.command)
             .bind(sqlx::types::Json(&data.input.depends_on))
+            .bind(sqlx::types::Json(&data.input.limits))
             .bind(data.input.timeout)
             .bind(data.input.max_retries)
             .bind(data.input.retry_delay)
@@ -199,7 +205,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, job_run_id, job_id, task_id, command, depends_on, timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, started_at, finished_at, status FROM task_run WHERE 1=1"
+            "SELECT id, job_run_id, job_id, task_id, command, depends_on, limits, timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, started_at, finished_at, status FROM task_run WHERE 1=1"
         );
 
         if let Some(id) = data.filter.id {
@@ -323,6 +329,7 @@ mod tests {
             task_id: "task".to_string(),
             command: "sh -c true".to_string(),
             depends_on: sqlx::types::Json(Vec::new()),
+            limits: sqlx::types::Json(Vec::new()),
             timeout: 60,
             max_retries: 0,
             retry_delay: 0,
@@ -340,5 +347,54 @@ mod tests {
         let value = serde_json::to_value(&task_run).unwrap();
 
         assert_eq!(value["secret_env"], serde_json::json!({ "PGPASSWORD": "warehouse_pw" }));
+    }
+
+    /// The snapshot is only a snapshot if it reads back. A column named in the INSERT but
+    /// missing from the SELECT list writes correctly and returns empty forever, which no
+    /// insert-only test would catch.
+    #[tokio::test]
+    async fn limits_are_written_and_read_back() {
+
+        let db = crate::test_support::TestDb::new().await;
+
+        let job_run = db.insert_job_run(crate::crud::job_run::JobRunStatus::Running).await;
+
+        let id = db.crud.insert_task_run(
+            &*db.conn_pool,
+            &InsertTaskRunData {
+                input: InsertTaskRunDataInput {
+                    job_run_id: job_run.id,
+                    job_id: "job".to_string(),
+                    task_id: "task".to_string(),
+                    command: "true".to_string(),
+                    depends_on: Vec::new(),
+                    limits: vec!["warehouse".to_string(), "api".to_string()],
+                    timeout: 3600,
+                    max_retries: 0,
+                    retry_delay: 60,
+                    env: BTreeMap::new(),
+                    secret_env: BTreeMap::new(),
+                    working_dir: String::new(),
+                    status: TaskRunStatus::Pending,
+                },
+            },
+        ).await.unwrap();
+
+        let task_run = db.task_run(id).await;
+
+        assert_eq!(task_run.limits.0, vec!["warehouse".to_string(), "api".to_string()]);
+    }
+
+    /// A task run claiming nothing carries an empty list, not a null - the same value the
+    /// migration backfills onto every row that predates the column.
+    #[tokio::test]
+    async fn a_task_run_claiming_no_limit_reads_back_an_empty_list() {
+
+        let db = crate::test_support::TestDb::new().await;
+
+        let job_run = db.insert_job_run(crate::crud::job_run::JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Pending).await;
+
+        assert!(task_run.limits.0.is_empty());
     }
 }
