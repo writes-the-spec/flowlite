@@ -27,6 +27,7 @@ struct ScheduleIdRouteTemplate {
     current_route: &'static str,
     schedule: ScheduleDisplay,
     schedule_jobs: Vec<ScheduleJob>,
+    refresh_seconds: u32,
 }
 
 pub async fn schedule_id_route(
@@ -76,6 +77,7 @@ pub async fn schedule_id_route(
             disabled: schedule.disabled,
         },
         schedule_jobs,
+        refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
     };
 
     match template.render() {

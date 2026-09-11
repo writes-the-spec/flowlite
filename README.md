@@ -762,6 +762,12 @@ fixed snapshot, so pressing either twice changes nothing the first press did not
 twice is two runs. What that costs is bounded rather than free: the extra run queues, since
 `max_parallel_runs` and `max_running_attempts` decide what actually executes.
 
+Because a button now starts work, the three POST routes refuse a request another site caused
+your browser to make — a cross-origin form post is sent without a preflight, so without that
+check any page you happened to be visiting could submit a run on your machine. A request with
+no browser headers at all, such as `curl` or a script, is still allowed: this guards a browser
+against being used as a deputy, not the port against someone who can already reach it.
+
 The submit dialog lists the job's declared parameters with their defaults filled in, and each
 is editable for that run. Only the values are: the names come from the job's `parameters:`
 block, so the browser can change what a run is submitted with but not what the job accepts —

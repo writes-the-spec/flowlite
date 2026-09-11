@@ -169,7 +169,12 @@
         {% endif %}
 
         <div class="dialog__actions">
-            <button type="submit" formmethod="dialog" class="btn btn--quiet">Cancel</button>
+            {# type="button", not a dialog-method submit: the first submit button in a form is
+               its default button, so a formmethod="dialog" Cancel written here would be
+               clicked by Enter in any parameter field and silently discard what was typed.
+               Resetting on the way out keeps "each value starts at the job's declared
+               default" true the second time the dialog is opened. #}
+            <button type="button" class="btn btn--quiet" onclick="this.closest('form').reset(); this.closest('dialog').close()">Cancel</button>
             <button type="submit" class="btn btn--primary">Submit run</button>
         </div>
     </form>

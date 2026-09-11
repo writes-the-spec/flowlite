@@ -6,6 +6,17 @@
 
 <a href="/schedules" class="back">← Schedules</a>
 
+{# See the schedules list: `next_run` is rewritten on every fire, so this page re-asks for
+   itself rather than ageing into a stale answer. #}
+<div
+    id="schedule"
+    hx-get="/schedules/{{ schedule.schedule_id }}"
+    hx-trigger="every {{ refresh_seconds }}s"
+    hx-select="#schedule"
+    hx-target="#schedule"
+    hx-swap="outerHTML"
+>
+
 <div class="view-head">
     <div>
         <span class="eyebrow">{{ schedule.schedule_id }}</span>
@@ -100,6 +111,8 @@
     </table>
 </div>
     {% endif %}
+</div>
+
 </div>
 
 {% endblock %}

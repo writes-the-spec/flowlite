@@ -26,6 +26,10 @@ struct SchedulesRouteTemplate {
     current_name: Option<String>,
     prev_href: Option<String>,
     next_href: Option<String>,
+    refresh_seconds: u32,
+    /// This page's own URL, search and page included, so the poll re-asks the same
+    /// question rather than resetting to an unfiltered first page under the reader.
+    self_href: String,
 }
 
 #[derive(Deserialize)]
@@ -93,12 +97,16 @@ pub async fn schedules_route(
         None
     };
 
+    let self_href = schedules_href(page, name_like.as_deref());
+
     let template = SchedulesRouteTemplate {
         current_route: "schedules",
         schedules: entries,
         current_name: name_like,
         prev_href,
         next_href,
+        refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
+        self_href,
     };
 
     match template.render() {

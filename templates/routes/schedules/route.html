@@ -7,7 +7,7 @@
 <div class="view-head">
     <div>
         <h1 class="view-title">Schedules</h1>
-        <p class="view-sub">Cron expressions that submit jobs on your behalf. Times are shown in this machine's timezone.</p>
+        <p class="view-sub">Cron expressions that submit jobs on your behalf. Times are shown in this machine's timezone, and refresh every {{ refresh_seconds }} seconds.</p>
     </div>
 
     <form method="GET" action="/schedules" class="controls">
@@ -25,6 +25,18 @@
         {% endif %}
     </form>
 </div>
+
+{# `next_run` is live state: the Scheduler rewrites it on every fire. Rendered once, this
+   page ages into showing a time receding into the past, which reads as a stuck scheduler
+   on the one screen whose job is answering "did my cron fire?". #}
+<div
+    id="schedules"
+    hx-get="{{ self_href }}"
+    hx-trigger="every {{ refresh_seconds }}s"
+    hx-select="#schedules"
+    hx-target="#schedules"
+    hx-swap="outerHTML"
+>
 
 {% if schedules.is_empty() %}
 <div class="empty">
@@ -81,5 +93,7 @@
 </div>
 {% endif %}
 {% endif %}
+
+</div>
 
 {% endblock %}

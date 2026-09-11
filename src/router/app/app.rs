@@ -26,5 +26,8 @@ pub fn create_router(app_state: AppState) -> Router {
         .merge(main_routes)
         .route("/assets/{*path}", get(static_handler))
         .route_layer(middleware::from_fn_with_state(app_state.clone(), app::middlewares::crud::crud_middleware))
+        // Outside crud_middleware: a refused request should not reach a handler or open a
+        // connection, and this decides on headers alone.
+        .route_layer(middleware::from_fn(app::middlewares::same_origin::same_origin_middleware))
         .with_state(app_state)
 }
