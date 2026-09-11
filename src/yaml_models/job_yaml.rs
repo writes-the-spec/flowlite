@@ -113,12 +113,21 @@ impl JobYaml {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read Job YAML from {}", path.display()))?;
 
-        let job: JobYaml = serde_yaml::from_str(&content)
-            .with_context(|| format!("Failed to parse Job YAML from {}", path.display()))?;
+        Self::from_yaml_str(&content, &path.display().to_string())
+    }
 
-        job.validate().with_context(|| format!("Invalid Job YAML at {}", path.display()))?;
+    /// The parse-validate-validate_secret_env tail of `from_yaml`, taking content already
+    /// in hand rather than a path to read - what an inline `yaml` argument needs, so it is
+    /// parsed, validated and error-messaged exactly as a file is. `label` stands in for the
+    /// path in every message: `from_yaml` passes the real one, and a caller with no file at
+    /// all (`submit_job`'s inline case) passes a fixed string like "<inline yaml>" instead.
+    pub(crate) fn from_yaml_str(content: &str, label: &str) -> anyhow::Result<Self> {
+        let job: JobYaml = serde_yaml::from_str(content)
+            .with_context(|| format!("Failed to parse Job YAML from {}", label))?;
 
-        job.validate_secret_env().with_context(|| format!("Invalid Job YAML at {}", path.display()))?;
+        job.validate().with_context(|| format!("Invalid Job YAML at {}", label))?;
+
+        job.validate_secret_env().with_context(|| format!("Invalid Job YAML at {}", label))?;
 
         Ok(job)
     }

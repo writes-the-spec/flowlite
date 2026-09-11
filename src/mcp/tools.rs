@@ -1,12 +1,16 @@
-//! The read-only tools: arguments in, the same CRUD a CLI command runs, structures out.
+//! The tools: arguments in, the same CRUD a CLI command runs, structures out.
 //!
 //! Each tool mirrors one CLI command's `--json` branch exactly - same filters, same sort,
 //! same shape - so an agent reading a run through MCP and a person reading it through the
 //! CLI read the same fields. Every call opens its own connection through a freshly named
-//! `mem`, never `self.toolkit`'s own: `list_jobs` seeds it, and the other three never read
-//! it at all, but taking a fresh name uniformly is one rule instead of two, and it is what
-//! lets a file written into `jobs/` after this process started still reach `list_jobs`.
+//! `mem`, never `self.toolkit`'s own: `list_jobs` and `submit_job` seed it, and the other
+//! three never read it at all, but taking a fresh name uniformly is one rule instead of
+//! two, and it is what lets a file written into `jobs/` after this process started still
+//! reach `list_jobs`, and what lets `submit_job` seed the same inline id twice in one
+//! session without the second call colliding with the first's rows.
 
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -15,18 +19,42 @@ use rmcp::schemars::{self, JsonSchema};
 use rmcp::{tool, tool_router};
 use serde::{Deserialize, Serialize};
 
+use crate::cli::commands::job::{installed_job_id, select_job_run};
 use crate::cli::commands::job_run::{parse_job_run_status, JobRunDetail, TaskRunAttemptLog};
 use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
 use crate::crud::task_run_attempt::TaskRunAttempt;
 use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStreams;
 use crate::crud::CRUD;
+use crate::serve_state::{status, ServeStatus};
 use crate::toolkit::Toolkit;
+use crate::yaml_models::job_yaml::JobYaml;
 
 use super::McpServer;
 
 /// `get_task_output`'s default, applied per stream when the caller does not name one.
 const DEFAULT_MAX_BYTES: usize = 20_000;
+
+/// The label `seed_ad_hoc_job`'s messages read for an inline `yaml` definition, in place of
+/// the path a `file` would have - tells an agent where a definition came from without
+/// inventing a file that never touched disk.
+const INLINE_YAML_LABEL: &str = "<inline yaml>";
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SubmitJob {
+    /// The id of a job installed in the data directory. Exactly one of job, file or yaml
+    /// is required.
+    pub job: Option<String>,
+    /// A path to a job definition that is not installed there, read where it lies rather
+    /// than copied in. Exactly one of job, file or yaml is required.
+    pub file: Option<String>,
+    /// A job definition, inline - nothing is written to disk. Exactly one of job, file or
+    /// yaml is required.
+    pub yaml: Option<String>,
+    /// Values for the job's declared parameters, by name. A name the job does not declare
+    /// is refused.
+    pub params: Option<BTreeMap<String, String>>,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListJobRuns {
@@ -67,6 +95,17 @@ impl McpServer {
     async fn list_jobs(&self) -> CallToolResult {
         match list_jobs_rows(&self.toolkit).await {
             Ok(jobs) => success_json(jobs),
+            Err(err) => error_result(&err),
+        }
+    }
+
+    /// Submit a run of a job: one installed in the data directory, a file that is never
+    /// installed there, or a definition given inline. Mirrors `job submit --json` without
+    /// `--wait`, which a later cut adds back as `wait_seconds`.
+    #[tool]
+    async fn submit_job(&self, Parameters(args): Parameters<SubmitJob>) -> CallToolResult {
+        match submit_job_run(&self.toolkit, args).await {
+            Ok((job_run, warning)) => submit_job_result(job_run, warning),
             Err(err) => error_result(&err),
         }
     }
@@ -174,6 +213,119 @@ async fn list_jobs_rows(toolkit: &Toolkit) -> anyhow::Result<Vec<Job>> {
     }).await
 }
 
+/// Which of the three ways to name a job's definition the caller gave, resolved once so
+/// the exactly-one-of-three rule and the branch that acts on it cannot drift apart.
+#[derive(Debug)]
+enum SubmitJobDefinition {
+    Job(String),
+    File(String),
+    Yaml(String),
+}
+
+/// The hand-written counterpart of the `clap::ArgGroup` on `JobSubmitCmd`: rmcp's derive
+/// has no equivalent for "exactly one of these fields", so it is checked here instead -
+/// which is exactly why this needs its own unit test.
+fn resolve_definition(args: &SubmitJob) -> anyhow::Result<SubmitJobDefinition> {
+    let given: Vec<&str> = [
+        args.job.is_some().then_some("job"),
+        args.file.is_some().then_some("file"),
+        args.yaml.is_some().then_some("yaml"),
+    ].into_iter().flatten().collect();
+
+    match given.as_slice() {
+        ["job"] => Ok(SubmitJobDefinition::Job(args.job.clone().unwrap())),
+        ["file"] => Ok(SubmitJobDefinition::File(args.file.clone().unwrap())),
+        ["yaml"] => Ok(SubmitJobDefinition::Yaml(args.yaml.clone().unwrap())),
+        [] => anyhow::bail!(
+            "Name exactly one of job, file or yaml to submit a job; none was given."
+        ),
+        _ => anyhow::bail!(
+            "Name exactly one of job, file or yaml to submit a job; got {}.",
+            given.join(" and "),
+        ),
+    }
+}
+
+/// The sentence `CRUD::seed_ad_hoc_job`'s collision refusal appends for this tool: unlike
+/// the CLI's `-f`, nothing here was a flag to drop, so the remedy is the shape this tool
+/// itself takes for an installed job.
+fn submit_by_name_remedy(job_id: &str) -> String {
+    format!(r#"Submit it by name instead: {{ "job": "{}" }}"#, job_id)
+}
+
+/// `submit_job`'s own connection: a fresh `mem`, seeded exactly as `job submit` seeds its
+/// own, so the same inline id can be submitted twice in one session without the second
+/// call colliding with the first's rows, and a job file just written into `jobs/` is
+/// visible without a restart.
+async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(JobRun, Option<String>)> {
+    let definition = resolve_definition(&args)?;
+    let overrides = args.params.unwrap_or_default();
+
+    let toolkit = toolkit.with_fresh_mem();
+    let _memory_conn = toolkit.get_memory_conn().await?;
+    let mut conn = toolkit.get_conn().await?;
+
+    let crud = CRUD::new(Arc::new(toolkit));
+    let row_id = crud.init(&mut conn).await?;
+
+    let job_id = match definition {
+        SubmitJobDefinition::Job(job_name) => installed_job_id(&crud, &mut conn, &job_name).await?,
+
+        SubmitJobDefinition::File(file) => {
+            let path = PathBuf::from(file);
+            let job_yaml = JobYaml::from_yaml(&path)?;
+            let remedy = submit_by_name_remedy(&job_yaml.id);
+
+            crud.seed_ad_hoc_job(&mut conn, job_yaml, &path, row_id, &remedy).await?
+        }
+
+        SubmitJobDefinition::Yaml(yaml) => {
+            let job_yaml = JobYaml::from_yaml_str(&yaml, INLINE_YAML_LABEL)?;
+            let remedy = submit_by_name_remedy(&job_yaml.id);
+
+            crud.seed_ad_hoc_job(&mut conn, job_yaml, Path::new(INLINE_YAML_LABEL), row_id, &remedy).await?
+        }
+    };
+
+    let job_run_id = crud.submit_job(&mut conn, &job_id, &overrides, None).await?;
+    let job_run = select_job_run(&crud, &mut conn, job_run_id).await?;
+
+    let warning = unserved_directory_warning(&crud.toolkit.app_config.data_dir)?;
+
+    Ok((job_run, warning))
+}
+
+/// `submit_job`'s result: the same JSON `job submit --json` prints, as the first content
+/// block so a client reading only that one still gets valid JSON, with a second block
+/// appended only when nothing is serving the directory this run was just queued against -
+/// an agent that got back `pending` with no warning would poll a run that cannot start.
+fn submit_job_result(job_run: JobRun, warning: Option<String>) -> CallToolResult {
+    let mut result = success_json(job_run);
+
+    if let Some(warning) = warning {
+        result.content.push(ContentBlock::text(warning));
+    }
+
+    result
+}
+
+/// `Some` naming the directory only when nothing at all is serving it - `Starting` counts
+/// as served, the same way `ensure_data_dir_is_served` treats it, since that server has the
+/// lock and will reach the row this run is queued in. Queuing work for a server that is not
+/// up yet is legitimate; an agent that got back `pending` with no warning would poll a run
+/// that cannot start until something else changes.
+fn unserved_directory_warning(data_dir: &str) -> anyhow::Result<Option<String>> {
+    if matches!(status(Path::new(data_dir))?, ServeStatus::Down) {
+        return Ok(Some(format!(
+            "Nothing is serving {}, so this run will not start until flowlite serve runs \
+             against it.",
+            data_dir,
+        )));
+    }
+
+    Ok(None)
+}
+
 /// `list_job_runs`'s own connection. Reads the disk `job_run` table only, but still takes
 /// a fresh `mem` name rather than `toolkit`'s own: one rule - every call gets a fresh name
 /// - is easier to hold than a rule with an exception for the read-only tools.
@@ -256,6 +408,91 @@ fn truncated_task_run_attempt_log(
 mod tests {
     use super::*;
     use crate::crud::task_run_attempt::TaskRunAttemptStatus;
+
+    fn submit_job_args(job: Option<&str>, file: Option<&str>, yaml: Option<&str>) -> SubmitJob {
+        SubmitJob {
+            job: job.map(str::to_string),
+            file: file.map(str::to_string),
+            yaml: yaml.map(str::to_string),
+            params: None,
+        }
+    }
+
+    /// The hand-written counterpart of clap's `ArgGroup` - none of the three is a tool
+    /// error naming that none was given.
+    #[test]
+    fn resolving_a_definition_with_none_of_the_three_given_is_refused() {
+        let error = resolve_definition(&submit_job_args(None, None, None)).unwrap_err().to_string();
+
+        assert!(error.contains("none was given"), "{error}");
+    }
+
+    /// Two together is refused too, and the message says which two - this is the case a
+    /// clap `ArgGroup` would catch for free, and precisely why this needs its own test.
+    #[test]
+    fn resolving_a_definition_with_two_of_the_three_given_is_refused() {
+        let error = resolve_definition(&submit_job_args(Some("etl"), Some("f.yaml"), None))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("job"), "{error}");
+        assert!(error.contains("file"), "{error}");
+    }
+
+    /// All three at once is refused the same way as any other pair.
+    #[test]
+    fn resolving_a_definition_with_all_three_given_is_refused() {
+        assert!(resolve_definition(&submit_job_args(Some("etl"), Some("f.yaml"), Some("id: x"))).is_err());
+    }
+
+    #[test]
+    fn resolving_a_definition_with_only_job_given_is_accepted() {
+        let definition = resolve_definition(&submit_job_args(Some("etl"), None, None)).unwrap();
+
+        assert!(matches!(definition, SubmitJobDefinition::Job(job) if job == "etl"));
+    }
+
+    #[test]
+    fn resolving_a_definition_with_only_file_given_is_accepted() {
+        let definition = resolve_definition(&submit_job_args(None, Some("f.yaml"), None)).unwrap();
+
+        assert!(matches!(definition, SubmitJobDefinition::File(file) if file == "f.yaml"));
+    }
+
+    #[test]
+    fn resolving_a_definition_with_only_yaml_given_is_accepted() {
+        let definition = resolve_definition(&submit_job_args(None, None, Some("id: x"))).unwrap();
+
+        assert!(matches!(definition, SubmitJobDefinition::Yaml(yaml) if yaml == "id: x"));
+    }
+
+    /// `params` is a JSON object on the wire; this pins that it lands as the same
+    /// `BTreeMap<String, String>` `--param` builds, rather than a `serde_json::Value` the
+    /// rest of `submit_job_run` would have to convert.
+    #[test]
+    fn a_params_object_deserializes_into_the_map_param_builds() {
+        let args: SubmitJob = serde_json::from_value(serde_json::json!({
+            "job": "etl",
+            "params": { "region": "eu", "date": "2026-09-11" },
+        })).unwrap();
+
+        let params = args.params.unwrap();
+        assert_eq!(params.get("region").map(String::as_str), Some("eu"));
+        assert_eq!(params.get("date").map(String::as_str), Some("2026-09-11"));
+    }
+
+    /// `submit_job` without `job`, `file` or `yaml` at all deserializes fine - `params`
+    /// alone would otherwise look like a fourth way in.
+    #[test]
+    fn a_params_object_with_no_definition_still_deserializes() {
+        let args: SubmitJob = serde_json::from_value(serde_json::json!({
+            "params": { "region": "eu" },
+        })).unwrap();
+
+        assert!(args.job.is_none());
+        assert!(args.file.is_none());
+        assert!(args.yaml.is_none());
+    }
 
     /// `success_json`'s text must serialize the value directly, not by way of a
     /// `serde_json::Value` (whose map is a `BTreeMap` and would alphabetize field names) -

@@ -168,7 +168,7 @@ impl JobSubmitCmd {
 }
 
 /// The id of an installed job, or an error naming the one nothing matched.
-async fn installed_job_id(
+pub(crate) async fn installed_job_id(
     crud: &CRUD,
     conn: &mut sqlx::SqliteConnection,
     job_name: &str,
@@ -198,10 +198,9 @@ async fn installed_job_id(
 /// exits. `serve` and the dashboard never see it - only the run it produced, which carries
 /// its own definition and so needs nothing to look back at.
 ///
-/// The collision check comes first, before anything is written. `job_id` is `mem.job`'s
-/// primary key, so seeding over an installed job would fail on the key rather than say
-/// anything useful, and that id is what every filter, link and rerun resolves through
-/// afterwards.
+/// The collision check, the seed and the secret check are `CRUD::seed_ad_hoc_job` - shared
+/// with the MCP `submit_job` tool's `file` and `yaml` arguments, which run this same
+/// sequence over a definition of their own. Only the remedy sentence is this command's own.
 async fn seed_job_file(
     crud: &CRUD,
     conn: &mut sqlx::SqliteConnection,
@@ -210,44 +209,13 @@ async fn seed_job_file(
 ) -> anyhow::Result<String> {
 
     let job_yaml = JobYaml::from_yaml(file)?;
-    let job_id = job_yaml.id.clone();
+    let remedy = format!("Drop -f to submit it: flowlite job submit {}", job_yaml.id);
 
-    let installed = crud.select_job(&mut *conn, &SelectJobsData {
-        filter: SelectJobsDataFilter {
-            job_id: Some(job_id.clone()),
-            name_like: None,
-        },
-        sort: None,
-        limit: Some(1),
-        offset: None,
-    }).await?;
-
-    if installed.is_some() {
-        anyhow::bail!(
-            "'{}' is already a job in {}. Drop -f to submit it: flowlite job submit {}",
-            job_id,
-            Path::new(&crud.toolkit.app_config.data_dir).join("jobs").display(),
-            job_id,
-        );
-    }
-
-    crud.seed_job(&mut *conn, job_yaml, file, row_id).await?;
-
-    // Held to the same rule an installed job is held to at `serve` startup, because this
-    // is the command that will make those secrets reach a spawned process. Scoped to this
-    // job: `mem` holds the whole data directory by now, and an installed job's unsatisfied
-    // secret is not this submit's problem.
-    crud.check_secret_env_is_satisfied(
-        &mut *conn,
-        &crud.toolkit.app_config.secrets,
-        Some(&job_id),
-    ).await?;
-
-    Ok(job_id)
+    crud.seed_ad_hoc_job(&mut *conn, job_yaml, file, row_id, &remedy).await
 }
 
 /// The run, or an error naming the id nothing matched.
-async fn select_job_run(
+pub(crate) async fn select_job_run(
     crud: &CRUD,
     conn: &mut sqlx::SqliteConnection,
     job_run_id: i64,

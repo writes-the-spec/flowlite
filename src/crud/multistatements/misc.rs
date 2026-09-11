@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::Path;
 use chrono::{DateTime, Utc};
 use sqlx::SqliteConnection;
 
@@ -10,6 +11,7 @@ use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataS
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRun, TaskRunStatus};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
 use crate::crud::task_run_attempt_output::{group_task_run_attempt_output, SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort, TaskRunAttemptOutputStreams};
+use crate::yaml_models::job_yaml::JobYaml;
 
 
 /// A job's definition, as one job run will execute it. `submit_job` builds it from the
@@ -815,6 +817,58 @@ impl CRUD {
         }).await?;
 
         Ok((task_run_attempts, group_task_run_attempt_output(task_run_attempt_output)))
+    }
+
+    /// Seeds a job definition that is not installed in the data directory - the sequence
+    /// `job submit -f` and the MCP `submit_job` tool's `file` and `yaml` arguments all run
+    /// before they can submit it, kept in one place so the two callers cannot drift apart:
+    /// refuse a collision with an installed job before anything is written, seed the
+    /// parsed definition, then check its own `secret_env` is satisfied, scoped to just this
+    /// job rather than the whole data directory `mem` holds by now.
+    ///
+    /// `remedy` is the caller's own sentence for "submit it by name instead," appended to
+    /// the collision refusal - the CLI's `-f` and the MCP tool's `job` argument each name an
+    /// installed job a different way, and the message should point at the one the caller
+    /// can actually use rather than a flag or a shape it never passed.
+    pub async fn seed_ad_hoc_job(
+        &self,
+        conn: &mut SqliteConnection,
+        job_yaml: JobYaml,
+        job_path: &Path,
+        row_id: u64,
+        remedy: &str,
+    ) -> anyhow::Result<String> {
+
+        let job_id = job_yaml.id.clone();
+
+        let installed = self.select_job(&mut *conn, &SelectJobsData {
+            filter: SelectJobsDataFilter {
+                job_id: Some(job_id.clone()),
+                name_like: None,
+            },
+            sort: None,
+            limit: Some(1),
+            offset: None,
+        }).await?;
+
+        if installed.is_some() {
+            anyhow::bail!(
+                "'{}' is already a job in {}. {}",
+                job_id,
+                Path::new(&self.toolkit.app_config.data_dir).join("jobs").display(),
+                remedy,
+            );
+        }
+
+        self.seed_job(&mut *conn, job_yaml, job_path, row_id).await?;
+
+        self.check_secret_env_is_satisfied(
+            &mut *conn,
+            &self.toolkit.app_config.secrets,
+            Some(&job_id),
+        ).await?;
+
+        Ok(job_id)
     }
 
 }

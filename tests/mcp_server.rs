@@ -6,9 +6,10 @@
 //! ends it. None of the three is observable from inside the library.
 //!
 //! MCP over stdio is newline-delimited JSON-RPC 2.0: one JSON object per line in, one per
-//! line out. This cut's four read tools are exercised here too, rather than in a file of
-//! their own, because the property under test is the same one the handshake tests are:
-//! that a real client, over real pipes, gets back what the tool promises.
+//! line out. The four read tools and this cut's `submit_job` are exercised here too,
+//! rather than in a file of their own, because the property under test is the same one the
+//! handshake tests are: that a real client, over real pipes, gets back what the tool
+//! promises.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -177,11 +178,11 @@ fn initialize_names_the_server_and_its_version() {
 }
 
 /// The capability is what makes a client ask for tools at all - the durable half of this
-/// test, true whether zero tools are registered or four. The other half, replaced from cut
-/// 2's "and lists none yet", is this cut's own: the four read tools, and nothing else,
+/// test, true whether zero tools are registered or five. The other half, extended from cut
+/// 3's four read tools, is this cut's own: `submit_job` alongside them, and nothing else,
 /// named by `tools/list`.
 #[test]
-fn the_handshake_declares_tools_and_lists_the_four_read_tools() {
+fn the_handshake_declares_tools_and_lists_the_five_tools() {
     let dir = data_dir("tools");
     let mut client = McpClient::start(&dir);
 
@@ -203,7 +204,7 @@ fn the_handshake_declares_tools_and_lists_the_four_read_tools() {
         .collect();
     names.sort();
 
-    assert_eq!(names, vec!["get_job_run", "get_task_output", "list_job_runs", "list_jobs"]);
+    assert_eq!(names, vec!["get_job_run", "get_task_output", "list_job_runs", "list_jobs", "submit_job"]);
 }
 
 /// The only way a client stops a server it spawned. A process that lingered would outlive
@@ -355,4 +356,176 @@ fn a_long_stream_comes_back_truncated_carrying_the_marker() {
     assert!(stderr.starts_with("[truncated: "), "{stderr}");
     assert!(stderr.contains("earlier bytes dropped]"), "{stderr}");
     assert!(stderr.ends_with("hij\n"), "{stderr}");
+}
+
+const HELLO: &str = "id: hello\nname: Hello\ntasks:\n  - id: say\n    command: \"true\"\n";
+
+/// The `job` argument: an installed job submits without touching the filesystem, and the
+/// result is the pending run `job submit --json` would have printed for it.
+#[test]
+fn submitting_an_installed_job_returns_its_pending_run() {
+    let dir = data_dir("submit-installed");
+    install_job(&dir, "hello.yaml", HELLO);
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("submit_job", json!({ "job": "hello" }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    assert!(job_run["id"].as_i64().unwrap() > 0, "{job_run}");
+    assert_eq!(job_run["status"], json!("pending"), "{job_run}");
+}
+
+/// `yaml` is the natural agent action: nothing is written to disk, and the run's config
+/// snapshot is what keeps it inspectable once submitted.
+#[test]
+fn submitting_an_inline_yaml_definition_succeeds() {
+    let dir = data_dir("submit-inline");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("submit_job", json!({
+        "yaml": "id: probe\nname: Probe\ntasks:\n  - id: say\n    command: \"true\"\n",
+    }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    assert_eq!(job_run["job_id"], json!("probe"), "{job_run}");
+    assert_eq!(job_run["status"], json!("pending"), "{job_run}");
+}
+
+/// The regression test for the whole fresh-mem mechanism this cut exists for: two calls in
+/// the same long-lived session seeding the same inline id must not collide, because each
+/// call seeds a `mem` nothing else has the name of. Without `with_fresh_mem`, the second
+/// call would hit a primary-key violation on the first's `mem.job` row.
+#[test]
+fn the_same_inline_yaml_id_submits_twice_in_one_session() {
+    let dir = data_dir("submit-inline-twice");
+    let yaml = "id: probe\nname: Probe\ntasks:\n  - id: say\n    command: \"true\"\n";
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let first = client.call_tool("submit_job", json!({ "yaml": yaml }));
+    assert_ne!(first["isError"], json!(true), "{first}");
+
+    let second = client.call_tool("submit_job", json!({ "yaml": yaml }));
+    assert_ne!(second["isError"], json!(true), "{second}");
+
+    let first_run: Value = serde_json::from_str(tool_text(&first)).unwrap();
+    let second_run: Value = serde_json::from_str(tool_text(&second)).unwrap();
+
+    assert_eq!(first_run["job_id"], json!("probe"), "{first_run}");
+    assert_eq!(second_run["job_id"], json!("probe"), "{second_run}");
+    assert_ne!(first_run["id"], second_run["id"], "two submits must get two different run ids");
+}
+
+/// `file` reads a definition where it lies and never installs it - the same guarantee
+/// `job submit -f` gives, reached through the tool instead of the CLI.
+#[test]
+fn submitting_a_file_does_not_install_it() {
+    let dir = data_dir("submit-file");
+    let file = dir.join("outside.yaml");
+    std::fs::write(&file, "id: outside\nname: Outside\ntasks:\n  - id: say\n    command: \"true\"\n").unwrap();
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("submit_job", json!({ "file": file.to_string_lossy() }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    assert_eq!(job_run["job_id"], json!("outside"), "{job_run}");
+
+    let listed: Value = serde_json::from_str(tool_text(&client.call_tool("list_jobs", json!({})))).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 0, "the file was installed: {listed}");
+}
+
+/// `job_id` is `mem.job`'s primary key, so the alternative to refusing is a raw constraint
+/// error. The remedy names the shape this tool itself takes - not the CLI's `-f`, which
+/// this caller never passed.
+#[test]
+fn an_inline_definition_colliding_with_an_installed_job_is_refused_by_name() {
+    let dir = data_dir("submit-collision");
+    install_job(&dir, "hello.yaml", HELLO);
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("submit_job", json!({ "yaml": HELLO }));
+
+    assert_eq!(result["isError"], json!(true), "{result}");
+    let text = tool_text(&result);
+    assert!(text.contains("hello"), "{text}");
+    assert!(text.contains(r#"{ "job": "hello" }"#), "{text}");
+}
+
+/// The text names the reason, exactly as `job submit -f` reports a parse failure - here, a
+/// missing required field, `id`.
+#[test]
+fn invalid_inline_yaml_is_a_tool_error_naming_the_reason() {
+    let dir = data_dir("submit-invalid");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("submit_job", json!({
+        "yaml": "name: No Id\ntasks:\n  - id: say\n    command: \"true\"\n",
+    }));
+
+    assert_eq!(result["isError"], json!(true), "{result}");
+    assert!(tool_text(&result).contains("id"), "{}", tool_text(&result));
+}
+
+/// `resolve_job_parameters` still refuses a name the job's YAML does not declare, reached
+/// through the tool exactly as `--param` reaches it.
+#[test]
+fn a_param_the_job_does_not_declare_is_refused() {
+    let dir = data_dir("submit-bad-param");
+    install_job(&dir, "hello.yaml", HELLO);
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("submit_job", json!({
+        "job": "hello",
+        "params": { "region": "eu" },
+    }));
+
+    assert_eq!(result["isError"], json!(true), "{result}");
+    assert!(tool_text(&result).contains("region"), "{}", tool_text(&result));
+}
+
+/// Queuing work for a server that is not up yet is legitimate, but an agent that got back
+/// `pending` with no warning would poll a run that cannot start - so the JSON is followed
+/// by a second content block naming the directory, and only while nothing is serving it.
+#[test]
+fn the_warning_block_appears_only_while_the_directory_is_unserved() {
+    let dir = data_dir("submit-unserved");
+    install_job(&dir, "hello.yaml", HELLO);
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let unserved = client.call_tool("submit_job", json!({ "job": "hello" }));
+    assert_ne!(unserved["isError"], json!(true), "{unserved}");
+    let unserved_content = unserved["content"].as_array().unwrap();
+    assert_eq!(unserved_content.len(), 2, "{unserved}");
+    assert!(
+        unserved_content[1]["text"].as_str().unwrap().contains(&dir.to_string_lossy().to_string()),
+        "{unserved}",
+    );
+
+    let mut server = ServerGuard::new(serve(&dir, 18232), libc::SIGTERM);
+    assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
+
+    let served = client.call_tool("submit_job", json!({ "job": "hello" }));
+    assert_ne!(served["isError"], json!(true), "{served}");
+    let served_content = served["content"].as_array().unwrap();
+    assert_eq!(served_content.len(), 1, "{served}");
+
+    server.stop();
 }
