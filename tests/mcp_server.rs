@@ -12,18 +12,14 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use flowlite::serve_state::{status, ServeStatus};
-
 mod common;
-use common::ServerGuard;
-
-const BINARY: &str = env!("CARGO_BIN_EXE_flowlite");
+use common::{flowlite, install_job, is_up, serve, until, ServerGuard, BINARY};
 
 /// Generous enough that a cold first connection - which migrates both schemas - is never
 /// mistaken for a server that has stopped answering.
@@ -36,43 +32,6 @@ fn data_dir(label: &str) -> PathBuf {
     std::fs::create_dir_all(dir.join("jobs")).unwrap();
 
     dir
-}
-
-fn install_job(dir: &Path, name: &str, yaml: &str) {
-    std::fs::write(dir.join("jobs").join(name), yaml).unwrap();
-}
-
-fn flowlite(dir: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(BINARY)
-        .args(["--data-dir", &dir.to_string_lossy()])
-        .args(args)
-        .output()
-        .unwrap()
-}
-
-fn serve(dir: &Path, port: u16) -> Child {
-    Command::new(BINARY)
-        .args(["--data-dir", &dir.to_string_lossy(), "serve", "--port", &port.to_string()])
-        .spawn()
-        .unwrap()
-}
-
-fn until(timeout: Duration, mut ready: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
-
-    while Instant::now() < deadline {
-        if ready() {
-            return true;
-        }
-
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    false
-}
-
-fn is_up(dir: &Path) -> bool {
-    matches!(status(dir), Ok(ServeStatus::Up(_)))
 }
 
 /// A client speaking to `flowlite mcp` over real pipes.
@@ -355,14 +314,15 @@ fn get_task_output_returns_what_a_tasks_command_echoed() {
 
 /// `max_bytes` bends the "identical to `--json`" rule only in length, by an amount it
 /// states: a stream longer than the limit comes back carrying the truncation marker this
-/// cut's unit tests pin the exact wording of.
+/// cut's unit tests pin the exact wording of. The task writes to both streams so this
+/// exercises the two independent budgets end to end, not stdout alone.
 #[test]
 fn a_long_stream_comes_back_truncated_carrying_the_marker() {
     let dir = data_dir("truncated");
     install_job(
         &dir,
         "verbose.yaml",
-        "id: verbose\nname: Verbose\ntasks:\n  - id: say\n    command: echo 0123456789\n",
+        "id: verbose\nname: Verbose\ntasks:\n  - id: say\n    command: \"echo 0123456789; echo abcdefghij 1>&2\"\n",
     );
 
     let mut server = ServerGuard::new(serve(&dir, 18231), libc::SIGTERM);
@@ -379,14 +339,20 @@ fn a_long_stream_comes_back_truncated_carrying_the_marker() {
     let mut client = McpClient::start(&dir);
     client.handshake();
 
-    // "echo 0123456789" writes "0123456789\n" - 11 bytes; keeping 4 keeps only "789\n".
+    // Each echo writes 11 bytes (10 characters plus the newline); keeping 4 keeps only
+    // the last 4 of each stream, independently.
     let result = client.call_tool("get_task_output", json!({ "job_run_id": job_run_id, "max_bytes": 4 }));
     assert_ne!(result["isError"], json!(true), "{result}");
 
     let logs: Value = serde_json::from_str(tool_text(&result)).unwrap();
     let stdout = logs[0]["stdout"].as_str().unwrap();
+    let stderr = logs[0]["stderr"].as_str().unwrap();
 
     assert!(stdout.starts_with("[truncated: "), "{stdout}");
     assert!(stdout.contains("earlier bytes dropped]"), "{stdout}");
     assert!(stdout.ends_with("789\n"), "{stdout}");
+
+    assert!(stderr.starts_with("[truncated: "), "{stderr}");
+    assert!(stderr.contains("earlier bytes dropped]"), "{stderr}");
+    assert!(stderr.ends_with("hij\n"), "{stderr}");
 }

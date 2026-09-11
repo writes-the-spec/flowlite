@@ -47,7 +47,9 @@ impl ServeCmd {
         let conn_pool = toolkit.get_conn_pool().await?;
         let conn_pool = Arc::new(conn_pool);
 
-        crud.init(&*conn_pool).await?;
+        let mut init_conn = conn_pool.acquire().await?;
+        crud.init(&mut init_conn).await?;
+        drop(init_conn);
 
         // Every job's and task's secret_env: must name a secret app_config.secrets
         // actually defines. Checked here, and only here - never inside `init` itself -

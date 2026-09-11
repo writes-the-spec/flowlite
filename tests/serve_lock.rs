@@ -3,15 +3,13 @@
 //! `CARGO_BIN_EXE_flowlite`, which cargo sets for integration tests only.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 use flowlite::serve_state::{state_path, status, ServeStatus};
 
 mod common;
-use common::ServerGuard;
-
-const BINARY: &str = env!("CARGO_BIN_EXE_flowlite");
+use common::{is_up, serve, until, ServerGuard, BINARY};
 
 /// A data directory with one job in it, so it is a real service rather than an empty
 /// directory.
@@ -28,31 +26,6 @@ fn data_dir(label: &str) -> PathBuf {
     ).unwrap();
 
     dir
-}
-
-fn serve(dir: &Path, port: u16) -> Child {
-    Command::new(BINARY)
-        .args(["--data-dir", &dir.to_string_lossy(), "serve", "--port", &port.to_string()])
-        .spawn()
-        .unwrap()
-}
-
-/// Blocks until the predicate holds, so a test never sleeps a fixed guess.
-fn until(timeout: Duration, mut ready: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
-
-    while Instant::now() < deadline {
-        if ready() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    false
-}
-
-fn is_up(dir: &Path) -> bool {
-    matches!(status(dir), Ok(ServeStatus::Up(_)))
 }
 
 fn is_down(dir: &Path) -> bool {

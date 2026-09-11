@@ -6,15 +6,10 @@
 //! lives out here.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output};
-use std::time::{Duration, Instant};
-
-use flowlite::serve_state::{status, ServeStatus};
+use std::time::Duration;
 
 mod common;
-use common::ServerGuard;
-
-const BINARY: &str = env!("CARGO_BIN_EXE_flowlite");
+use common::{flowlite, install_job, is_up, serve, until, ServerGuard};
 
 /// An empty data directory: no jobs installed, so anything a test runs came from a file.
 fn data_dir(label: &str) -> PathBuf {
@@ -33,48 +28,11 @@ fn job_file(dir: &Path, name: &str, yaml: &str) -> PathBuf {
     path
 }
 
-fn install_job(dir: &Path, name: &str, yaml: &str) {
-    std::fs::write(dir.join("jobs").join(name), yaml).unwrap();
-}
-
-fn flowlite(dir: &Path, args: &[&str]) -> Output {
-    Command::new(BINARY)
-        .args(["--data-dir", &dir.to_string_lossy()])
-        .args(args)
-        .output()
-        .unwrap()
-}
-
-fn serve(dir: &Path, port: u16) -> Child {
-    Command::new(BINARY)
-        .args(["--data-dir", &dir.to_string_lossy(), "serve", "--port", &port.to_string()])
-        .spawn()
-        .unwrap()
-}
-
-fn until(timeout: Duration, mut ready: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
-
-    while Instant::now() < deadline {
-        if ready() {
-            return true;
-        }
-
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    false
-}
-
 /// reqwest is built with `rustls-no-provider`, so a Client cannot be built until one is
 /// installed - the same line `src/notifications/slack.rs` runs before it builds its own.
 /// Idempotent, so every test that fetches a page can just call it.
 fn install_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
-}
-
-fn is_up(dir: &Path) -> bool {
-    matches!(status(dir), Ok(ServeStatus::Up(_)))
 }
 
 const HELLO: &str = "id: hello\nname: Hello\ntasks:\n  - id: say\n    \

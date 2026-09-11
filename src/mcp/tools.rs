@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::cli::commands::job_run::{parse_job_run_status, JobRunDetail, TaskRunAttemptLog};
 use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
+use crate::crud::task_run_attempt::TaskRunAttempt;
 use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStreams;
 use crate::crud::CRUD;
 use crate::toolkit::Toolkit;
@@ -228,21 +229,33 @@ async fn get_task_output_logs(
     Ok(task_run_attempts
         .into_iter()
         .map(|task_run_attempt| {
-            let streams: TaskRunAttemptOutputStreams =
-                task_run_attempt_output.remove(&task_run_attempt.id).unwrap_or_default();
+            let streams = task_run_attempt_output.remove(&task_run_attempt.id).unwrap_or_default();
 
-            TaskRunAttemptLog {
-                task_run_attempt,
-                stdout: truncate_tail(&streams.stdout, max_bytes),
-                stderr: truncate_tail(&streams.stderr, max_bytes),
-            }
+            truncated_task_run_attempt_log(task_run_attempt, streams, max_bytes)
         })
         .collect())
+}
+
+/// One attempt's log, both streams truncated to `max_bytes` independently - pulled out of
+/// `get_task_output_logs`'s mapping so a test can build a `TaskRunAttemptLog` the same way
+/// the tool does, rather than only exercising `truncate_tail` on strings that were never
+/// attached to a stream field.
+fn truncated_task_run_attempt_log(
+    task_run_attempt: TaskRunAttempt,
+    streams: TaskRunAttemptOutputStreams,
+    max_bytes: usize,
+) -> TaskRunAttemptLog {
+    TaskRunAttemptLog {
+        task_run_attempt,
+        stdout: truncate_tail(&streams.stdout, max_bytes),
+        stderr: truncate_tail(&streams.stderr, max_bytes),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crud::task_run_attempt::TaskRunAttemptStatus;
 
     /// `success_json`'s text must serialize the value directly, not by way of a
     /// `serde_json::Value` (whose map is a `BTreeMap` and would alphabetize field names) -
@@ -304,14 +317,56 @@ mod tests {
         assert_eq!(truncate_tail("", 0), "");
     }
 
-    /// `get_task_output` truncates each stream on its own limit, so a long stdout does not
-    /// eat into stderr's own budget or vice versa.
+    /// A `TaskRunAttempt` with everything but the id filled with filler - what
+    /// `truncated_task_run_attempt_log`'s tests build against, standing in for the row
+    /// `select_task_run_attempts` would otherwise have to seed to produce.
+    fn task_run_attempt_fixture() -> TaskRunAttempt {
+        TaskRunAttempt {
+            id: 1,
+            task_run_id: 1,
+            job_run_id: 1,
+            job_id: "job".to_string(),
+            task_id: "task".to_string(),
+            created_at: chrono::Utc::now(),
+            started_at: None,
+            finished_at: None,
+            attempt: 1,
+            status: TaskRunAttemptStatus::Running,
+            process_group_id: None,
+        }
+    }
+
+    /// The property `stdout_and_stderr_are_truncated_independently` used to claim but not
+    /// test: `get_task_output`'s real per-attempt mapping - not `truncate_tail` called
+    /// twice on unrelated strings - truncates `stdout` and `stderr` each to `max_bytes`,
+    /// on their own budget, and the fields land on the `TaskRunAttemptLog` the tool
+    /// actually returns.
     #[test]
     fn stdout_and_stderr_are_truncated_independently() {
-        let stdout = truncate_tail("0123456789", 4);
-        let stderr = truncate_tail("short", 4);
+        let streams = TaskRunAttemptOutputStreams {
+            stdout: "0123456789".to_string(),
+            stderr: "short".to_string(),
+        };
 
-        assert_eq!(stdout, "[truncated: 6 earlier bytes dropped]\n6789");
-        assert_eq!(stderr, "[truncated: 1 earlier bytes dropped]\nhort");
+        let log = truncated_task_run_attempt_log(task_run_attempt_fixture(), streams, 4);
+
+        assert_eq!(log.stdout, "[truncated: 6 earlier bytes dropped]\n6789");
+        assert_eq!(log.stderr, "[truncated: 1 earlier bytes dropped]\nhort");
+    }
+
+    /// The other half of the same property: a stream within the limit is untouched even
+    /// when the other stream on the same attempt is truncated - one stream being cut is
+    /// not allowed to affect the other's own byte-identical-when-short guarantee.
+    #[test]
+    fn a_stream_within_the_limit_is_untouched_while_the_other_is_truncated() {
+        let streams = TaskRunAttemptOutputStreams {
+            stdout: "0123456789".to_string(),
+            stderr: "ok".to_string(),
+        };
+
+        let log = truncated_task_run_attempt_log(task_run_attempt_fixture(), streams, 4);
+
+        assert_eq!(log.stdout, "[truncated: 6 earlier bytes dropped]\n6789");
+        assert_eq!(log.stderr, "ok");
     }
 }

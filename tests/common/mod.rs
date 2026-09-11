@@ -9,8 +9,61 @@
 #![allow(dead_code)]
 
 use std::io::Read;
-use std::process::{Child, ExitStatus};
+use std::path::Path;
+use std::process::{Child, Command, ExitStatus, Output};
 use std::time::{Duration, Instant};
+
+use flowlite::serve_state::{status, ServeStatus};
+
+/// The binary every integration test drives - `CARGO_BIN_EXE_flowlite`, which cargo sets
+/// for integration tests only, hence the `const` rather than reading it from `PATH`.
+pub const BINARY: &str = env!("CARGO_BIN_EXE_flowlite");
+
+/// Spawns `flowlite serve` against `dir` on `port`, left running - the caller wraps the
+/// result in a `ServerGuard` so it is signalled and reaped even if the test panics.
+pub fn serve(dir: &Path, port: u16) -> Child {
+    Command::new(BINARY)
+        .args(["--data-dir", &dir.to_string_lossy(), "serve", "--port", &port.to_string()])
+        .spawn()
+        .unwrap()
+}
+
+/// Runs `flowlite <args>` against `dir` to completion, the same way a person at a terminal
+/// would, and returns what it printed and how it exited.
+pub fn flowlite(dir: &Path, args: &[&str]) -> Output {
+    Command::new(BINARY)
+        .args(["--data-dir", &dir.to_string_lossy()])
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// Writes a job file into `dir/jobs/`, installing it the way a person editing the data
+/// directory by hand would - as opposed to a file written elsewhere and submitted with
+/// `-f`, which is never installed.
+pub fn install_job(dir: &Path, name: &str, yaml: &str) {
+    std::fs::write(dir.join("jobs").join(name), yaml).unwrap();
+}
+
+/// Blocks until the predicate holds, so a test never sleeps a fixed guess at how long a
+/// spawned process takes to become ready.
+pub fn until(timeout: Duration, mut ready: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+
+    while Instant::now() < deadline {
+        if ready() {
+            return true;
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    false
+}
+
+pub fn is_up(dir: &Path) -> bool {
+    matches!(status(dir), Ok(ServeStatus::Up(_)))
+}
 
 /// Guard that ensures a spawned server process is killed and reaped, even if assertions fail.
 /// Tolerates an already-dead process (e.g., one deliberately killed with SIGKILL).

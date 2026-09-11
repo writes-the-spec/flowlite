@@ -224,8 +224,11 @@ tasks:
         let crud_a = CRUD::new(Arc::new(toolkit_a));
         let crud_b = CRUD::new(Arc::new(toolkit_b));
 
-        crud_a.init(&conn_pool_a).await.unwrap();
-        crud_b.init(&conn_pool_b).await.unwrap();
+        let mut conn_a = conn_pool_a.acquire().await.unwrap();
+        crud_a.init(&mut conn_a).await.unwrap();
+
+        let mut conn_b = conn_pool_b.acquire().await.unwrap();
+        crud_b.init(&mut conn_b).await.unwrap();
 
         let jobs_a = crud_a.select_jobs(&conn_pool_a, &SelectJobsData {
             filter: SelectJobsDataFilter { job_id: None, name_like: None },
