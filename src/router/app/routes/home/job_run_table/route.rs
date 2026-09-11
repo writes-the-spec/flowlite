@@ -4,7 +4,10 @@ use axum::Extension;
 use axum::extract::{State, Query};
 use chrono::{DateTime, Utc};
 
+use std::collections::HashSet;
+
 use crate::crud::CRUD;
+use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
 use crate::router::app::app_state::AppState;
 use crate::router::app::format;
@@ -14,6 +17,9 @@ pub struct JobRunDisplay {
     pub id: i64,
     pub job_id: String,
     pub job_name: String,
+    /// Whether the job is still declared in the data directory. A run outlives its job -
+    /// one submitted from a file never had one - and only a job that exists can be linked.
+    pub job_exists: bool,
     pub status: JobRunStatus,
     pub status_word: &'static str,
     pub created_at: String,
@@ -67,12 +73,20 @@ pub async fn job_run_table_route(
         job_runs
     };
 
+    let installed_job_ids: HashSet<String> = crud.select_jobs(&*state.conn_pool, &SelectJobsData {
+        filter: SelectJobsDataFilter { job_id: None, name_like: None },
+        sort: None,
+        limit: None,
+        offset: None,
+    }).await.unwrap_or_default().into_iter().map(|job| job.job_id).collect();
+
     let now = Utc::now();
     let elapsed: Vec<Option<i64>> = job_runs.iter().map(|run| elapsed_seconds(run, now)).collect();
     let slowest_seconds = elapsed.iter().flatten().copied().max().unwrap_or(0);
 
     let job_runs_display = job_runs.into_iter().zip(elapsed).map(|(run, seconds)| {
         JobRunDisplay {
+            job_exists: installed_job_ids.contains(&run.job_id),
             id: run.id,
             job_id: run.job_id,
             job_name: run.job_name,

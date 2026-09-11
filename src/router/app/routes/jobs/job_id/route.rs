@@ -10,6 +10,16 @@ use crate::router::app::app_state::AppState;
 use crate::router::app::routes::jobs::job_id::dag::{self, Dag};
 use std::collections::BTreeMap;
 
+/// A job id with nothing behind it. Reachable two ways: a run submitted from a file, whose
+/// definition was never installed here, and a job deleted from the data directory while its
+/// runs remain. Both leave the id readable everywhere the runs are, so it needs a page.
+#[derive(Template)]
+#[template(path = "routes/jobs/job_id/missing.html")]
+struct JobMissingTemplate {
+    current_route: &'static str,
+    job_id: String,
+}
+
 #[derive(Template)]
 #[template(path = "routes/jobs/job_id/route.html")]
 struct JobIdRouteTemplate {
@@ -39,7 +49,20 @@ pub async fn job_id_route(
 
     let job = match job {
         Some(job) => job,
-        None => return Html("Job not found".to_string()).into_response(),
+        None => {
+            let template = JobMissingTemplate {
+                current_route: "jobs",
+                job_id,
+            };
+
+            return match template.render() {
+                Ok(html) => Html(html).into_response(),
+                Err(err) => {
+                    eprintln!("Template rendering error: {}", err);
+                    Html("Error rendering template".to_string()).into_response()
+                },
+            };
+        },
     };
 
     let tasks = crud.select_tasks(conn, &SelectTasksData {

@@ -26,7 +26,7 @@
 
             <td class="runs__id"><a href="/job-runs/{{ run.id }}">{{ run.id }}</a></td>
 
-            <td class="runs__job"><a href="/jobs/{{ run.job_id }}">{{ run.job_name }}</a></td>
+            <td class="runs__job">{% if run.job_exists %}<a href="/jobs/{{ run.job_id }}">{{ run.job_name }}</a>{% else %}{{ run.job_name }}{% endif %}</td>
 
             <td class="runs__when">{{ run.created_at }}</td>
 

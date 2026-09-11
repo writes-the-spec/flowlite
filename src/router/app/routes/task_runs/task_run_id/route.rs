@@ -4,6 +4,7 @@ use askama::Template;
 use axum::Extension;
 
 use crate::crud::CRUD;
+use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRunStatus};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
 use crate::crud::task_run_attempt_output::{group_task_run_attempt_output, SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort, TaskRunAttemptOutputStreams};
@@ -47,6 +48,9 @@ struct TaskRunIdRouteTemplate {
     attempt_note: String,
     polling: bool,
     refresh_seconds: u32,
+    /// See `JobRunDisplay::job_exists` on the home table: a run can outlive its job, and
+    /// one submitted from a file never had one to begin with.
+    job_exists: bool,
 }
 
 fn build_attempt(
@@ -144,8 +148,19 @@ pub async fn task_run_id_route(
         format::duration(finished_at.signed_duration_since(started_at).num_seconds())
     });
 
+    let job = crud.select_job(conn, &SelectJobsData {
+        filter: SelectJobsDataFilter {
+            job_id: Some(task_run.job_id.clone()),
+            name_like: None,
+        },
+        sort: None,
+        limit: Some(1),
+        offset: None,
+    }).await.unwrap_or_default();
+
     let template = TaskRunIdRouteTemplate {
         current_route: "home",
+        job_exists: job.is_some(),
         task_run: TaskRunDisplay {
             id: task_run.id,
             job_run_id: task_run.job_run_id,

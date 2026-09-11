@@ -66,6 +66,13 @@ fn until(timeout: Duration, mut ready: impl FnMut() -> bool) -> bool {
     false
 }
 
+/// reqwest is built with `rustls-no-provider`, so a Client cannot be built until one is
+/// installed - the same line `src/notifications/slack.rs` runs before it builds its own.
+/// Idempotent, so every test that fetches a page can just call it.
+fn install_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 fn is_up(dir: &Path) -> bool {
     matches!(status(dir), Ok(ServeStatus::Up(_)))
 }
@@ -225,4 +232,65 @@ fn a_file_submit_is_still_rerunnable_after_the_file_is_deleted() {
         "the run could not be replayed without its file: {}",
         String::from_utf8_lossy(&rerun.stderr),
     );
+}
+
+/// The dashboard links a run to its job, and an ad-hoc run has none to link to. The id
+/// still has to be readable - it is what `job-run list --job` filters on - so it is shown
+/// as text rather than as a link into a page that cannot exist.
+#[tokio::test]
+async fn the_run_page_shows_an_absent_job_as_text_rather_than_a_link() {
+    install_crypto_provider();
+
+    let dir = data_dir("run-page");
+    let file = job_file(&dir, "hello.yaml", HELLO);
+
+    let mut server = ServerGuard::new(serve(&dir, 18221), libc::SIGTERM);
+    assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
+
+    let submitted = flowlite(
+        &dir,
+        &["job", "submit", "-f", &file.to_string_lossy(), "--wait", "--json"],
+    );
+    let run: serde_json::Value = serde_json::from_slice(&submitted.stdout).unwrap();
+    let run_id = run["id"].as_i64().unwrap();
+
+    let page = reqwest::get(format!("http://127.0.0.1:18221/job-runs/{run_id}"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    server.stop();
+
+    assert!(page.contains("hello"), "the job id is not on the page at all");
+    assert!(
+        !page.contains("href=\"/jobs/hello\""),
+        "the run still links to a job that does not exist",
+    );
+}
+
+/// The other half of the same rough edge, reachable today by deleting a job that has runs:
+/// the job page has to be a page, not the bare string it renders now.
+#[tokio::test]
+async fn the_page_for_an_absent_job_is_a_real_page() {
+    install_crypto_provider();
+
+    let dir = data_dir("job-page");
+
+    let mut server = ServerGuard::new(serve(&dir, 18222), libc::SIGTERM);
+    assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
+
+    let page = reqwest::get("http://127.0.0.1:18222/jobs/gone")
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    server.stop();
+
+    assert_ne!(page.trim(), "Job not found");
+    assert!(page.contains("<nav"), "the page is missing the site's own layout");
+    assert!(page.contains("gone"), "the page does not say which job is missing");
 }

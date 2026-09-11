@@ -44,7 +44,7 @@
     <div class="meta">
         <div class="meta__item">
             <div class="meta__label">Job</div>
-            <div class="meta__value meta__value--mono"><a href="/jobs/{{ job_run.job_id }}">{{ job_run.job_id }}</a></div>
+            <div class="meta__value meta__value--mono">{% if job_exists %}<a href="/jobs/{{ job_run.job_id }}">{{ job_run.job_id }}</a>{% else %}{{ job_run.job_id }}{% endif %}</div>
         </div>
 
         <div class="meta__item">
