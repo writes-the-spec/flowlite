@@ -9,6 +9,7 @@ One row per task of a job, declared inline under the job YAML's `tasks:` list. L
 | `description` | `NOT NULL`, `''` when the YAML declares none. What the task does, in words; never read by anything that runs. |
 | `command` | The shell command, run as `sh -c <command>`. |
 | `depends_on` | JSON array of task ids in the same job. `NOT NULL`; a task with no dependencies stores `'[]'`. |
+| `limits` | `NOT NULL`. JSON array of named concurrency limits this task claims, on top of whatever its job claims, `'[]'` when it declares none. Resolved against `[concurrency_limits]` in `config.toml` — not validated here. |
 | `timeout` | Seconds. Defaults to 3600 in the YAML, not in the DDL. |
 | `max_retries` | Retries *after* the first attempt, so executions total `1 + max_retries`. Defaults to 0. |
 | `retry_delay` | Seconds to wait before each retry. Defaults to 60. |

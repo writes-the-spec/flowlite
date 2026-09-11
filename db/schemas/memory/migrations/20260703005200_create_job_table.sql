@@ -9,6 +9,7 @@ CREATE TABLE job (
     secret_env TEXT NOT NULL,
     on_failure_recipients TEXT NOT NULL,
     on_success_recipients TEXT NOT NULL,
+    limits TEXT NOT NULL,
 
     PRIMARY KEY (job_id),
     UNIQUE (row_id)

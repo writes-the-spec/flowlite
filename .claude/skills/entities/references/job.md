@@ -16,6 +16,7 @@ In-memory config, re-seeded on every startup, so nothing here survives a restart
 | `secret_env` | `NOT NULL`. Environment variable name to secret name — never a value — for every task of the job, `'{}'` when it declares none. Merged with each task's own `secret_env:` the same way `env` is, and only the merged result is stored, on `task_run.secret_env`. |
 | `on_failure_recipients` | `NOT NULL`. JSON object keyed by channel — `{"email": [...], "slack": [...]}` — from the YAML's `on_failure:` block, `'{}'` when it names nobody. A channel the YAML names nobody under is **absent**, not an empty array. Built by `job_notify_recipients`, which is the one place the YAML's per-channel fields become this map. Naming a recipient of a channel `config.toml` does not configure fails `CRUD::init` rather than being dropped. |
 | `on_success_recipients` | `NOT NULL`. The same shape, from the YAML's `on_success:` block, built by the same function and checked by the same startup check. Two columns rather than one map keyed by ending, because the two are read independently and a job commonly declares one and not the other. |
+| `limits` | `NOT NULL`. JSON array of named concurrency limits this job claims, `'[]'` when it declares none. Resolved against `[concurrency_limits]` in `config.toml` — not validated here; every one of the job's tasks claims these too, on top of its own. |
 
 ## Written by
 

@@ -37,6 +37,7 @@ A `[job_defaults]` default is the data dir's `config.toml` value, falling back t
 | `env` | no | `{}` | Environment variables for **every** task of this job. A task's own `env:` wins the names both of them set; the merge happens in `submit_job`, so `task_run.env` holds the merged result. |
 | `on_failure` | no | `{}` | Who to tell when a run of this job does not succeed. One key per channel — `email`, a list of addresses, and `slack`, a list of conversations (`#channel`, a channel id, or a user id) — told when a run is `Failed` or `TimedOut`, never when it is `Aborted`, which is somebody stopping it on purpose. A job may name both and gets **one notification per channel**; a channel it names nobody under produces none. **Naming a recipient of a channel `config.toml` does not configure fails startup**, in `CRUD::validate_job_notifications`, which checks each channel against its own section: a notification that silently never leaves is the one failure you cannot see from the run afterwards. One field per channel rather than a free map, for the reason `NotificationChannel` is an enum — see the [notifications skill](../../notifications/SKILL.md). A block rather than a bare `notify_email:` so the action to run on a failure can join it later. |
 | `on_success` | no | `{}` | The same block, `JobYamlNotify` again, for a run that ends `Succeeded`. Addressed independently of `on_failure` — a failure wakes whoever is on call, a success reassures whoever is waiting on the data — and validated by the same startup check, whose error names the block as well as the channel. A job naming both gets a notification row for each, and its one ending delivers exactly one of them. |
+| `limits` | no | `[]` | Named concurrency limits this job claims, resolved against `[concurrency_limits]` in config.toml. Claimed by every one of this job's tasks, on top of each task's own. Not validated here — a name config.toml has never heard of still parses and seeds. |
 | `tasks` | no | `[]` | A job with no tasks is legal; its job runs finish `Succeeded` immediately. |
 
 ## `JobYamlTask`
@@ -47,6 +48,7 @@ A `[job_defaults]` default is the data dir's `config.toml` value, falling back t
 | `description` | no | `""` | What the task does, in words. The job page's task table shows this rather than the command. |
 | `command` | yes | — | Run as `sh -c <command>`, so shell syntax works. |
 | `depends_on` | no | `[]` | Task ids **of the same job**. |
+| `limits` | no | `[]` | Named concurrency limits this task claims, on top of whatever its job claims. Same validation story as the job's own `limits:` — none, yet. |
 | `timeout` | no | `[job_defaults]`, `3600` | Seconds. Applies per *attempt*, not to the task run as a whole. |
 | `max_retries` | no | `[job_defaults]`, `0` | Total executions are `1 + max_retries`; only a `Failed` attempt is retried. |
 | `retry_delay` | no | `[job_defaults]`, `60` | Seconds to wait after a failed attempt before the next one starts. Enforced in `TaskRunAttemptDispatcher::settle_as_pending`, measured from the retry row's `created_at`. |

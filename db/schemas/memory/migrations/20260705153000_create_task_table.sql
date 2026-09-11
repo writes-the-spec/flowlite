@@ -11,6 +11,7 @@ CREATE TABLE task (
     env TEXT NOT NULL,
     secret_env TEXT NOT NULL,
     working_dir TEXT NOT NULL,
+    limits TEXT NOT NULL,
     PRIMARY KEY (task_id, job_id),
     FOREIGN KEY (job_id) REFERENCES job (job_id),
     UNIQUE (row_id)

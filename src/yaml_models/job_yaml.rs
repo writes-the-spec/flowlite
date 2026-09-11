@@ -13,6 +13,10 @@ pub struct JobYamlTask {
     pub command: String,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Named concurrency limits this claims, resolved against [concurrency_limits] in
+    /// config.toml. A job's limits are claimed by every one of its tasks.
+    #[serde(default)]
+    pub limits: Vec<String>,
     /// Seconds one attempt may run for. `None` is "not declared", which `CRUD::init`
     /// resolves against `[job_defaults]` in config.toml rather than a number written here.
     #[serde(default)]
@@ -85,6 +89,10 @@ pub struct JobYaml {
     /// resolved out of config at spawn and exists only in the command's environment.
     #[serde(default, deserialize_with = "deserialize_string_map")]
     pub secret_env: BTreeMap<String, String>,
+    /// Named concurrency limits this claims, resolved against [concurrency_limits] in
+    /// config.toml. A job's limits are claimed by every one of its tasks.
+    #[serde(default)]
+    pub limits: Vec<String>,
     /// Who to tell when a run of this job fails or times out. Naming a recipient of a
     /// channel config.toml does not configure is a startup error — see
     /// `CRUD::validate_job_notifications`.
@@ -367,5 +375,42 @@ tasks:
         let task = &job.tasks[0];
         assert_eq!(task.env.get("DB_PASSWORD").unwrap(), "plain");
         assert_eq!(task.secret_env.get("API_TOKEN").unwrap(), "ingest_api_token");
+    }
+
+    /// A job may name limits at both levels - the job's own claim and each task's own,
+    /// which are separate lists rather than one merged at parse time. No validation here:
+    /// a name config.toml has never heard of still parses fine, since checking that is a
+    /// later concern, not this parser's.
+    #[test]
+    fn limits_are_parsed_at_both_levels() {
+        let job = parse("
+id: nightly-sync
+name: Nightly Sync
+limits: [warehouse]
+tasks:
+  - id: ingest
+    command: ./run.sh
+    limits: [warehouse, api]
+").unwrap();
+
+        assert_eq!(job.limits, vec!["warehouse".to_string()]);
+        assert_eq!(job.tasks[0].limits, vec!["warehouse".to_string(), "api".to_string()]);
+    }
+
+    /// A job naming no limits at all still parses, claiming nothing at either level -
+    /// `[]` rather than an absent field, so nothing downstream has to treat "not declared"
+    /// as a distinct state from "declared empty".
+    #[test]
+    fn limits_default_to_empty_at_both_levels_when_not_declared() {
+        let job = parse("
+id: nightly-sync
+name: Nightly Sync
+tasks:
+  - id: ingest
+    command: ./run.sh
+").unwrap();
+
+        assert!(job.limits.is_empty());
+        assert!(job.tasks[0].limits.is_empty());
     }
 }

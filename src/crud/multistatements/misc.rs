@@ -1033,6 +1033,7 @@ mod tests {
             description: String::new(),
             command: "true".to_string(),
             depends_on: sqlx::types::Json(Vec::new()),
+            limits: sqlx::types::Json(Vec::new()),
             timeout: 60,
             max_retries: 0,
             retry_delay: 60,
@@ -1055,6 +1056,7 @@ mod tests {
             secret_env: sqlx::types::Json(secret_env),
             on_failure_recipients: sqlx::types::Json(BTreeMap::new()),
             on_success_recipients: sqlx::types::Json(BTreeMap::new()),
+            limits: sqlx::types::Json(Vec::new()),
         }
     }
 

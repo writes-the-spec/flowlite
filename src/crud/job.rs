@@ -16,6 +16,7 @@ pub struct InsertJobDataInput {
     pub secret_env: BTreeMap<String, String>,
     pub on_failure_recipients: BTreeMap<NotificationChannel, Vec<String>>,
     pub on_success_recipients: BTreeMap<NotificationChannel, Vec<String>>,
+    pub limits: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,6 +59,9 @@ pub struct Job {
     pub on_failure_recipients: sqlx::types::Json<BTreeMap<NotificationChannel, Vec<String>>>,
     /// The same, for a run that succeeds.
     pub on_success_recipients: sqlx::types::Json<BTreeMap<NotificationChannel, Vec<String>>>,
+    /// Named concurrency limits this job claims, on top of whatever each of its tasks
+    /// claims for itself. See `JobYaml::limits`.
+    pub limits: sqlx::types::Json<Vec<String>>,
 }
 
 
@@ -67,7 +71,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         sqlx::query(
-            "INSERT INTO mem.job (row_id, job_id, name, description, max_parallel_runs, parameters, env, secret_env, on_failure_recipients, on_success_recipients) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO mem.job (row_id, job_id, name, description, max_parallel_runs, parameters, env, secret_env, on_failure_recipients, on_success_recipients, limits) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(data.input.row_id as i64)
         .bind(&data.input.job_id)
@@ -79,6 +83,7 @@ impl CRUD {
         .bind(sqlx::types::Json(&data.input.secret_env))
         .bind(sqlx::types::Json(&data.input.on_failure_recipients))
         .bind(sqlx::types::Json(&data.input.on_success_recipients))
+        .bind(sqlx::types::Json(&data.input.limits))
         .execute(executor)
         .await?;
 
@@ -89,7 +94,7 @@ impl CRUD {
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
-        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT job_id, name, description, max_parallel_runs, parameters, env, secret_env, on_failure_recipients, on_success_recipients FROM mem.job WHERE 1=1");
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT job_id, name, description, max_parallel_runs, parameters, env, secret_env, on_failure_recipients, on_success_recipients, limits FROM mem.job WHERE 1=1");
 
         if let Some(job_id) = &data.filter.job_id {
             query_builder.push(" AND job_id = ");

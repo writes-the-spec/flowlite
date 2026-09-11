@@ -104,6 +104,7 @@ impl CRUD {
                             secret_env: job_yaml.secret_env.clone(),
                             on_failure_recipients: job_notify_recipients(&job_yaml.on_failure),
                             on_success_recipients: job_notify_recipients(&job_yaml.on_success),
+                            limits: job_yaml.limits.clone(),
                         }
                     })
                         .await
@@ -123,6 +124,7 @@ impl CRUD {
                                 description: task_yaml.description,
                                 command: task_yaml.command,
                                 depends_on: task_yaml.depends_on.clone(),
+                                limits: task_yaml.limits.clone(),
                                 timeout: task_yaml.timeout
                                     .unwrap_or(job_defaults.timeout_seconds),
                                 max_retries: task_yaml.max_retries
@@ -623,5 +625,130 @@ mod tests {
             serde_json::from_str(&json).unwrap();
 
         assert_eq!(read_back, recipients);
+    }
+
+    /// A private `mem` schema, migrated onto its own uniquely-named in-memory database
+    /// rather than the shared-cache `flowlite_mem` name `TestDb` leaves unmigrated on
+    /// purpose (see its doc comment) - every test in this binary would otherwise share that
+    /// one name, racing each other's schema and rows. Two connections is what migrating one
+    /// actually takes: `mem_conn` connects directly to the private database, so the
+    /// migrator builds its tables as *that connection's* main schema, and the returned
+    /// connection attaches the same database under the `mem` alias `CRUD::init`'s queries
+    /// expect - mirroring `Toolkit::get_memory_conn` and `Toolkit::get_conn_pool` exactly,
+    /// just under a name nothing else in the suite can collide with. `mem_conn` is only
+    /// ever kept alive: a `mode=memory` database is dropped the instant nothing has it open.
+    async fn crud_with_private_mem(data_dir: &std::path::Path) -> (CRUD, sqlx::SqliteConnection, sqlx::SqliteConnection) {
+        use sqlx::Connection;
+
+        let mem_uri = format!("file:flowlite-mem-test-{}?mode=memory&cache=shared", uuid::Uuid::new_v4());
+
+        let mut mem_conn = sqlx::SqliteConnection::connect(&mem_uri).await.unwrap();
+        sqlx::migrate!("./db/schemas/memory/migrations").run(&mut mem_conn).await.unwrap();
+
+        let mut main_conn = sqlx::SqliteConnection::connect("sqlite::memory:").await.unwrap();
+        // The uri is generated here, not attacker input, so this mirrors the
+        // AssertSqlSafe uses inside sqlx itself for its own dynamic SAVEPOINT names.
+        sqlx::query(sqlx::AssertSqlSafe(format!("ATTACH DATABASE '{}' AS mem", mem_uri)))
+            .execute(&mut main_conn)
+            .await
+            .unwrap();
+
+        let crud = CRUD::new(Arc::new(Toolkit::new(AppConfig {
+            data_dir: data_dir.to_string_lossy().into_owned(),
+            ..AppConfig::default()
+        })));
+
+        (crud, main_conn, mem_conn)
+    }
+
+    fn write_job_yaml(data_dir: &std::path::Path, file_name: &str, content: &str) {
+        std::fs::create_dir_all(data_dir.join("jobs")).unwrap();
+        std::fs::write(data_dir.join("jobs").join(file_name), content).unwrap();
+    }
+
+    /// `limits:` at both levels seeds two independent claims - the job's own and the
+    /// task's own - onto their respective rows, unmerged: combining a job's claim with its
+    /// tasks' is enforcement's job, in a later task, not `CRUD::init`'s.
+    #[tokio::test]
+    async fn a_job_naming_limits_at_both_levels_seeds_them_onto_the_job_and_task_rows() {
+        use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
+        use crate::crud::task::{SelectTasksData, SelectTasksDataFilter};
+
+        let data_dir = std::env::temp_dir().join(format!("flowlite-limits-seed-{}", uuid::Uuid::new_v4()));
+        write_job_yaml(&data_dir, "nightly.yaml", "
+id: nightly-sync
+name: Nightly Sync
+limits: [warehouse]
+tasks:
+  - id: ingest
+    command: ./run.sh
+    limits: [warehouse, api]
+");
+
+        let (crud, mut main_conn, _mem_conn) = crud_with_private_mem(&data_dir).await;
+
+        crud.init(&mut main_conn).await.unwrap();
+
+        let job = crud.select_job(&mut main_conn, &SelectJobsData {
+            filter: SelectJobsDataFilter { job_id: Some("nightly-sync".to_string()), name_like: None },
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap().unwrap();
+
+        assert_eq!(job.limits.0, vec!["warehouse".to_string()]);
+
+        let task = crud.select_task(&mut main_conn, &SelectTasksData {
+            filter: SelectTasksDataFilter { task_id: Some("ingest".to_string()), job_id: Some("nightly-sync".to_string()) },
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap().unwrap();
+
+        assert_eq!(task.limits.0, vec!["warehouse".to_string(), "api".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    /// A job naming no limits at either level still seeds fine, storing `[]` rather than
+    /// failing or leaving the column unset - "claims nothing" is an ordinary value, not a
+    /// distinct unknown state.
+    #[tokio::test]
+    async fn a_job_naming_no_limits_seeds_an_empty_claim_at_both_levels() {
+        use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
+        use crate::crud::task::{SelectTasksData, SelectTasksDataFilter};
+
+        let data_dir = std::env::temp_dir().join(format!("flowlite-limits-seed-{}", uuid::Uuid::new_v4()));
+        write_job_yaml(&data_dir, "nightly.yaml", "
+id: nightly-sync
+name: Nightly Sync
+tasks:
+  - id: ingest
+    command: ./run.sh
+");
+
+        let (crud, mut main_conn, _mem_conn) = crud_with_private_mem(&data_dir).await;
+
+        crud.init(&mut main_conn).await.unwrap();
+
+        let job = crud.select_job(&mut main_conn, &SelectJobsData {
+            filter: SelectJobsDataFilter { job_id: Some("nightly-sync".to_string()), name_like: None },
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap().unwrap();
+
+        assert!(job.limits.0.is_empty());
+
+        let task = crud.select_task(&mut main_conn, &SelectTasksData {
+            filter: SelectTasksDataFilter { task_id: Some("ingest".to_string()), job_id: Some("nightly-sync".to_string()) },
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap().unwrap();
+
+        assert!(task.limits.0.is_empty());
+
+        let _ = std::fs::remove_dir_all(&data_dir);
     }
 }
