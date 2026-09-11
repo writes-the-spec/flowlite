@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use axum::response::{Html, IntoResponse};
 use askama::Template;
 use axum::Extension;
@@ -10,6 +11,7 @@ use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter, SelectJobsData
 use crate::crud::job_run::JobRunStatus;
 use crate::router::app::app_state::AppState;
 use crate::router::app::format;
+use crate::router::app::limits;
 
 pub const ALL_STATUSES: [JobRunStatus; 8] = JobRunStatus::ALL;
 
@@ -85,6 +87,28 @@ pub struct StatusChip {
     pub selected: bool,
 }
 
+/// The shape the panel template renders. `full` is decided once here (via
+/// `limits::is_full`) rather than as a `>=` comparison in the template, the same reason
+/// `JobRunDisplay` in the run table precomputes `span_pct` and `status_word` instead of
+/// leaving arithmetic to Askama.
+pub struct LimitPanelRow {
+    pub name: String,
+    pub in_use: u32,
+    pub max: u32,
+    pub full: bool,
+}
+
+fn limit_panel_rows(rows: Vec<limits::LimitRow>) -> Vec<LimitPanelRow> {
+    rows.iter()
+        .map(|row| LimitPanelRow {
+            name: row.name.clone(),
+            in_use: row.in_use,
+            max: row.max,
+            full: limits::is_full(row),
+        })
+        .collect()
+}
+
 #[derive(Template)]
 #[template(path = "routes/home/route.html")]
 struct HomeRouteTemplate {
@@ -96,6 +120,7 @@ struct HomeRouteTemplate {
     selected_job_id: Option<String>,
     selected_status: Option<JobRunStatus>,
     status_chips: Vec<StatusChip>,
+    limit_rows: Vec<LimitPanelRow>,
 }
 
 pub async fn home_route(
@@ -142,6 +167,24 @@ pub async fn home_route(
         filter_suffix(filter_job_id.as_deref(), query.filter_status),
     );
 
+    // A data directory whose database briefly can't be reached shouldn't blank the whole
+    // home page - the panel just reads as nothing running, the same defensiveness
+    // `select_jobs` above already uses.
+    let (running_attempts, claimed_limit_slots) = match state.conn_pool.acquire().await {
+        Ok(mut conn) => (
+            crud.count_running_attempts(&mut conn).await.unwrap_or_default(),
+            crud.claimed_limit_slots(&mut conn).await.unwrap_or_default(),
+        ),
+        Err(_) => (0, BTreeMap::new()),
+    };
+
+    let limit_rows = limit_panel_rows(limits::limit_rows(
+        app_config.orchestrator.max_running_attempts,
+        running_attempts,
+        &app_config.concurrency_limits,
+        &claimed_limit_slots,
+    ));
+
     let template = HomeRouteTemplate {
         current_route: "home",
         page_size,
@@ -151,6 +194,7 @@ pub async fn home_route(
         selected_job_id: filter_job_id,
         selected_status: query.filter_status,
         status_chips,
+        limit_rows,
     };
 
     match template.render() {
@@ -159,5 +203,46 @@ pub async fn home_route(
             eprintln!("Template rendering error: {}", err);
             Html("Error rendering template".to_string()).into_response()
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The boundary a prior review caught explained backwards: `0` is "no ceiling", so a
+    /// row configured that way must never render `full`, no matter how much is in use.
+    #[test]
+    fn a_zero_max_row_never_renders_full() {
+        let rows = limit_panel_rows(vec![limits::LimitRow {
+            name: "disabled".to_string(),
+            in_use: 9,
+            max: 0,
+        }]);
+
+        assert!(!rows[0].full);
+        assert_eq!(rows[0].max, 0);
+    }
+
+    #[test]
+    fn a_row_at_its_non_zero_max_renders_full() {
+        let rows = limit_panel_rows(vec![limits::LimitRow {
+            name: "warehouse".to_string(),
+            in_use: 3,
+            max: 3,
+        }]);
+
+        assert!(rows[0].full);
+    }
+
+    #[test]
+    fn a_row_below_its_non_zero_max_does_not_render_full() {
+        let rows = limit_panel_rows(vec![limits::LimitRow {
+            name: "openai_api".to_string(),
+            in_use: 4,
+            max: 5,
+        }]);
+
+        assert!(!rows[0].full);
     }
 }

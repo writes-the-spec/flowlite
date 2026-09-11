@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
 use clap::Args;
 use crate::crud::CRUD;
+use crate::router::app::limits;
 use crate::toolkit::Toolkit;
 
 
@@ -28,7 +28,7 @@ impl LimitsCmd {
         let running_attempts = crud.count_running_attempts(&mut conn).await?;
         let claimed_limit_slots = crud.claimed_limit_slots(&mut conn).await?;
 
-        let rows = limit_rows(
+        let rows = limits::limit_rows(
             max_running_attempts,
             running_attempts,
             &concurrency_limits,
@@ -46,53 +46,12 @@ impl LimitsCmd {
 }
 
 
-/// One row of the answer: a name, how many running attempts currently claim it, and how
-/// many it allows. `global` is a row of this same shape - reserving that key at load time
-/// (`AppConfig::load` rejects it in `[concurrency_limits]`) is what buys the uniform
-/// rendering below rather than a special case for the cap.
-pub struct LimitRow {
-    pub name: String,
-    pub in_use: u32,
-    pub max: u32,
-}
-
-
-/// The global cap first, then the named limits in `BTreeMap` order (alphabetical) - the
-/// plan's "config order" isn't achievable since `concurrency_limits` is a `BTreeMap` and
-/// does not retain TOML insertion order, so alphabetical is the deterministic stand-in.
-/// A name nothing running claims is absent from `claimed_limit_slots`, so it reads as 0
-/// here rather than needing its own case.
-pub fn limit_rows(
-    max_running_attempts: u32,
-    running_attempts: u32,
-    concurrency_limits: &BTreeMap<String, u32>,
-    claimed_limit_slots: &BTreeMap<String, u32>,
-) -> Vec<LimitRow> {
-
-    let mut rows = vec![LimitRow {
-        name: "global".to_string(),
-        in_use: running_attempts,
-        max: max_running_attempts,
-    }];
-
-    for (name, max) in concurrency_limits {
-        rows.push(LimitRow {
-            name: name.clone(),
-            in_use: claimed_limit_slots.get(name).copied().unwrap_or(0),
-            max: *max,
-        });
-    }
-
-    rows
-}
-
-
 /// A limit configured `0` never reaches `FULL` and prints its max as `-`: throughout this
 /// codebase `0` means no ceiling at all - the dispatcher skips the check entirely for it
 /// (`max_running_attempts > 0` and `configured_max == 0` in
 /// `task_run_attempt_dispatcher.rs`) - so there is no maximum for anything to be full
 /// against.
-pub fn limits_table(rows: &[LimitRow]) -> String {
+pub fn limits_table(rows: &[limits::LimitRow]) -> String {
 
     let mut lines = vec![format!("{:<12} {:>6} {:>4}", "NAME", "IN USE", "MAX")];
 
@@ -102,7 +61,7 @@ pub fn limits_table(rows: &[LimitRow]) -> String {
 
         let mut line = format!("{:<12} {:>6} {:>4}", row.name, row.in_use, max_display);
 
-        if row.max != 0 && row.in_use >= row.max {
+        if limits::is_full(row) {
             line.push_str("  FULL");
         }
 
@@ -116,7 +75,7 @@ pub fn limits_table(rows: &[LimitRow]) -> String {
 /// No envelope, matching the rule the `--json` cut established: a redirected file holds
 /// rows or nothing, never a wrapper a script has to unwrap first. `max` stays the
 /// configured `0` here - the dash is a human rendering only.
-pub fn limits_json(rows: &[LimitRow]) -> serde_json::Value {
+pub fn limits_json(rows: &[limits::LimitRow]) -> serde_json::Value {
     serde_json::Value::Array(
         rows.iter()
             .map(|row| serde_json::json!({
@@ -131,6 +90,8 @@ pub fn limits_json(rows: &[LimitRow]) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use crate::router::app::limits::{LimitRow, limit_rows};
     use super::*;
 
     #[test]
