@@ -10,6 +10,7 @@ CREATE TABLE task_run (
     retry_delay INTEGER NOT NULL,
     env TEXT NOT NULL,
     working_dir TEXT NOT NULL,
+    limits TEXT NOT NULL,
     created_at DATETIME NOT NULL,
     started_at DATETIME,
     finished_at DATETIME,

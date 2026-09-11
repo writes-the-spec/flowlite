@@ -27,6 +27,7 @@ CREATE TABLE task_run_new (
     env TEXT NOT NULL,
     secret_env TEXT NOT NULL,
     working_dir TEXT NOT NULL,
+    limits TEXT NOT NULL,
     created_at DATETIME NOT NULL,
     started_at DATETIME,
     finished_at DATETIME,
@@ -36,11 +37,11 @@ CREATE TABLE task_run_new (
 
 INSERT INTO task_run_new (
     id, job_run_id, job_id, task_id, command, depends_on, timeout, max_retries, retry_delay,
-    env, secret_env, working_dir, created_at, started_at, finished_at, status
+    env, secret_env, working_dir, limits, created_at, started_at, finished_at, status
 )
 SELECT
     id, job_run_id, job_id, task_id, command, depends_on, timeout, max_retries, retry_delay,
-    env, '{}', working_dir, created_at, started_at, finished_at, status
+    env, '{}', working_dir, limits, created_at, started_at, finished_at, status
 FROM task_run;
 
 DROP TABLE task_run;
