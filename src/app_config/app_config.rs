@@ -46,6 +46,14 @@ pub struct AppConfig {
     /// every credential at once by accident.
     #[serde(default, skip_serializing)]
     pub secrets: BTreeMap<String, String>,
+    /// Named concurrency caps a job's `concurrency:` names, by name. Filled the same way
+    /// `secrets` is, from `[concurrency_limits]` in config.toml or from
+    /// `FLOWLITE_CONCURRENCY_LIMITS__*`.
+    ///
+    /// Unlike `secrets` there is nothing to hide here, so it stays in `Debug` and
+    /// `Serialize` unlike that field - a wrong limit should be visible, not redacted.
+    #[serde(default)]
+    pub concurrency_limits: BTreeMap<String, u32>,
 }
 
 /// Manual rather than derived, for the reason `secrets` is not serialized: a single
@@ -68,6 +76,7 @@ impl std::fmt::Debug for AppConfig {
             .field("smtp", &self.smtp)
             .field("slack", &self.slack)
             .field("secrets", &RedactedSecrets(&self.secrets))
+            .field("concurrency_limits", &self.concurrency_limits)
             .finish()
     }
 }
@@ -95,6 +104,7 @@ impl Default for AppConfig {
             smtp: None,
             slack: None,
             secrets: BTreeMap::new(),
+            concurrency_limits: BTreeMap::new(),
         }
     }
 }
@@ -117,6 +127,18 @@ impl AppConfig {
             // a file inside it.
             .merge(Serialized::default("data_dir", data_dir_fin.to_string_lossy()))
             .extract()?;
+
+        // Checked here rather than by serde, so the key is caught whether it came from the
+        // file or from FLOWLITE_CONCURRENCY_LIMITS__GLOBAL - both land in the same map by
+        // the time this runs. `flowlite limits` prints its own global cap under this name,
+        // and a job-named limit sharing it would make that row ambiguous.
+        if app_config.concurrency_limits.contains_key("global") {
+            anyhow::bail!(
+                "config.toml has a concurrency limit named 'global', which is reserved \
+                 for the combined cap row 'flowlite limits' prints across every job. Name \
+                 the limit something else."
+            );
+        }
 
         Ok(app_config)
     }
@@ -397,6 +419,88 @@ mod tests {
         let config = AppConfig::load(Some(dir)).unwrap();
 
         assert!(config.secrets.is_empty());
+    }
+
+    #[test]
+    fn a_concurrency_limits_section_is_read_as_a_map() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+        std::fs::write(
+            dir.join("config.toml"),
+            "[concurrency_limits]\nwarehouse = 3\n",
+        ).unwrap();
+
+        let config = AppConfig::load(Some(dir)).unwrap();
+
+        assert_eq!(config.concurrency_limits.get("warehouse"), Some(&3));
+    }
+
+    #[test]
+    fn the_environment_wins_over_a_concurrency_limits_section() {
+        let _environment = writing_the_environment();
+
+        let dir = temp_dir();
+        std::fs::write(
+            dir.join("config.toml"),
+            "[concurrency_limits]\nwarehouse = 3\n",
+        ).unwrap();
+
+        // SAFETY: the environment is process-wide, and the write guard above is what makes
+        // this the only thread reading it until the variable is gone again.
+        unsafe { std::env::set_var("FLOWLITE_CONCURRENCY_LIMITS__WAREHOUSE", "5") };
+
+        let config = AppConfig::load(Some(dir));
+
+        unsafe { std::env::remove_var("FLOWLITE_CONCURRENCY_LIMITS__WAREHOUSE") };
+
+        // Asserted after the removal, so a load that fails cannot leave the variable set
+        // for whatever runs next.
+        let config = config.unwrap();
+        assert_eq!(config.concurrency_limits.get("warehouse"), Some(&5));
+    }
+
+    #[test]
+    fn a_directory_with_no_config_file_has_no_concurrency_limits() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+
+        let config = AppConfig::load(Some(dir)).unwrap();
+
+        assert!(config.concurrency_limits.is_empty());
+    }
+
+    /// `global` names the cap row `flowlite limits` prints for every job combined, so a
+    /// job-named limit can never shadow it.
+    #[test]
+    fn a_concurrency_limit_named_global_is_a_load_error() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+        std::fs::write(
+            dir.join("config.toml"),
+            "[concurrency_limits]\nglobal = 3\n",
+        ).unwrap();
+
+        let error = AppConfig::load(Some(dir)).unwrap_err();
+
+        assert!(error.to_string().contains("global"), "{error}");
+    }
+
+    /// Unlike `secrets`, a limit has nothing to hide: printing it is the point when one is
+    /// set wrong.
+    #[test]
+    fn a_debug_print_shows_a_concurrency_limits_name_and_its_value() {
+        let config = AppConfig {
+            concurrency_limits: BTreeMap::from([("warehouse".to_string(), 3)]),
+            ..AppConfig::default()
+        };
+
+        let printed = format!("{config:?}");
+
+        assert!(printed.contains("warehouse"), "{printed}");
+        assert!(printed.contains('3'), "{printed}");
     }
 
     /// The struct that holds every credential is one `eprintln!("{app_config:?}")` away
