@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand};
 use crate::serve_state::{status, ServeStatus};
 use crate::toolkit::Toolkit;
@@ -6,6 +6,7 @@ use crate::crud::CRUD;
 use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::router::app::format;
+use crate::yaml_models::job_yaml::JobYaml;
 
 #[derive(Args)]
 pub struct JobCmd {
@@ -28,10 +29,19 @@ pub enum JobSubcommand {
 pub struct JobListCmd {
 }
 
-/// Submit a run of a job.
+/// Submit a run of a job: one installed in the data directory, by id, or a definition read
+/// from a file that is never installed there at all.
 #[derive(Args)]
+#[command(group(
+    clap::ArgGroup::new("definition").required(true).args(["job_name", "file"]),
+))]
 pub struct JobSubmitCmd {
-    pub job_name: String,
+    pub job_name: Option<String>,
+
+    /// Submit the job defined by this file rather than one installed in the data
+    /// directory. The file is read where it is and never copied there.
+    #[arg(short = 'f', long, value_name = "FILE")]
+    pub file: Option<PathBuf>,
 
     /// A parameter for this run, as name=value. Repeat for more than one.
     #[arg(long = "param", value_name = "NAME=VALUE", value_parser = parse_param)]
@@ -106,20 +116,13 @@ impl JobSubmitCmd {
         let mut conn = toolkit.get_conn().await?;
         let crud = CRUD::new(std::sync::Arc::new(toolkit));
 
-        crud.init(&mut conn).await?;
+        let row_id = crud.init(&mut conn).await?;
 
-        let job = crud.select_job(&mut conn, &SelectJobsData {
-            filter: SelectJobsDataFilter {
-                job_id: Some(self.job_name.clone()),
-                name_like: None,
-            },
-            sort: None,
-            limit: None,
-            offset: None,
-        }).await?;
-
-        let Some(job) = job else {
-            anyhow::bail!("Job {} not found", self.job_name);
+        let job_id = match (&self.job_name, &self.file) {
+            (Some(job_name), None) => installed_job_id(&crud, &mut conn, job_name).await?,
+            (None, Some(file)) => seed_job_file(&crud, &mut conn, file, row_id).await?,
+            // clap's `definition` group requires exactly one of the two.
+            _ => anyhow::bail!("Name a job to submit, or pass -f to submit a file"),
         };
 
         let overrides: std::collections::BTreeMap<String, String> =
@@ -127,7 +130,7 @@ impl JobSubmitCmd {
 
         let job_run_id = crud.submit_job(
             &mut conn,
-            &job.job_id,
+            &job_id,
             &overrides,
             None,
         ).await?;
@@ -151,7 +154,7 @@ impl JobSubmitCmd {
         if json {
             println!("{}", serde_json::to_string_pretty(&job_run)?);
         } else if !self.wait {
-            println!("Job {} submitted successfully. Job Run ID: {}", self.job_name, job_run.id);
+            println!("Job {} submitted successfully. Job Run ID: {}", job_id, job_run.id);
         } else if outcome_error.is_none() {
             println!("Job run {} {}", job_run.id, format::job_run_word(job_run.status));
         }
@@ -162,6 +165,85 @@ impl JobSubmitCmd {
 
         Ok(())
     }
+}
+
+/// The id of an installed job, or an error naming the one nothing matched.
+async fn installed_job_id(
+    crud: &CRUD,
+    conn: &mut sqlx::SqliteConnection,
+    job_name: &str,
+) -> anyhow::Result<String> {
+
+    let job = crud.select_job(&mut *conn, &SelectJobsData {
+        filter: SelectJobsDataFilter {
+            job_id: Some(job_name.to_string()),
+            name_like: None,
+        },
+        sort: None,
+        limit: None,
+        offset: None,
+    }).await?;
+
+    match job {
+        Some(job) => Ok(job.job_id),
+        None => anyhow::bail!("Job {} not found", job_name),
+    }
+}
+
+/// Seeds a job file that is not installed in the data directory, so its run is built from
+/// the same rows every other run is built from.
+///
+/// The seeded job lives only in this process: `mem` is a shared-cache in-memory database,
+/// which SQLite scopes to the process that opened it, and it is gone when this command
+/// exits. `serve` and the dashboard never see it - only the run it produced, which carries
+/// its own definition and so needs nothing to look back at.
+///
+/// The collision check comes first, before anything is written. `job_id` is `mem.job`'s
+/// primary key, so seeding over an installed job would fail on the key rather than say
+/// anything useful, and that id is what every filter, link and rerun resolves through
+/// afterwards.
+async fn seed_job_file(
+    crud: &CRUD,
+    conn: &mut sqlx::SqliteConnection,
+    file: &Path,
+    row_id: u64,
+) -> anyhow::Result<String> {
+
+    let job_yaml = JobYaml::from_yaml(file)?;
+    let job_id = job_yaml.id.clone();
+
+    let installed = crud.select_job(&mut *conn, &SelectJobsData {
+        filter: SelectJobsDataFilter {
+            job_id: Some(job_id.clone()),
+            name_like: None,
+        },
+        sort: None,
+        limit: Some(1),
+        offset: None,
+    }).await?;
+
+    if installed.is_some() {
+        anyhow::bail!(
+            "'{}' is already a job in {}. Drop -f to submit it: flowlite job submit {}",
+            job_id,
+            Path::new(&crud.toolkit.app_config.data_dir).join("jobs").display(),
+            job_id,
+        );
+    }
+
+    crud.seed_job(&mut *conn, job_yaml, file, row_id).await?;
+
+    // Held to the same rule an installed job is held to at `serve` startup, because this
+    // is the command that will make those secrets reach a spawned process. Scoped to this
+    // job: `mem` holds the whole data directory by now, and an installed job's unsatisfied
+    // secret is not this submit's problem.
+    crud.check_secret_env_is_satisfied(
+        &mut *conn,
+        &crud.toolkit.app_config.secrets,
+        Some(&job_id),
+    ).await?;
+
+    Ok(job_id)
 }
 
 /// The run, or an error naming the id nothing matched.
@@ -443,5 +525,61 @@ mod tests {
         ).await.unwrap_err().to_string();
 
         assert!(error.contains("404"), "{error}");
+    }
+
+    /// Parsed through the real root command rather than `JobSubmitCmd` alone, because the
+    /// exclusivity being asserted is clap's, declared on the struct, not the command's own.
+    fn submit_from(args: &[&str]) -> Result<JobSubmitCmd, clap::Error> {
+
+        let cli = <crate::cli::cli::Cli as clap::Parser>::try_parse_from(args)?;
+
+        match cli.command {
+            crate::cli::cli::Command::Job(job) => match job.command {
+                JobSubcommand::Submit(cmd) => Ok(cmd),
+                _ => panic!("parsed as some other job subcommand"),
+            },
+            _ => panic!("parsed as some other command"),
+        }
+    }
+
+    #[test]
+    fn a_job_name_alone_submits_an_installed_job() {
+
+        let cmd = submit_from(&["flowlite", "job", "submit", "etl"]).unwrap();
+
+        assert_eq!(cmd.job_name.as_deref(), Some("etl"));
+        assert_eq!(cmd.file, None);
+    }
+
+    #[test]
+    fn a_file_alone_submits_a_definition_that_is_not_installed() {
+
+        let cmd = submit_from(&["flowlite", "job", "submit", "-f", "pipeline.yaml"]).unwrap();
+
+        assert_eq!(cmd.file.as_deref(), Some(Path::new("pipeline.yaml")));
+        assert_eq!(cmd.job_name, None);
+    }
+
+    /// The two name the same thing two ways, so there is no reading of both at once that
+    /// is not a mistake.
+    #[test]
+    fn a_name_and_a_file_together_are_refused() {
+        assert!(submit_from(&["flowlite", "job", "submit", "etl", "-f", "etl.yaml"]).is_err());
+    }
+
+    #[test]
+    fn neither_a_name_nor_a_file_is_refused() {
+        assert!(submit_from(&["flowlite", "job", "submit"]).is_err());
+    }
+
+    #[test]
+    fn a_file_submit_still_takes_params_and_wait() {
+
+        let cmd = submit_from(
+            &["flowlite", "job", "submit", "-f", "p.yaml", "--param", "region=eu", "--wait"],
+        ).unwrap();
+
+        assert_eq!(cmd.params, vec![("region".to_string(), "eu".to_string())]);
+        assert!(cmd.wait);
     }
 }
