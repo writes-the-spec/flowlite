@@ -1,5 +1,6 @@
 pub mod app_config;
 pub mod cli;
+pub mod mcp;
 pub mod router;
 pub mod toolkit;
 pub mod crud;

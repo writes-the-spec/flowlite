@@ -6,6 +6,7 @@ use crate::cli::commands::job::JobCmd;
 use crate::cli::commands::job_run::JobRunCmd;
 use crate::cli::commands::status::StatusCmd;
 use crate::cli::commands::limits::LimitsCmd;
+use crate::cli::commands::mcp::McpCmd;
 use crate::toolkit::Toolkit;
 
 
@@ -30,6 +31,9 @@ pub enum Command {
     /// Why nothing is running: the global cap and every named limit, each with its
     /// current use and its maximum.
     Limits(LimitsCmd),
+    /// Speak the Model Context Protocol on stdin and stdout, so an agent can submit and
+    /// inspect runs in this data directory as tool calls.
+    Mcp(McpCmd),
 }
 
 
@@ -46,6 +50,7 @@ impl Cli {
             Command::JobRun(cmd) => cmd.run(toolkit).await?,
             Command::Status(cmd) => cmd.run(toolkit).await?,
             Command::Limits(cmd) => cmd.run(toolkit).await?,
+            Command::Mcp(cmd) => cmd.run(toolkit).await?,
         }
 
         Ok(())

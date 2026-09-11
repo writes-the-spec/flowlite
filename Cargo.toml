@@ -30,6 +30,11 @@ lettre = { version = "0.11.23", default-features = false, features = ["smtp-tran
 # already brings rather than also building aws-lc-rs and its C toolchain.
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json", "http2"] }
 rustls = { version = "0.23.44", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+# default-features = false drops `base64`, which nothing here encodes: the stdio server
+# needs `server` (the tool system, which pulls schemars), `macros` (tool schemas derived
+# from the argument structs) and `transport-io` (stdin/stdout). None of the HTTP or auth
+# features are on, so this adds no TLS provider and no HTTP client to the tree.
+rmcp = { version = "3.3.0", default-features = false, features = ["server", "macros", "transport-io"] }
 
 [dev-dependencies]
 tokio = { version = "1.52.3", features = ["test-util"] }
