@@ -5,7 +5,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::routing::post;
 use chrono::{DateTime, Utc};
-use crate::app_config::{AppConfig, AppConfigSlack};
+use crate::app_config::{AppConfig, AppConfigOrchestrator, AppConfigSlack};
 use crate::crud::CRUD;
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
@@ -193,6 +193,26 @@ impl TestDb {
             self.signals.clone(),
             AppConfig {
                 secrets,
+                ..self.app_config()
+            },
+        )
+    }
+
+    /// The same dispatcher, over a config carrying the given global cap on running
+    /// attempts - `app_config()` otherwise always answers the default, 32. Follows
+    /// `task_run_attempt_dispatcher_with_secrets`'s pattern: the one field a test needs is
+    /// overridden on top of the real config.
+    pub fn task_run_attempt_dispatcher_with_max_running_attempts(&self, max_running_attempts: u32) -> TaskRunAttemptDispatcher {
+        TaskRunAttemptDispatcher::new(
+            self.crud.clone(),
+            self.conn_pool.clone(),
+            self.children.clone(),
+            self.signals.clone(),
+            AppConfig {
+                orchestrator: AppConfigOrchestrator {
+                    max_running_attempts,
+                    ..self.app_config().orchestrator
+                },
                 ..self.app_config()
             },
         )

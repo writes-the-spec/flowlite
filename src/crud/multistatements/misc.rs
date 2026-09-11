@@ -8,6 +8,7 @@ use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRunStatus
 use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotificationStatus, NotificationChannel, NotifyOn, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
 use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort, Task};
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRunStatus};
+use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, TaskRunAttemptStatus};
 
 
 /// A job's definition, as one job run will execute it. `submit_job` builds it from the
@@ -556,6 +557,25 @@ impl CRUD {
         }).await?;
 
         Ok(running_job_runs.len() >= job.max_parallel_runs as usize)
+    }
+
+    /// How many task run attempts are Running right now, across every job - what
+    /// `settle_as_pending`'s global cap counts against. Running is the only status that
+    /// holds a slot, the same way `is_job_at_max_parallel_runs` counts only running job
+    /// runs.
+    pub async fn count_running_attempts(&self, conn: &mut SqliteConnection) -> anyhow::Result<u32> {
+
+        let running_attempts = self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
+            filter: SelectTaskRunAttemptsDataFilter {
+                task_run_id: None,
+                job_run_id: None,
+                task_id: None,
+                status: Some(TaskRunAttemptStatus::Running),
+            },
+            sort: None,
+        }).await?;
+
+        Ok(running_attempts.len() as u32)
     }
 
     /// Refuses when a job's or a task's `secret_env:` names a secret `secrets` does not

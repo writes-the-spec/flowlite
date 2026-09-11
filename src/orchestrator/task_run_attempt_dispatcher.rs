@@ -173,22 +173,35 @@ impl TaskRunAttemptDispatcher {
         Ok(true)
     }
 
-    /// Leaves the attempt pending while the retry_delay it was submitted with has yet to
-    /// pass since it was created — which is when TaskRunMonitor decided to retry.
+    /// Leaves the attempt pending for either of two reasons: its retry_delay has yet to
+    /// pass since it was created — which is when TaskRunMonitor decided to retry — or the
+    /// global cap on running attempts is already full.
     ///
-    /// Only a retry waits: attempt 1 has nothing to wait for, so it never reaches the task
-    /// run query below.
+    /// The delay is checked first: only a retry waits on it (attempt 1 has nothing to wait
+    /// for, so it never reaches the task run query below), and it costs no query at all
+    /// for the common case of a first attempt. The cap, once reached, applies to every
+    /// attempt regardless of retry state.
     async fn settle_as_pending(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
 
-        if task_run_attempt.attempt <= 1 {
+        if task_run_attempt.attempt > 1 {
+            let task_run = self.get_task_run(task_run_attempt).await?;
+
+            let retry_delay = TimeDelta::seconds(task_run.retry_delay as i64);
+
+            if Utc::now() < task_run_attempt.created_at + retry_delay {
+                return Ok(true);
+            }
+        }
+
+        if self.app_config.orchestrator.max_running_attempts == 0 {
             return Ok(false);
         }
 
-        let task_run = self.get_task_run(task_run_attempt).await?;
+        let mut conn = self.conn_pool.acquire().await?;
 
-        let retry_delay = TimeDelta::seconds(task_run.retry_delay as i64);
+        let running_attempts = self.crud.count_running_attempts(&mut conn).await?;
 
-        Ok(Utc::now() < task_run_attempt.created_at + retry_delay)
+        Ok(running_attempts >= self.app_config.orchestrator.max_running_attempts)
     }
 
     /// Spawns the command of the attempt, hands the child process over and sets the
@@ -599,6 +612,80 @@ mod tests {
         let status = settled_attempt_status(1, 0, false).await;
 
         assert_eq!(status, TaskRunAttemptStatus::Running);
+    }
+
+    /// Runs the chain over a pending attempt on its own task run while a second task
+    /// run's attempt already sits Running, and reports what the pending one settled as -
+    /// the global cap counts across every job, so the two task runs are unrelated on
+    /// purpose.
+    async fn settled_attempt_status_with_one_running(max_running_attempts: u32) -> TaskRunAttemptStatus {
+
+        let _environment = reading_the_environment();
+
+        let db = TestDb::new().await;
+
+        let running_job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let running_task_run = db.insert_retryable_task_run(running_job_run.id, 0, 0).await;
+        db.insert_task_run_attempt(&running_task_run, 1, TaskRunAttemptStatus::Running).await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_retryable_task_run(job_run.id, 0, 0).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+
+        db.task_run_attempt_dispatcher_with_max_running_attempts(max_running_attempts)
+            .handle(&task_run_attempt)
+            .await
+            .unwrap();
+
+        db.task_run_attempt(task_run_attempt.id).await.status
+    }
+
+    /// The gate this task adds: a cap of 1 is already spent by the other task run's
+    /// Running attempt, so this one is left pending rather than spawned.
+    #[tokio::test]
+    async fn a_pending_attempt_stays_pending_while_the_global_cap_is_full() {
+        let status = settled_attempt_status_with_one_running(1).await;
+
+        assert_eq!(status, TaskRunAttemptStatus::Pending);
+    }
+
+    /// 0 is "no limit" - the same Running attempt that fills a cap of 1 does not hold
+    /// this one back at all.
+    #[tokio::test]
+    async fn a_cap_of_zero_does_not_hold_attempts_back() {
+        let status = settled_attempt_status_with_one_running(0).await;
+
+        assert_eq!(status, TaskRunAttemptStatus::Running);
+    }
+
+    /// The retry-delay check does not regress now that a second reason keeps a row
+    /// pending: a retry still inside its delay stays pending even with no cap at all to
+    /// blame it on.
+    #[tokio::test]
+    async fn a_retry_inside_its_delay_stays_pending_even_with_no_cap() {
+
+        let _environment = reading_the_environment();
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_retryable_task_run(job_run.id, 2, 60).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            2,
+            TaskRunAttemptStatus::Pending,
+        ).await;
+
+        db.task_run_attempt_dispatcher_with_max_running_attempts(0)
+            .handle(&task_run_attempt)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Pending,
+        );
     }
 
     /// Follows a parameter, a task env value and an injected id all the way into the
