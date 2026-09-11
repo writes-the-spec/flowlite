@@ -499,8 +499,10 @@ mod tests {
 
         let printed = format!("{config:?}");
 
-        assert!(printed.contains("warehouse"), "{printed}");
-        assert!(printed.contains('3'), "{printed}");
+        // The name-value pair together, not `contains('3')` alone: several other defaults
+        // (timeout_seconds, refresh_interval_seconds, max_running_attempts...) already put
+        // a bare '3' in the output, so that alone would pass even if the value were hidden.
+        assert!(printed.contains("\"warehouse\": 3"), "{printed}");
     }
 
     /// The struct that holds every credential is one `eprintln!("{app_config:?}")` away
