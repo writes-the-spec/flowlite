@@ -36,13 +36,24 @@ impl LimitsCmd {
         );
 
         if self.json {
-            println!("{}", serde_json::to_string_pretty(&rows)?);
+            println!("{}", limits_json(&rows));
         } else {
             println!("{}", limits_table(&rows));
         }
 
         Ok(())
     }
+}
+
+
+/// One line rather than the pretty print the other `--json` branches use: the rows are few
+/// and short, so a script reading the whole answer with one `read` is worth more here than
+/// an indented block. `LimitRow`'s own shape is shared with the `list_limits` tool, which
+/// pretty-prints it the way every tool result is pretty-printed - the fields are what the
+/// two surfaces agree on, not the whitespace.
+pub fn limits_json(rows: &[limits::LimitRow]) -> String {
+    serde_json::to_string(rows)
+        .expect("LimitRow is a plain data struct, always representable as JSON")
 }
 
 
@@ -130,6 +141,16 @@ mod tests {
         assert!(!table.contains("FULL"), "{table}");
     }
 
+    /// One line, the way `status --json` prints: a script reading this with a single
+    /// `read` gets the whole answer, and the rows are few enough that pretty-printing buys
+    /// a person nothing here.
+    #[test]
+    fn the_json_is_one_compact_line() {
+        let json = limits_json(&sample_rows());
+
+        assert_eq!(json.lines().count(), 1, "{json}");
+    }
+
     /// The rows serialize as themselves - no envelope, and a `0` max stays the number it
     /// was configured as. The dash the table prints for it is a human rendering only.
     #[test]
@@ -139,7 +160,7 @@ mod tests {
             LimitRow { name: "disabled".to_string(), in_use: 0, max: 0 },
         ];
 
-        let json = serde_json::to_value(&rows).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&limits_json(&rows)).unwrap();
 
         assert!(json.is_array());
         assert_eq!(json[0]["name"], "global");
