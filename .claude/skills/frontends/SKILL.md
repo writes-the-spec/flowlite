@@ -5,7 +5,7 @@ description: The boundary between flowlite's three frontends - src/cli/, src/mcp
 
 # Frontend boundaries (src/cli/, src/mcp/, src/router/)
 
-flowlite has three frontends over one core: `src/cli/` (clap subcommands), `src/mcp/` (tools over JSON-RPC on stdin and stdout) and `src/router/` (the axum dashboard). They are three ways to ask the same questions of the same two SQLite files. `src/crud/` is the data-access layer underneath all three.
+flowlite has three frontends over one core: `src/cli/` (clap subcommands), `src/mcp/` (tools over JSON-RPC on stdin and stdout) and `src/router/` (the axum dashboard). They are three ways to ask the same questions of the same two SQLite files. `src/crud/` is the data-access layer underneath all three. Each has its own skill - `cli`, `mcp`, `router` - for how to add to it; this one is only about the boundary between them.
 
 **The rule: none of the three imports from another. Whatever two of them need lives in `src/shared/`.**
 
