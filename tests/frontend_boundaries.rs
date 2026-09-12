@@ -3,10 +3,13 @@
 //! See the `frontends` skill for what belongs there and what stays frontend-side.
 //!
 //! Here rather than inline because what it reads is the source tree rather than the crate,
-//! so it belongs to no module in particular. `skills.rs` and `templates.rs` are here for
-//! the same reason; the rest of this directory needs a real second process.
+//! so it belongs to no module in particular, and it is one of the four here that read the
+//! repository rather than run it - see `serve_lock.rs` for the split.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+mod common;
+use common::files_under;
 
 const FRONTENDS: [&str; 3] = ["cli", "mcp", "router"];
 
@@ -29,7 +32,7 @@ fn no_frontend_reaches_into_another() {
     let mut violations = Vec::new();
 
     for frontend in FRONTENDS {
-        for file in rust_files(&Path::new("src").join(frontend)) {
+        for file in files_under(&Path::new("src").join(frontend), "rs") {
             let path = file.to_string_lossy().to_string();
             let source = std::fs::read_to_string(&file).unwrap();
 
@@ -63,19 +66,3 @@ fn no_frontend_reaches_into_another() {
     );
 }
 
-fn rust_files(dir: &Path) -> Vec<PathBuf> {
-
-    let mut files = Vec::new();
-
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-
-        if path.is_dir() {
-            files.extend(rust_files(&path));
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            files.push(path);
-        }
-    }
-
-    files
-}

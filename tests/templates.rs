@@ -7,7 +7,10 @@
 //! `assets/`, and the page asks for what the markup says. A mistyped CSS custom property
 //! and a vendored file updated without its paperwork fail the same quiet way.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+mod common;
+use common::files_under;
 
 #[test]
 fn every_template_is_rendered_or_extended() {
@@ -90,23 +93,6 @@ fn read_dir_to_string(dir: &Path, extension: &str) -> String {
         .iter()
         .map(|f| std::fs::read_to_string(f).unwrap())
         .collect()
-}
-
-fn files_under(dir: &Path, extension: &str) -> Vec<PathBuf> {
-
-    let mut files = Vec::new();
-
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-
-        if path.is_dir() {
-            files.extend(files_under(&path, extension));
-        } else if path.extension().is_some_and(|found| found == extension) {
-            files.push(path);
-        }
-    }
-
-    files
 }
 
 /// An undefined custom property is not an error: the declaration using it is simply

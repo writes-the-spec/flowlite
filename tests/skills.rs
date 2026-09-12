@@ -13,12 +13,15 @@
 
 use std::path::{Path, PathBuf};
 
+mod common;
+use common::files_under;
+
 #[test]
 fn every_path_a_skill_links_to_exists() {
 
     let mut broken = Vec::new();
 
-    for document in markdown_files(Path::new(".claude/skills")) {
+    for document in files_under(Path::new(".claude/skills"), "md") {
         let source = std::fs::read_to_string(&document).unwrap();
         let directory = document.parent().unwrap();
 
@@ -58,23 +61,6 @@ fn link_targets(source: &str) -> Vec<&str> {
         .filter_map(|rest| rest.split_once(')'))
         .map(|(target, _)| target)
         .collect()
-}
-
-fn markdown_files(dir: &Path) -> Vec<PathBuf> {
-
-    let mut files = Vec::new();
-
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-
-        if path.is_dir() {
-            files.extend(markdown_files(&path));
-        } else if path.extension().is_some_and(|extension| extension == "md") {
-            files.push(path);
-        }
-    }
-
-    files
 }
 
 /// A skill is offered to the model by its `description`, and addressed by its `name`. A
@@ -144,7 +130,7 @@ fn no_comment_cites_a_line_number() {
 
     let mut citations = Vec::new();
 
-    for file in rust_files(Path::new("src")).into_iter().chain(rust_files(Path::new("tests"))) {
+    for file in files_under(Path::new("src"), "rs").into_iter().chain(files_under(Path::new("tests"), "rs")) {
         let source = std::fs::read_to_string(&file).unwrap();
 
         for (offset, line) in source.lines().enumerate() {
@@ -184,23 +170,6 @@ fn line_citation(line: &str) -> Option<&str> {
     })
 }
 
-fn rust_files(dir: &Path) -> Vec<PathBuf> {
-
-    let mut files = Vec::new();
-
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-
-        if path.is_dir() {
-            files.extend(rust_files(&path));
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            files.push(path);
-        }
-    }
-
-    files
-}
-
 /// The entities skill claims to map every table's columns, and a column added to a
 /// migration without a line in its reference file makes that map quietly wrong - the more
 /// dangerous kind of wrong, because the map is what a reader trusts instead of the DDL.
@@ -210,7 +179,7 @@ fn every_column_appears_in_its_entity_reference() {
 
     let mut undocumented = Vec::new();
 
-    for migration in rust_files_with_extension(Path::new("db"), "sql") {
+    for migration in files_under(Path::new("db"), "sql") {
         let name = migration.file_name().unwrap().to_string_lossy().to_string();
 
         let Some(table) = name.split_once("_create_").and_then(|(_, rest)| rest.strip_suffix("_table.sql")) else {
@@ -262,19 +231,3 @@ fn columns(sql: &str) -> Vec<String> {
         .collect()
 }
 
-fn rust_files_with_extension(dir: &Path, wanted: &str) -> Vec<PathBuf> {
-
-    let mut files = Vec::new();
-
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-
-        if path.is_dir() {
-            files.extend(rust_files_with_extension(&path, wanted));
-        } else if path.extension().is_some_and(|extension| extension == wanted) {
-            files.push(path);
-        }
-    }
-
-    files
-}

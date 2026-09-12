@@ -15,6 +15,26 @@ use std::time::{Duration, Instant};
 
 use flowlite::serve_state::{status, ServeStatus};
 
+/// Every file under `dir`, recursively, with the given extension. Used by the checks that
+/// read the repo rather than run it - the boundary, skill, template and README tests - each
+/// of which is its own binary and would otherwise carry its own copy of this.
+pub fn files_under(dir: &Path, extension: &str) -> Vec<std::path::PathBuf> {
+
+    let mut files = Vec::new();
+
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+
+        if path.is_dir() {
+            files.extend(files_under(&path, extension));
+        } else if path.extension().is_some_and(|found| found == extension) {
+            files.push(path);
+        }
+    }
+
+    files
+}
+
 /// The binary every integration test drives - `CARGO_BIN_EXE_flowlite`, which cargo sets
 /// for integration tests only, hence the `const` rather than reading it from `PATH`.
 pub const BINARY: &str = env!("CARGO_BIN_EXE_flowlite");

@@ -1,6 +1,15 @@
-//! The tests that need a real second process. Everything else in flowlite is an inline
-//! unit test; these live here because they run the built binary through
-//! `CARGO_BIN_EXE_flowlite`, which cargo sets for integration tests only.
+//! One server per data directory: what a second `serve` is told, and what a killed one
+//! leaves behind.
+//!
+//! Driven through the built binary via `CARGO_BIN_EXE_flowlite`, which cargo sets for
+//! integration tests only, because a lock held by a process can only be tested by a second
+//! process. `adhoc_submit`, `mcp_server` and `serve_secret_check` are here for that same
+//! reason; everything else in flowlite that can be a unit test is one, inline beside what
+//! it covers.
+//!
+//! The other files here start nothing at all - `frontend_boundaries`, `skills`,
+//! `templates` and `readme` read the repository rather than run it, and each says so in
+//! its own header.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
