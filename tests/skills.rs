@@ -200,3 +200,81 @@ fn rust_files(dir: &Path) -> Vec<PathBuf> {
 
     files
 }
+
+/// The entities skill claims to map every table's columns, and a column added to a
+/// migration without a line in its reference file makes that map quietly wrong - the more
+/// dangerous kind of wrong, because the map is what a reader trusts instead of the DDL.
+/// `task_run_attempt.process_group_id` was missing for exactly that reason.
+#[test]
+fn every_column_appears_in_its_entity_reference() {
+
+    let mut undocumented = Vec::new();
+
+    for migration in rust_files_with_extension(Path::new("db"), "sql") {
+        let name = migration.file_name().unwrap().to_string_lossy().to_string();
+
+        let Some(table) = name.split_once("_create_").and_then(|(_, rest)| rest.strip_suffix("_table.sql")) else {
+            continue;
+        };
+
+        let reference = PathBuf::from(".claude/skills/entities/references").join(format!("{table}.md"));
+
+        let Ok(documented) = std::fs::read_to_string(&reference) else {
+            undocumented.push(format!("{table}: no reference file at {}", reference.display()));
+            continue;
+        };
+
+        for column in columns(&std::fs::read_to_string(&migration).unwrap()) {
+            if !documented.contains(&column) {
+                undocumented.push(format!("{table}.{column}: not in {}", reference.display()));
+            }
+        }
+    }
+
+    undocumented.sort();
+
+    assert!(
+        undocumented.is_empty(),
+        "A column is missing from the entities map:\n{}\n\nAdd a row for it, the way the \
+         db-schema skill's \"Before you finish\" says to. A schema the map does not describe \
+         is worse than one nobody documented.",
+        undocumented.join("\n"),
+    );
+}
+
+/// Column names from a `CREATE TABLE`: a line whose first word is followed by a SQL type.
+/// Constraint lines (`PRIMARY KEY`, `FOREIGN KEY`, `UNIQUE`) start with a keyword instead
+/// and so are skipped without naming them.
+fn columns(sql: &str) -> Vec<String> {
+    const TYPES: [&str; 4] = ["TEXT", "INTEGER", "REAL", "BLOB"];
+
+    sql.lines()
+        .filter_map(|line| {
+            let mut words = line.trim().split_whitespace();
+            let name = words.next()?;
+            let kind = words.next()?;
+
+            let is_column = name.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                && TYPES.contains(&kind.trim_end_matches(',').to_uppercase().as_str());
+
+            is_column.then(|| name.to_string())
+        })
+        .collect()
+}
+
+fn rust_files_with_extension(dir: &Path, wanted: &str) -> Vec<PathBuf> {
+
+    let mut files = Vec::new();
+
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+
+        if path.is_dir() {
+            files.extend(rust_files_with_extension(&path, wanted));
+        } else if path.extension().is_some_and(|extension| extension == wanted) {
+            files.push(path);
+        }
+    }
+
+    files
+}

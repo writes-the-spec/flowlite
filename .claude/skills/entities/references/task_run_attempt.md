@@ -13,6 +13,7 @@ One execution of a [`task_run`](task_run.md)'s command. **This is the only level
 | `finished_at` | Nullable. Written with every terminal status. |
 | `attempt` | 1 for the first, `last.attempt + 1` for each retry. |
 | `status` | `TaskRunAttemptStatus` — same eight variants as `TaskRunStatus`, but a separate enum; see the [orchestrator skill](../../orchestrator/references/task_run_attempt.md). |
+| `process_group_id` | Nullable. The spawned `sh`'s pid, which is also its process group id because the child is made a group leader — so a stop or a timeout signals the whole tree the command started, not only the shell flowlite spawned. NULL until the command is spawned, and for good on an attempt that never ran. |
 
 `UNIQUE (task_run_id, attempt)`: the attempt number is computed rather than constrained (1 in `TaskRunDispatcher`, `last.attempt + 1` in `TaskRunMonitor`), so this index is what turns a second process racing the first into a failed insert instead of a task run quietly executed twice. It is also what makes "the last attempt" well defined — `get_last_task_run_attempt` orders by `attempt`.
 
@@ -24,5 +25,7 @@ One execution of a [`task_run`](task_run.md)'s command. **This is the only level
 **The attempt's output does not live here.** It is appended to [`task_run_attempt_output`](task_run_attempt_output.md) in chunks, one row per stream per poll pass. It used to be two `TEXT NOT NULL` columns on this table, rewritten whole on every pass, which cost the square of the output size — see that reference for why the chunks replaced them and for the 1 MiB per-stream cap.
 
 ## Read by
+
+`Orchestrator::recover` reads `process_group_id` after a restart — it is the only way to reach a process an earlier run of the program left behind, and the kill is refused unless `started_at` is after the machine last booted, since a group id is a number the kernel hands out again.
 
 `TaskRunMonitor` (the last attempt decides what the task run does next), both attempt services, `job-run logs` ([src/cli/commands/job_run.rs](../../../../src/cli/commands/job_run.rs)) and the task-run web route.
