@@ -12,7 +12,7 @@ use rmcp::{tool, tool_router};
 use serde::Deserialize;
 
 use crate::crud::job_run::JobRun;
-use crate::crud::multistatements::misc::JobIdAlreadyInstalled;
+use crate::crud::multistatements::ad_hoc_job::JobIdAlreadyInstalled;
 use crate::crud::CRUD;
 use crate::mcp::wait::{clamp_wait_seconds, wait_for_settled_job_run};
 use crate::mcp::McpServer;

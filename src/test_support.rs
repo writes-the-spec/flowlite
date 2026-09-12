@@ -50,6 +50,15 @@ static ENVIRONMENT: RwLock<()> = RwLock::new(());
 
 /// Taken by every test that loads a config or spawns a command. Bind it to a name - a
 /// `let _` drops the guard on the spot and holds nothing.
+/// The `BTreeMap<String, String>` shape `env`, `secret_env` and `parameters` all take,
+/// from the pairs a test actually cares about.
+pub fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect()
+}
+
 pub fn reading_the_environment() -> RwLockReadGuard<'static, ()> {
     ENVIRONMENT.read().unwrap_or_else(PoisonError::into_inner)
 }

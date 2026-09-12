@@ -4,7 +4,7 @@ use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
 use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::JobRunStatus;
-use crate::crud::multistatements::misc::JobIdAlreadyInstalled;
+use crate::crud::multistatements::ad_hoc_job::JobIdAlreadyInstalled;
 use crate::shared::format;
 use crate::shared::job::installed_job_id;
 use crate::shared::job_run::select_job_run;
