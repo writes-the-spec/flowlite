@@ -27,6 +27,9 @@ cargo install --git https://github.com/writes-the-spec/flowlite
 
 Or clone and `cargo build --release`, which leaves the binary at `target/release/flowlite`.
 
+Then `flowlite init` lays out a data directory to work in, with an example job and an
+example schedule already in it — that is what [Quick start](#quick-start) picks up from.
+
 ## Quick start
 
 Lay out a data directory with an example job and an example schedule in it:
