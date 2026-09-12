@@ -855,15 +855,18 @@ replays them.
 ## Driving flowlite from an agent
 
 `flowlite mcp` speaks the Model Context Protocol on stdin and stdout, so an agent drives
-flowlite through the same reads and writes the CLI makes. Install it with one line:
+flowlite through the same reads and writes the CLI makes. Set a directory up and install
+it:
 
 ```bash
+flowlite -D ./data init
 claude mcp add flowlite -- flowlite -D ./data mcp
 ```
 
 No port, no HTTP and nothing to start first: the client spawns the binary, talks JSON-RPC
 over its stdio, and the process exits when the client closes stdin. `-D` / `--data-dir`
-names the directory, the same way every other command learns it.
+names the directory, the same way every other command learns it — and the `init` line is
+optional, since an agent handed an empty directory can call `init_data_dir` itself.
 
 Seven tools, each a projection of a command that already exists:
 
