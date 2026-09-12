@@ -36,7 +36,7 @@ pub struct Toolkit {
 /// `CREATE TABLE IF NOT EXISTS` - a write, taking a write lock - on every connection open,
 /// so every migration here is a write and not just a read of `_sqlx_migrations`.
 ///
-/// It is the in-process analogue of the `ServeLock` (`src/cli/commands/serve.rs:37`), taken
+/// It is the in-process analogue of the `ServeLock` that `serve` takes, taken
 /// cross-process for the same reason, and it does **not** close the cross-process case: two
 /// flowlite processes first-migrating one fresh data directory can still collide, since
 /// only `serve` holds that lock.
@@ -183,7 +183,7 @@ tasks:
 
     /// Two `with_fresh_mem` toolkits seeding the *same* job id are each other's whole
     /// reason to exist: sharing `flowlite_mem` would make the second seed a primary-key
-    /// collision on the first's `mem.job` row (`src/test_support.rs:71`), and a long-lived
+    /// collision on the first's `mem.job` row (see `TestDb`'s doc comment), and a long-lived
     /// MCP server seeding more than once in a process is exactly that collision waiting to
     /// happen. A private name per toolkit turns the collision into two untouched views.
     #[tokio::test]
@@ -281,8 +281,8 @@ tasks:
     /// relies on that name unchanged. Asserted on the field alone, with nothing seeded
     /// into it: Cargo runs a binary's tests as threads of one process, so a test that
     /// seeds `flowlite_mem` would race every other test's connection over that one shared
-    /// name, which is what `src/test_support.rs:71` and `crud_with_private_mem`'s doc
-    /// comment (`src/crud/crud.rs:774`) both warn against.
+    /// name, which is what `TestDb`'s doc comment and `crud_with_private_mem`'s both warn
+    /// against.
     #[test]
     fn new_toolkit_opens_the_shared_flowlite_mem() {
         let toolkit = Toolkit::new(AppConfig::default());

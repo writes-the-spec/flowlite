@@ -1,8 +1,8 @@
 //! The behavioural properties the existence check rests on, driven through the built binary
 //! the way `tests/serve_lock.rs` already does - the check itself queries `mem`, which is one
 //! shared-cache database for the whole process, so it cannot be exercised as a unit test
-//! without racing every other test's connection over its schema lock (see
-//! `src/test_support.rs:70-72`).
+//! without racing every other test's connection over its schema lock (see `TestDb`'s doc
+//! comment in `src/test_support.rs`).
 //!
 //! Two properties, three tests: `serve` refuses to start when a reference is unsatisfied,
 //! and the placement itself - that this cannot live inside `CRUD::init` - needs both a
@@ -76,7 +76,7 @@ fn a_served_job_naming_an_undefined_secret_refuses_naming_job_task_and_secret() 
     assert!(stderr.contains("warehouse_pw"), "{stderr}");
 }
 
-/// The test that actually pins the placement: `job list` (`src/cli/commands/job.rs:62`)
+/// The test that actually pins the placement: `job list` (`JobListCmd::run`)
 /// calls `CRUD::init` in its own process, seeding `mem.job`/`mem.task` from the very same
 /// YAML `serve` refuses above - the same `mem` the check reads. `job list` is chosen
 /// precisely because it walks that `init` path, so if the existence check ever migrates
@@ -100,7 +100,7 @@ fn job_list_still_works_in_a_directory_serve_refuses() {
 
 /// The narrower property this one actually pins: reading a run's status never requires the
 /// credentials that run used. Unlike `job_list_still_works_in_a_directory_serve_refuses`,
-/// `job-run list` (`src/cli/commands/job_run.rs:106-122`) never calls `CRUD::init` at all -
+/// `job-run list` (`JobRunListCmd::run`) never calls `CRUD::init` at all -
 /// it reads only the persisted `job_run`/`task_run` tables - so on its own this assertion
 /// cannot catch a check that migrated into `CRUD::init`; that regression is what the
 /// `job list` test above exists to catch.

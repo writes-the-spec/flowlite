@@ -28,7 +28,7 @@ struct SecretEnvReference<'a> {
 /// Pure and database-free on purpose: `check_secret_env_is_satisfied` reads real
 /// `mem.job`/`mem.task` rows, and seeding `mem` inside a test to exercise this logic would
 /// race every other test's pooled connection over `mem`'s shared-cache schema lock - the
-/// "database schema is locked: mem" hazard `src/test_support.rs:70-72` documents and Task 3
+/// "database schema is locked: mem" hazard `TestDb`'s doc comment documents and Task 3
 /// already hit. So every case of the policy belongs here, where it needs no seeding at all.
 fn first_unsatisfied_secret_reference<'a, 'b>(
     references: &'b [SecretEnvReference<'a>],
@@ -91,7 +91,7 @@ impl CRUD {
     /// Its own coverage is the integration test in `tests/serve_secret_check.rs`, not a
     /// unit test: collecting real declarations here means reading real `mem.job`/
     /// `mem.task` rows, which needs `init` to have seeded `mem` first, and `mem` is one
-    /// shared-cache name for the whole test binary (`src/test_support.rs:70-72`) - seeding
+    /// shared-cache name for the whole test binary (see `TestDb`) - seeding
     /// it from a test races every other test's pooled connection over its schema lock. The
     /// policy this delegates to, `first_unsatisfied_secret_reference`, carries the
     /// exhaustive unit coverage instead; this function does only a query each, a collect,

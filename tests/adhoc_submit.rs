@@ -2,7 +2,8 @@
 //! directory. Driven through the built binary rather than as unit tests because the whole
 //! feature turns on what `mem` holds, and `mem` is one shared-cache database per process:
 //! seeding it inside a unit test races every other test's connection over its schema lock
-//! (see `src/test_support.rs:70-72`), which is the same reason `tests/serve_secret_check.rs`
+//! (see `TestDb`'s doc comment in `src/test_support.rs`), which is the same reason
+//! `tests/serve_secret_check.rs`
 //! lives out here.
 
 use std::path::{Path, PathBuf};

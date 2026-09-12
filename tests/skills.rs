@@ -132,3 +132,71 @@ fn field<'a>(frontmatter: &'a str, key: &str) -> Option<&'a str> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
 }
+
+/// A comment that cites a file path with a line number after it is wrong the moment
+/// anything above that line moves, and says so to nobody. Eight such citations existed here; one still pointed at
+/// what it meant, two had rotted before this check was written, and the rest broke when
+/// code moved between files. Cite the symbol instead - `TestDb`, `JobListCmd::run` - which
+/// a reader can find wherever it has moved to, and which a rename makes visibly wrong
+/// rather than quietly wrong.
+#[test]
+fn no_comment_cites_a_line_number() {
+
+    let mut citations = Vec::new();
+
+    for file in rust_files(Path::new("src")).into_iter().chain(rust_files(Path::new("tests"))) {
+        let source = std::fs::read_to_string(&file).unwrap();
+
+        for (offset, line) in source.lines().enumerate() {
+            if let Some(citation) = line_citation(line) {
+                citations.push(format!("{}:{}: {}", file.display(), offset + 1, citation));
+            }
+        }
+    }
+
+    citations.sort();
+
+    assert!(
+        citations.is_empty(),
+        "A comment cites a line number:\n{}\n\nName the item instead. A line number is \
+         wrong as soon as anything above it moves, and nothing checks it.",
+        citations.join("\n"),
+    );
+}
+
+/// A `<path>.rs:<line>` reference, if the line carries one.
+fn line_citation(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+
+    if !trimmed.starts_with("//") {
+        return None;
+    }
+
+    let start = trimmed.find(".rs:")?;
+    let rest = &trimmed[start + 4..];
+
+    rest.starts_with(|c: char| c.is_ascii_digit()).then(|| {
+        let word_start = trimmed[..start].rfind(char::is_whitespace).map_or(0, |i| i + 1);
+        let word_end = word_start + trimmed[word_start..]
+            .find(|c: char| c.is_whitespace())
+            .unwrap_or(trimmed.len() - word_start);
+        &trimmed[word_start..word_end]
+    })
+}
+
+fn rust_files(dir: &Path) -> Vec<PathBuf> {
+
+    let mut files = Vec::new();
+
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+
+        if path.is_dir() {
+            files.extend(rust_files(&path));
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path);
+        }
+    }
+
+    files
+}
