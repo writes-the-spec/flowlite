@@ -53,7 +53,7 @@ Pick whichever matches the table's primary key column in its migration — don't
 
 ## Multi-row inserts and transactions
 
-When one YAML/API input fans out into several related inserts (e.g. a job's tasks, a task's `depends_on` edges, a schedule's jobs), don't add a single "insert everything" method to the child entity's file. Instead, do the fan-out at the call site inside an existing transaction, incrementing the shared `row_id` counter as you go — see `CRUD::init` in [src/crud/crud.rs](../../../../src/crud/crud.rs) and `CRUD::submit_job` in [src/crud/multistatements/misc.rs](../../../../src/crud/multistatements/misc.rs) for the pattern. Each entity's `insert_*` stays a single-row insert; composition happens one layer up.
+When one YAML/API input fans out into several related inserts (e.g. a job's tasks, a task's `depends_on` edges, a schedule's jobs), don't add a single "insert everything" method to the child entity's file. Instead, do the fan-out at the call site inside an existing transaction, incrementing the shared `row_id` counter as you go — see `CRUD::init` in [src/crud/crud.rs](../../../../src/crud/crud.rs) and `CRUD::submit_job` in [src/crud/multistatements/submit_job.rs](../../../../src/crud/multistatements/submit_job.rs) for the pattern. Each entity's `insert_*` stays a single-row insert; composition happens one layer up.
 
 ## Immutable vs mutable entities
 

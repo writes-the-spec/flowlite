@@ -27,7 +27,7 @@ The other three are all closed, and only [`NotificationService`](../../notificat
 
 ## Written by
 
-`CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/misc.rs](../../../../src/crud/multistatements/misc.rs)), through `insert_job_run_definition` — the same call that inserts the [`job_run`](job_run.md) and its [`task_run`](task_run.md)s, from the same snapshot. Who to tell, and what about, is part of a run's definition, exactly like its commands and its parameters, so it is frozen at submit and a rerun replays it: `submit_job` builds it from `mem.job.on_failure_recipients` and `on_success_recipients`, `rerun_job` from the earlier run's own rows.
+`CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/](../../../../src/crud/multistatements/)), through `insert_job_run_definition` — the same call that inserts the [`job_run`](job_run.md) and its [`task_run`](task_run.md)s, from the same snapshot. Who to tell, and what about, is part of a run's definition, exactly like its commands and its parameters, so it is frozen at submit and a rerun replays it: `submit_job` builds it from `mem.job.on_failure_recipients` and `on_success_recipients`, `rerun_job` from the earlier run's own rows.
 
 **One row per channel per block**, so a job naming both email and Slack on a failure is submitted with two, delivered and recorded independently — a Slack workspace that is down does not swallow the mail. A job that also names somebody on a success gets that row too, and exactly one of a run's `failure` and `success` rows can ever be delivered.
 
