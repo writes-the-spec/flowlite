@@ -15,7 +15,20 @@ figment = { version = "0.10.19", features = ["toml", "env"] }
 sqlx = { version = "0.9.0", features = ["sqlite", "runtime-tokio", "migrate", "chrono"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.52.3", features = ["full"] }
+# What this crate's own code uses, named rather than taken wholesale as "full": macros is
+# #[tokio::main]/#[tokio::test] and select!; rt-multi-thread the runtime those start; sync
+# the Notify and Mutex the pollers and AppState hold; time the poll interval, the attempt
+# timeout and every wait; process the command a task run spawns; net axum's listener;
+# signal the shutdown handler; io-util the AsyncRead the output readers are generic over.
+#
+# This is a statement of what flowlite needs, not of what gets compiled. Cargo unions
+# features across the graph, so `fs` still arrives through rmcp's transport-io tree and
+# `io-std` through transport-io itself, and `tokio::fs` would go on compiling here today.
+# The list is what stays true if those dependencies change - and the one thing "full"
+# actually added on its own, tokio's parking_lot, sqlx pulls in anyway.
+tokio = { version = "1.52.3", features = [
+    "macros", "rt-multi-thread", "sync", "time", "process", "net", "signal", "io-util",
+] }
 uuid = { version = "1.10.0", features = ["v4"] }
 serde_yaml = "0.9.34"
 rust-embed = "8.6.0"
