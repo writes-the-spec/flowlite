@@ -20,6 +20,11 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use flowlite::app_config::AppConfig;
+use flowlite::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
+use flowlite::crud::CRUD;
+use flowlite::toolkit::Toolkit;
+
 mod common;
 use common::{flowlite, install_job, is_up, serve, until, ServerGuard, BINARY};
 
@@ -129,6 +134,11 @@ impl McpClient {
     /// arrives first. Two requests sent before either is read can answer in either order -
     /// rmcp dispatches each to its own task - so this cannot assume the next line on the
     /// wire is the one this call is waiting for.
+    ///
+    /// A line carrying no integer id is nobody's response (a server-initiated
+    /// notification) and is skipped rather than failed on. rmcp sends none today, but a
+    /// version that did would otherwise break every test in this file at once, and this
+    /// suite is the guard on stdout purity: it has to keep reading to report what it saw.
     fn receive_response(&mut self, id: i64) -> Value {
         let response = match self.buffered_responses.remove(&id) {
             Some(response) => response,
@@ -138,8 +148,9 @@ impl McpClient {
                 let response: Value = serde_json::from_str(&line)
                     .unwrap_or_else(|e| panic!("stdout was not one JSON object per line: {e}: {line}"));
 
-                let response_id = response["id"].as_i64()
-                    .unwrap_or_else(|| panic!("response carried no integer id: {line}"));
+                let Some(response_id) = response["id"].as_i64() else {
+                    continue;
+                };
 
                 if response_id == id {
                     break response;
@@ -576,6 +587,11 @@ fn a_param_the_job_does_not_declare_is_refused() {
 /// Queuing work for a server that is not up yet is legitimate, but an agent that got back
 /// `pending` with no warning would poll a run that cannot start - so the JSON is followed
 /// by a second content block naming the directory, and only while nothing is serving it.
+///
+/// A warned result carries no `structuredContent` at all: a client that surfaces that field
+/// to the model instead of the text would otherwise hand it `{"status": "pending"}` with
+/// nothing saying the status will never move, which is the exact failure the warning exists
+/// to prevent. Content[0] is still the run, as JSON, either way.
 #[test]
 fn the_warning_block_appears_only_while_the_directory_is_unserved() {
     let dir = data_dir("submit-unserved");
@@ -592,6 +608,10 @@ fn the_warning_block_appears_only_while_the_directory_is_unserved() {
         unserved_content[1]["text"].as_str().unwrap().contains(&dir.to_string_lossy().to_string()),
         "{unserved}",
     );
+    assert!(unserved["structuredContent"].is_null(), "{unserved}");
+
+    let warned_run: Value = serde_json::from_str(tool_text(&unserved)).unwrap();
+    assert_eq!(warned_run["status"], json!("pending"), "{warned_run}");
 
     let mut server = ServerGuard::new(serve(&dir, 18232), libc::SIGTERM);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
@@ -600,6 +620,7 @@ fn the_warning_block_appears_only_while_the_directory_is_unserved() {
     assert_ne!(served["isError"], json!(true), "{served}");
     let served_content = served["content"].as_array().unwrap();
     assert_eq!(served_content.len(), 1, "{served}");
+    assert_eq!(served["structuredContent"]["id"], json!(warned_run["id"].as_i64().unwrap() + 1), "{served}");
 
     server.stop();
 }
@@ -753,12 +774,55 @@ fn stop_job_run_without_wait_seconds_returns_the_same_job_run_shape() {
     server.stop();
 }
 
+/// What the refusal has to say to be actionable: the directory an agent must start a
+/// server against, and the argument it actually sent. The CLI's wording of the same typed
+/// fact ends "or drop --wait" - a flag no tool here takes, leaving an agent that passed
+/// `wait_seconds` nothing to do but retry unchanged or invent the flag.
+fn assert_refusal_is_addressed_to_a_tool_caller(text: &str, dir: &Path) {
+    assert!(text.contains(&dir.to_string_lossy().to_string()), "{text}");
+    assert!(text.contains("wait_seconds"), "{text}");
+    assert!(!text.contains("--wait"), "{text}");
+}
+
+/// The runs a data directory holds, newest first, read through the tool - what an agent
+/// would see, and here what "the refusal wrote nothing" is asserted against.
+fn listed_job_runs(client: &mut McpClient) -> Vec<Value> {
+    let result = client.call_tool("list_job_runs", json!({}));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    serde_json::from_str::<Value>(tool_text(&result)).unwrap().as_array().unwrap().clone()
+}
+
+/// The `job_run_stop` rows one run has, read through the same CRUD the tool writes them
+/// with. No tool lists stop requests - they return runs, not the rows that ask for them -
+/// so "the refusal wrote no stop" is not a property any tool result can show, and this
+/// opens the data directory's own database instead.
+fn stop_requests(dir: &Path, job_run_id: i64) -> usize {
+    let data_dir = dir.to_string_lossy().into_owned();
+
+    tokio::runtime::Runtime::new().unwrap().block_on(async move {
+        let toolkit = Toolkit::new(AppConfig { data_dir, ..AppConfig::default() });
+        let mut conn = toolkit.get_conn().await.unwrap();
+
+        let crud = CRUD::new(std::sync::Arc::new(toolkit));
+
+        crud.select_job_run_stops(&mut conn, &SelectJobRunStopsData {
+            filter: SelectJobRunStopsDataFilter { id: None, job_run_id: Some(job_run_id) },
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap().len()
+    })
+}
+
 /// The refusal every waiting tool takes: `wait_seconds > 0` against a directory nothing is
-/// serving is a tool error naming the directory, raised before any row is written - a wait
-/// nothing can service must change nothing.
+/// serving is a tool error, worded for a tool caller - and raised before the run is
+/// written, which is the half this test used to only claim. The job is installed so that a
+/// check moved after the submit would genuinely queue a run for a server that is not there.
 #[test]
-fn submit_job_with_wait_seconds_on_an_unserved_directory_is_a_tool_error_naming_it() {
+fn submit_job_with_wait_seconds_on_an_unserved_directory_queues_no_run() {
     let dir = data_dir("wait-submit-unserved");
+    install_job(&dir, "hello.yaml", HELLO);
 
     let mut client = McpClient::start(&dir);
     client.handshake();
@@ -766,12 +830,16 @@ fn submit_job_with_wait_seconds_on_an_unserved_directory_is_a_tool_error_naming_
     let result = client.call_tool("submit_job", json!({ "job": "hello", "wait_seconds": 5 }));
 
     assert_eq!(result["isError"], json!(true), "{result}");
-    assert!(tool_text(&result).contains(&dir.to_string_lossy().to_string()), "{}", tool_text(&result));
+    assert_refusal_is_addressed_to_a_tool_caller(tool_text(&result), &dir);
+
+    let runs = listed_job_runs(&mut client);
+    assert!(runs.is_empty(), "the refused wait left a run queued: {runs:?}");
 }
 
-/// Same refusal, reached through `get_job_run` - it never even opens `mem` before checking.
+/// Same refusal, reached through `get_job_run` - which writes nothing even when it runs to
+/// completion, so the run table staying empty is the whole of what it can promise.
 #[test]
-fn get_job_run_with_wait_seconds_on_an_unserved_directory_is_a_tool_error_naming_it() {
+fn get_job_run_with_wait_seconds_on_an_unserved_directory_writes_nothing() {
     let dir = data_dir("wait-get-unserved");
 
     let mut client = McpClient::start(&dir);
@@ -780,20 +848,86 @@ fn get_job_run_with_wait_seconds_on_an_unserved_directory_is_a_tool_error_naming
     let result = client.call_tool("get_job_run", json!({ "job_run_id": 1, "wait_seconds": 5 }));
 
     assert_eq!(result["isError"], json!(true), "{result}");
-    assert!(tool_text(&result).contains(&dir.to_string_lossy().to_string()), "{}", tool_text(&result));
+    assert_refusal_is_addressed_to_a_tool_caller(tool_text(&result), &dir);
+
+    let runs = listed_job_runs(&mut client);
+    assert!(runs.is_empty(), "the refused wait wrote a run: {runs:?}");
 }
 
 /// Same refusal again, reached through `stop_job_run` - before the stop row is written, so
 /// a run nothing will ever settle is not left carrying a stop request no server will read.
+/// The run is submitted first, so the stop has a real row to be written against: a check
+/// moved after `request_job_run_stop` would insert one, and this is what would catch it.
 #[test]
-fn stop_job_run_with_wait_seconds_on_an_unserved_directory_is_a_tool_error_naming_it() {
+fn stop_job_run_with_wait_seconds_on_an_unserved_directory_writes_no_stop() {
     let dir = data_dir("wait-stop-unserved");
+    install_job(&dir, "sleeper.yaml", SLEEPER);
 
     let mut client = McpClient::start(&dir);
     client.handshake();
 
-    let result = client.call_tool("stop_job_run", json!({ "job_run_id": 1, "wait_seconds": 5 }));
+    let submitted = client.call_tool("submit_job", json!({ "job": "sleeper" }));
+    let job_run_id = serde_json::from_str::<Value>(tool_text(&submitted)).unwrap()["id"].as_i64().unwrap();
+
+    let result = client.call_tool("stop_job_run", json!({
+        "job_run_id": job_run_id,
+        "wait_seconds": 5,
+    }));
 
     assert_eq!(result["isError"], json!(true), "{result}");
-    assert!(tool_text(&result).contains(&dir.to_string_lossy().to_string()), "{}", tool_text(&result));
+    assert_refusal_is_addressed_to_a_tool_caller(tool_text(&result), &dir);
+
+    assert_eq!(stop_requests(&dir, job_run_id), 0, "the refused wait queued a stop anyway");
+}
+
+/// `stop_job_run` warns for the same reason `submit_job` does: without a wait the run comes
+/// back `pending` or `running`, and against a directory nothing is serving that status will
+/// never change, because only the serve process reads the stop row. `.status` is what this
+/// tool points a caller at, so silence here was a misleading answer, not a missing one.
+#[test]
+fn stop_job_run_warns_when_nothing_is_serving_the_directory() {
+    let dir = data_dir("stop-unserved-warning");
+    install_job(&dir, "sleeper.yaml", SLEEPER);
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let submitted = client.call_tool("submit_job", json!({ "job": "sleeper" }));
+    let job_run_id = serde_json::from_str::<Value>(tool_text(&submitted)).unwrap()["id"].as_i64().unwrap();
+
+    let result = client.call_tool("stop_job_run", json!({ "job_run_id": job_run_id }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let content = result["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2, "{result}");
+    assert!(
+        content[1]["text"].as_str().unwrap().contains(&dir.to_string_lossy().to_string()),
+        "{result}",
+    );
+    assert!(result["structuredContent"].is_null(), "{result}");
+}
+
+/// An argument key the tool does not declare is refused rather than ignored. A misspelled
+/// `params` would otherwise have run the job with its declared defaults instead of the
+/// values the agent sent - a wrong result, reported as a success.
+///
+/// rmcp rejects it while deserializing, before the tool body runs, and reports that as a
+/// tool error rather than a protocol one - so the model reads the name it got wrong and the
+/// keys it could have meant, which is the whole point of refusing instead of ignoring.
+#[test]
+fn a_misspelled_argument_key_is_refused_naming_it() {
+    let dir = data_dir("unknown-field");
+    install_job(&dir, "hello.yaml", HELLO);
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("submit_job", json!({
+        "job": "hello",
+        "parmas": { "region": "eu" },
+    }));
+
+    assert_eq!(result["isError"], json!(true), "the misspelled key was accepted: {result}");
+    assert!(tool_text(&result).contains("parmas"), "{}", tool_text(&result));
+    assert!(tool_text(&result).contains("params"), "{}", tool_text(&result));
 }

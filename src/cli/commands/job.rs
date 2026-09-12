@@ -111,7 +111,8 @@ impl JobSubmitCmd {
         // Before the run is written, so a wait that cannot be serviced leaves no queued
         // run behind for a server that is not there to run it.
         if self.wait {
-            ensure_data_dir_is_served(&toolkit.app_config.data_dir)?;
+            ensure_data_dir_is_served(&toolkit.app_config.data_dir)
+                .map_err(describe_unserved_data_dir)?;
         }
 
         let mut conn = toolkit.get_conn().await?;
@@ -250,7 +251,7 @@ pub(crate) async fn select_job_run(
     }
 }
 
-/// Refuses a `--wait` that nothing would ever end.
+/// Refuses a wait that nothing would ever end.
 ///
 /// The waits below poll a row that only the serve process writes, so waiting on a data
 /// directory nothing is serving blocks for ever on a row that cannot change - silently,
@@ -259,17 +260,50 @@ pub(crate) async fn select_job_run(
 /// do to a server while a long run is in flight.
 ///
 /// `Starting` counts as served. That server has the lock and will reach the row.
+///
+/// The refusal comes back as a typed `DataDirNotServed`, not a finished sentence - see the
+/// type. Each caller words its own remedy: the CLI's is `describe_unserved_data_dir` below.
 pub(crate) fn ensure_data_dir_is_served(data_dir: &str) -> anyhow::Result<()> {
 
     if matches!(status(Path::new(data_dir))?, ServeStatus::Down) {
-        anyhow::bail!(
-            "Data directory {} is not being served, so --wait would never return. Start \
-             flowlite serve against it, or drop --wait.",
-            data_dir,
-        );
+        return Err(DataDirNotServed { data_dir: data_dir.to_string() }.into());
     }
 
     Ok(())
+}
+
+/// The one fact `ensure_data_dir_is_served` refuses on: nothing is serving this directory,
+/// so the row a wait polls has no writer.
+///
+/// A typed value rather than a finished sentence, for the same reason `JobIdAlreadyInstalled`
+/// is one: the remedy names what the caller would have to drop, and the callers do not agree
+/// on what that is. `--wait` is a CLI flag; the MCP tools take a `wait_seconds` argument and
+/// have no flags at all, so telling an agent to "drop --wait" names something it never sent.
+#[derive(Debug)]
+pub struct DataDirNotServed {
+    pub data_dir: String,
+}
+
+impl std::fmt::Display for DataDirNotServed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Data directory {} is not being served", self.data_dir)
+    }
+}
+
+impl std::error::Error for DataDirNotServed {}
+
+/// The CLI's own words for `DataDirNotServed`: the caller passed `--wait`, so dropping it is
+/// the remedy. Shared by `job submit` and `job-run stop`, which pass the same flag and so say
+/// the same sentence. Any other error passes through unchanged.
+pub(crate) fn describe_unserved_data_dir(err: anyhow::Error) -> anyhow::Error {
+    match err.downcast::<DataDirNotServed>() {
+        Ok(unserved) => anyhow::anyhow!(
+            "{}, so --wait would never return. Start flowlite serve against it, or drop \
+             --wait.",
+            unserved,
+        ),
+        Err(err) => err,
+    }
 }
 
 /// Blocks until the run has settled, and reports it as it settled.
@@ -342,19 +376,43 @@ mod tests {
     use crate::test_support::TestDb;
 
     /// The hang this guards against: nothing is serving the directory, so the row the
-    /// wait polls has no writer and the command would sit there for ever.
+    /// wait polls has no writer and the command would sit there for ever. The check itself
+    /// raises the typed fact and nothing more - the remedy sentence belongs to the caller.
     #[test]
     fn waiting_on_an_unserved_data_dir_is_refused_naming_it() {
 
         let data_dir = std::env::temp_dir().join(format!("flowlite-unserved-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&data_dir).unwrap();
 
-        let error = ensure_data_dir_is_served(&data_dir.to_string_lossy())
-            .unwrap_err()
-            .to_string();
+        let error = ensure_data_dir_is_served(&data_dir.to_string_lossy()).unwrap_err();
 
-        assert!(error.contains(&data_dir.to_string_lossy().to_string()), "{error}");
-        assert!(error.contains("--wait"), "{error}");
+        assert!(error.downcast_ref::<DataDirNotServed>().is_some(), "{error:#}");
+        assert!(error.to_string().contains(&data_dir.to_string_lossy().to_string()), "{error}");
+    }
+
+    /// The CLI's wording of that fact, word for word what the check itself used to raise:
+    /// a person at a terminal really did pass `--wait`, so dropping it is their remedy.
+    #[test]
+    fn the_cli_wording_of_an_unserved_data_dir_names_the_flag_to_drop() {
+
+        let unserved = DataDirNotServed { data_dir: "./d1".to_string() };
+        let error = describe_unserved_data_dir(unserved.into());
+
+        assert_eq!(
+            error.to_string(),
+            "Data directory ./d1 is not being served, so --wait would never return. Start \
+             flowlite serve against it, or drop --wait.",
+        );
+    }
+
+    /// One typed fact reworded, not a catch-all: anything else comes back untouched, so a
+    /// `status` read failure inside the check is not relabelled as an unserved directory.
+    #[test]
+    fn the_cli_wording_leaves_any_other_error_alone() {
+
+        let error = describe_unserved_data_dir(anyhow::anyhow!("Job run 7 not found"));
+
+        assert_eq!(error.to_string(), "Job run 7 not found");
     }
 
     /// The lock is what `serve` holds for as long as it runs, so holding it here is the

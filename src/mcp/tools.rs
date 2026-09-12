@@ -24,7 +24,7 @@ use rmcp::schemars::{self, JsonSchema};
 use rmcp::{tool, tool_router};
 use serde::{Deserialize, Serialize};
 
-use crate::cli::commands::job::{ensure_data_dir_is_served, installed_job_id};
+use crate::cli::commands::job::{ensure_data_dir_is_served, installed_job_id, DataDirNotServed};
 use crate::cli::commands::job_run::{
     parse_job_run_status, stop_job_run as request_job_run_stop, JobRunDetail, TaskRunAttemptLog,
 };
@@ -44,12 +44,26 @@ use super::McpServer;
 /// `get_task_output`'s default, applied per stream when the caller does not name one.
 const DEFAULT_MAX_BYTES: usize = 20_000;
 
+/// `list_job_runs`'s default page, applied when the caller does not name one.
+const DEFAULT_JOB_RUN_LIMIT: i64 = 20;
+
+/// The most runs `list_job_runs` will return in one call. A page this long is already more
+/// than an agent reads in one turn; a history of thousands is only a context window spent.
+const MAX_JOB_RUN_LIMIT: i64 = 200;
+
 /// The label `seed_ad_hoc_job`'s messages read for an inline `yaml` definition, in place of
 /// the path a `file` would have - tells an agent where a definition came from without
 /// inventing a file that never touched disk.
 const INLINE_YAML_LABEL: &str = "<inline yaml>";
 
+// `deny_unknown_fields` on all five argument structs: a key the struct does not declare is
+// a typo or a guess, and serde's default is to ignore it silently. On this struct that
+// meant a misspelled `params` submitting the job with its default parameters instead of the
+// agent's - a wrong result reported as a success, on the one tool that writes. rmcp adds
+// nothing of its own to an arguments object (it deserializes the caller's `arguments` map
+// verbatim: `Parameters`' `FromContextPart` impl), so every key here really is the caller's.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SubmitJob {
     /// The id of a job installed in the data directory. Exactly one of job, file or yaml
     /// is required.
@@ -64,43 +78,48 @@ pub struct SubmitJob {
     /// is refused.
     pub params: Option<BTreeMap<String, String>>,
     /// Wait up to this many seconds for the run to finish before returning it. Absent or 0
-    /// returns the pending run at once. Clamps to 300 rather than refusing above it; on
-    /// elapse the run comes back merely unfinished, never as an error.
+    /// returns the pending run at once. A value above 300 waits 300. If the wait runs out
+    /// the run comes back unfinished rather than as an error.
     pub wait_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListJobRuns {
     /// Only runs of this job.
     pub job: Option<String>,
     /// Only runs with this status: pending, running, succeeded, failed, skipped, aborted,
-    /// timedout or invalid - the same words `job-run list --status` accepts.
+    /// timedout or invalid.
     pub status: Option<String>,
-    /// How many runs to show, newest first. Defaults to 20.
+    /// How many runs to show, newest first. Defaults to 20. A value above 200 shows 200,
+    /// and one below 1 shows the default.
     pub limit: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GetJobRun {
     /// The id of the job run to show.
     pub job_run_id: i64,
     /// Wait up to this many seconds for the run to finish before returning it. Absent or 0
-    /// returns it at once. Clamps to 300 rather than refusing above it; on elapse the run
-    /// comes back merely unfinished, never as an error.
+    /// returns it at once. A value above 300 waits 300. If the wait runs out the run comes
+    /// back unfinished rather than as an error.
     pub wait_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StopJobRun {
     /// The id of the job run to stop.
     pub job_run_id: i64,
     /// Wait up to this many seconds for the run to settle before returning it. Absent or 0
-    /// returns as soon as the stop has been requested. Clamps to 300 rather than refusing
-    /// above it; on elapse the run comes back merely unfinished, never as an error.
+    /// returns as soon as the stop has been requested. A value above 300 waits 300. If the
+    /// wait runs out the run comes back unfinished rather than as an error.
     pub wait_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GetTaskOutput {
     /// The id of the job run whose task output to read.
     pub job_run_id: i64,
@@ -126,14 +145,18 @@ impl McpServer {
         }
     }
 
+    // Mirrors `job submit --json`, with `wait_seconds` standing in for `--wait` - bounded
+    // rather than blocking, since it is the client's own call timeout, not this server's,
+    // that would otherwise cut a longer wait off. Kept out of the `///` above: every word
+    // there is sent to the model on every turn, and none of this helps it choose the tool
+    // or fill an argument.
     /// Submit a run of a job: one installed in the data directory, a file that is never
-    /// installed there, or a definition given inline. Mirrors `job submit --json`, with
-    /// `wait_seconds` standing in for `--wait` - bounded rather than blocking, since it is
-    /// the client's own call timeout, not this server's, that would otherwise cut it off.
+    /// installed there, or a definition given inline. Returns the job run, still pending
+    /// unless `wait_seconds` was long enough for it to finish.
     #[tool]
     async fn submit_job(&self, Parameters(args): Parameters<SubmitJob>) -> CallToolResult {
         match submit_job_run(&self.toolkit, args).await {
-            Ok((job_run, warning)) => submit_job_result(job_run, warning),
+            Ok((job_run, warning)) => job_run_result(job_run, warning),
             Err(err) => error_result(&err),
         }
     }
@@ -147,7 +170,7 @@ impl McpServer {
             None => None,
         };
 
-        let limit = args.limit.unwrap_or(20);
+        let limit = clamp_job_run_limit(args.limit);
 
         match list_job_runs_rows(&self.toolkit, args.job, status, limit).await {
             Ok(job_runs) => success_json(job_runs),
@@ -155,8 +178,7 @@ impl McpServer {
         }
     }
 
-    /// Show one job run and the task runs under it. `wait_seconds` waits for it to settle
-    /// first, bounded the same way `submit_job`'s is.
+    /// Show one job run and the task runs under it.
     #[tool]
     async fn get_job_run(&self, Parameters(args): Parameters<GetJobRun>) -> CallToolResult {
         match get_job_run_detail(&self.toolkit, args.job_run_id, args.wait_seconds).await {
@@ -176,14 +198,17 @@ impl McpServer {
         }
     }
 
-    /// Ask for a running job run to be stopped. Mirrors `JobRunStopCmd::run`, but always
-    /// returns the `JobRun` row - waited to settle, or merely queued - rather than the
-    /// CLI's `{job_run_id, stop_requested}` shape without a wait, so a caller reads
-    /// `.status` off the result either way.
+    // Mirrors `JobRunStopCmd::run`, but always returns the `JobRun` row rather than the
+    // CLI's `{job_run_id, stop_requested}` shape without a wait, so a caller reads
+    // `.status` off the result either way. Kept out of the `///` above for the reason
+    // `submit_job`'s rationale is: the model pays for that text on every turn.
+    /// Ask for a running job run to be stopped. Returns the job run, whose status is
+    /// settled only if `wait_seconds` was long enough; without one it is merely the run as
+    /// it stands, with the stop requested.
     #[tool]
     async fn stop_job_run(&self, Parameters(args): Parameters<StopJobRun>) -> CallToolResult {
         match stop_job_run_and_wait(&self.toolkit, args).await {
-            Ok(job_run) => success_json(job_run),
+            Ok((job_run, warning)) => job_run_result(job_run, warning),
             Err(err) => error_result(&err),
         }
     }
@@ -194,6 +219,10 @@ impl McpServer {
 /// pretty-printed text `--json` prints, as the text content every client can read, and the
 /// identical value again as `structured_content` for a client that reads results as data
 /// rather than text - carried in addition to, never instead of, the text.
+///
+/// `structured_content` is therefore exactly what content[0] says and nothing else, which
+/// is why `job_run_result` clears it rather than adding a warning beside the value: see
+/// there.
 ///
 /// The text is serialized directly from `value`, not from a `serde_json::Value` built from
 /// it: `Value`'s map is a `BTreeMap`, so a detour through it would alphabetize field names
@@ -302,6 +331,24 @@ fn describe_ad_hoc_job_collision(err: anyhow::Error) -> anyhow::Error {
     }
 }
 
+/// Turns `ensure_data_dir_is_served`'s typed refusal into these tools' own words, the way
+/// `describe_ad_hoc_job_collision` does for a collision: nothing here was a flag to drop, so
+/// the remedy names `wait_seconds`, the argument the caller actually sent. The CLI's wording
+/// of the same fact - "drop --wait" - would send an agent looking for a flag no tool takes,
+/// whose only repairs are to retry unchanged or to invent one. Any other error passes
+/// through unchanged.
+fn describe_unserved_data_dir(err: anyhow::Error) -> anyhow::Error {
+    match err.downcast::<DataDirNotServed>() {
+        Ok(unserved) => anyhow::anyhow!(
+            "{}, so waiting would only run the wait_seconds out - nothing is there to move \
+             the run along. Start flowlite serve against it, or call again without \
+             wait_seconds to get the run back as it stands.",
+            unserved,
+        ),
+        Err(err) => err,
+    }
+}
+
 /// `submit_job`'s own connection: a fresh `mem`, seeded exactly as `job submit` seeds its
 /// own, so the same inline id can be submitted twice in one session without the second
 /// call colliding with the first's rows, and a job file just written into `jobs/` is
@@ -315,7 +362,8 @@ async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(J
     // behind for a server that is not there to run it - the same ordering `job submit
     // --wait` keeps.
     if wait_seconds > 0 {
-        ensure_data_dir_is_served(&toolkit.app_config.data_dir)?;
+        ensure_data_dir_is_served(&toolkit.app_config.data_dir)
+            .map_err(describe_unserved_data_dir)?;
     }
 
     let toolkit = toolkit.with_fresh_mem();
@@ -357,15 +405,24 @@ async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(J
     Ok((job_run, warning))
 }
 
-/// `submit_job`'s result: the same JSON `job submit --json` prints, as the first content
-/// block so a client reading only that one still gets valid JSON, with a second block
-/// appended only when nothing is serving the directory this run was just queued against -
-/// an agent that got back `pending` with no warning would poll a run that cannot start.
-fn submit_job_result(job_run: JobRun, warning: Option<String>) -> CallToolResult {
+/// The result `submit_job` and `stop_job_run` both return: the same JSON `--json` prints,
+/// as the first content block so a client reading only that one still gets valid JSON, with
+/// a second block appended only when nothing is serving the directory the run is in - an
+/// agent that got back `pending` with no warning would poll a status that cannot change.
+///
+/// A warned result carries no `structured_content` at all. The alternative was to add the
+/// warning beside the run in the structured value, and that is worse: a client that reads
+/// `structured_content` and ignores the text would otherwise be handed `{"status":
+/// "pending"}` with nothing saying it will never move, which is the exact failure the
+/// warning exists to prevent, and giving that field one shape when warned and another when
+/// not is a trap of its own. Dropping it leaves such a client with the text blocks, which
+/// carry both facts - the shape every MCP client is required to read.
+fn job_run_result(job_run: JobRun, warning: Option<String>) -> CallToolResult {
     let mut result = success_json(job_run);
 
     if let Some(warning) = warning {
         result.content.push(ContentBlock::text(warning));
+        result.structured_content = None;
     }
 
     result
@@ -373,21 +430,26 @@ fn submit_job_result(job_run: JobRun, warning: Option<String>) -> CallToolResult
 
 /// `Some` naming the directory only when nothing at all is serving it - `Starting` counts
 /// as served, the same way `ensure_data_dir_is_served` treats it, since that server has the
-/// lock and will reach the row this run is queued in. Queuing work for a server that is not
-/// up yet is legitimate; an agent that got back `pending` with no warning would poll a run
-/// that cannot start until something else changes.
+/// lock and will reach the row. Writing to a directory whose server is not up yet is
+/// legitimate; an agent that got back `pending` with no warning would poll a status that
+/// cannot change until something else does.
 ///
-/// Never propagates: this runs after `crud.submit_job` has already written the row, so a
-/// failed lookup here is a fact about the warning, not about the submit. `status` can fail
+/// One sentence for both writing tools: the serve process is what would start the run
+/// `submit_job` queued and what would act on the stop row `stop_job_run` wrote, so "the
+/// status will not change" is the one fact either caller needs, and neither has a remedy
+/// the other does not.
+///
+/// Never propagates: both callers read it after their own row is already written, so a
+/// failed lookup here is a fact about the warning, not about the write. `status` can fail
 /// on an unreadable lock file or state file, and turning that into a tool error would read
-/// as "the submit failed" to an agent whose obvious next move is to retry - which would
-/// only queue a duplicate of a run that already exists. A lookup failure becomes a warning
-/// that says so instead, so the run's id still reaches the caller either way.
+/// as "the write failed" to an agent whose obvious next move is to retry - which for a
+/// submit would only queue a duplicate of a run that already exists. A lookup failure
+/// becomes a warning that says so instead, so the run still reaches the caller either way.
 fn unserved_directory_warning(data_dir: &str) -> Option<String> {
     match status(Path::new(data_dir)) {
         Ok(ServeStatus::Down) => Some(format!(
-            "Nothing is serving {}, so this run will not start until flowlite serve runs \
-             against it.",
+            "Nothing is serving {}, so this run's status will not change until flowlite \
+             serve runs against it.",
             data_dir,
         )),
         Ok(ServeStatus::Starting | ServeStatus::Up(_)) => None,
@@ -395,6 +457,20 @@ fn unserved_directory_warning(data_dir: &str) -> Option<String> {
             "Could not tell whether {} is being served: {:#}",
             data_dir, err,
         )),
+    }
+}
+
+/// `list_job_runs`'s bound, the counterpart of `clamp_wait_seconds`: of the three tools
+/// that can flood a context window, this was the one left unbounded.
+///
+/// Anything below 1 means the default rather than "everything". `limit` is bound straight
+/// into SQL `LIMIT ?`, and SQLite reads a negative LIMIT as no limit at all - so `-1` asked
+/// through this tool returned the whole run history, the opposite of what a smaller number
+/// asks for.
+fn clamp_job_run_limit(limit: Option<i64>) -> i64 {
+    match limit {
+        Some(limit) if limit > 0 => limit.min(MAX_JOB_RUN_LIMIT),
+        _ => DEFAULT_JOB_RUN_LIMIT,
     }
 }
 
@@ -421,10 +497,10 @@ async fn list_job_runs_rows(
 }
 
 /// `get_job_run`'s own connection, and the same cross-entity assembly `job-run get` reads
-/// through `CRUD::select_job_run_with_task_runs`. A wait, if any, is spent on the run alone
-/// - `wait_for_settled_job_run` knows nothing of task runs - and the detail is assembled
-/// fresh afterwards either way, so a `wait_seconds` of `0` costs nothing beyond the one
-/// query `job-run get` already runs.
+/// through `CRUD::select_job_run_with_task_runs`. A wait, if any, is spent on the run
+/// alone (`wait_for_settled_job_run` knows nothing of task runs) and the detail is
+/// assembled fresh afterwards either way, so a `wait_seconds` of `0` costs nothing beyond
+/// the one query `job-run get` already runs.
 async fn get_job_run_detail(
     toolkit: &Toolkit,
     job_run_id: i64,
@@ -436,7 +512,8 @@ async fn get_job_run_detail(
     // the serve process settles this row, so waiting on a directory nothing serves is a
     // silent hang.
     if wait_seconds > 0 {
-        ensure_data_dir_is_served(&toolkit.app_config.data_dir)?;
+        ensure_data_dir_is_served(&toolkit.app_config.data_dir)
+            .map_err(describe_unserved_data_dir)?;
     }
 
     let toolkit = toolkit.with_fresh_mem();
@@ -501,11 +578,22 @@ fn truncated_task_run_attempt_log(
 /// service changes nothing, but once the wait is allowed to proceed the stop is requested
 /// regardless of whether `wait_seconds` is `0` - a caller that never asked to wait still
 /// gets the stop queued.
-async fn stop_job_run_and_wait(toolkit: &Toolkit, args: StopJobRun) -> anyhow::Result<JobRun> {
+///
+/// Carries the same warning `submit_job_run` does, for the same reason: without a wait the
+/// run comes back `pending` or `running`, and against an unserved directory that status will
+/// never change, because only the serve process reads the stop row. `.status` is what this
+/// tool's own contract points a caller at, so the silence was a misleading answer rather
+/// than merely a missing one.
+async fn stop_job_run_and_wait(
+    toolkit: &Toolkit,
+    args: StopJobRun,
+) -> anyhow::Result<(JobRun, Option<String>)> {
+
     let wait_seconds = clamp_wait_seconds(args.wait_seconds);
 
     if wait_seconds > 0 {
-        ensure_data_dir_is_served(&toolkit.app_config.data_dir)?;
+        ensure_data_dir_is_served(&toolkit.app_config.data_dir)
+            .map_err(describe_unserved_data_dir)?;
     }
 
     let toolkit = toolkit.with_fresh_mem();
@@ -515,7 +603,14 @@ async fn stop_job_run_and_wait(toolkit: &Toolkit, args: StopJobRun) -> anyhow::R
 
     request_job_run_stop(&crud, &mut conn, args.job_run_id).await?;
 
-    wait_for_settled_job_run(&crud, &mut conn, args.job_run_id, wait_seconds).await
+    let job_run = wait_for_settled_job_run(&crud, &mut conn, args.job_run_id, wait_seconds).await?;
+
+    // After the stop row is written, for the reason `submit_job_run` reads it after its own
+    // write: by this point the stop is queued, and a `status` read failure here is a fact
+    // about the warning, not about the stop.
+    let warning = unserved_directory_warning(&crud.toolkit.app_config.data_dir);
+
+    Ok((job_run, warning))
 }
 
 #[cfg(test)]
@@ -664,6 +759,112 @@ mod tests {
         assert_eq!(params.get("date").map(String::as_str), Some("2026-09-11"));
     }
 
+    /// A key the struct does not declare is refused rather than ignored: serde's default
+    /// would have run this job with its declared defaults instead of the parameters the
+    /// agent actually sent, and reported that as a success.
+    #[test]
+    fn a_misspelled_argument_key_is_refused_rather_than_ignored() {
+        let error = serde_json::from_value::<SubmitJob>(serde_json::json!({
+            "job": "etl",
+            "parmas": { "region": "eu" },
+        })).unwrap_err().to_string();
+
+        assert!(error.contains("parmas"), "{error}");
+    }
+
+    /// The same rule on a read tool, so the property is pinned as one that holds for every
+    /// argument struct rather than only for the one that writes.
+    #[test]
+    fn a_misspelled_argument_key_on_a_read_tool_is_refused_too() {
+        let error = serde_json::from_value::<ListJobRuns>(serde_json::json!({
+            "limmit": 5,
+        })).unwrap_err().to_string();
+
+        assert!(error.contains("limmit"), "{error}");
+    }
+
+    /// The bug this clamp exists for: `limit` is bound into SQL `LIMIT ?`, and SQLite reads
+    /// a negative LIMIT as no limit at all, so `-5` returned the entire run history.
+    #[test]
+    fn a_negative_limit_means_the_default_not_everything() {
+        assert_eq!(clamp_job_run_limit(Some(-5)), DEFAULT_JOB_RUN_LIMIT);
+        assert_eq!(clamp_job_run_limit(Some(-1)), DEFAULT_JOB_RUN_LIMIT);
+    }
+
+    /// `0` is the other non-positive case, and SQLite would honour it literally - an empty
+    /// page is not what a caller asking for "no limit in particular" means either.
+    #[test]
+    fn a_zero_limit_means_the_default() {
+        assert_eq!(clamp_job_run_limit(Some(0)), DEFAULT_JOB_RUN_LIMIT);
+    }
+
+    #[test]
+    fn an_absent_limit_means_the_default() {
+        assert_eq!(clamp_job_run_limit(None), DEFAULT_JOB_RUN_LIMIT);
+    }
+
+    /// Clamped rather than refused, the same way `clamp_wait_seconds` clamps: a page of 200
+    /// is still an answer in the shape the caller already handles.
+    #[test]
+    fn a_limit_above_the_cap_clamps_to_it() {
+        assert_eq!(clamp_job_run_limit(Some(1_000_000)), MAX_JOB_RUN_LIMIT);
+        assert_eq!(clamp_job_run_limit(Some(MAX_JOB_RUN_LIMIT + 1)), MAX_JOB_RUN_LIMIT);
+    }
+
+    #[test]
+    fn a_limit_at_or_below_the_cap_is_used_as_given() {
+        assert_eq!(clamp_job_run_limit(Some(MAX_JOB_RUN_LIMIT)), MAX_JOB_RUN_LIMIT);
+        assert_eq!(clamp_job_run_limit(Some(1)), 1);
+    }
+
+    /// The remedy an agent reads names the argument it actually sent. The CLI's own wording
+    /// of this same typed fact says "drop --wait", which is a flag no tool here takes.
+    #[test]
+    fn the_tool_wording_of_an_unserved_data_dir_names_wait_seconds_not_a_flag() {
+        let unserved = DataDirNotServed { data_dir: "./d1".to_string() };
+        let error = describe_unserved_data_dir(unserved.into()).to_string();
+
+        assert!(error.contains("./d1"), "{error}");
+        assert!(error.contains("wait_seconds"), "{error}");
+        assert!(!error.contains("--wait"), "{error}");
+    }
+
+    /// One typed fact reworded, not a catch-all - a `status` read failure inside the check
+    /// must not be relabelled as an unserved directory.
+    #[test]
+    fn the_tool_wording_leaves_any_other_error_alone() {
+        let error = describe_unserved_data_dir(anyhow::anyhow!("Job run 7 not found"));
+
+        assert_eq!(error.to_string(), "Job run 7 not found");
+    }
+
+    /// A warned result drops `structured_content` rather than carrying a run whose status
+    /// the warning contradicts - a client that reads only the structured value would
+    /// otherwise be handed `pending` with nothing saying it will never move.
+    #[test]
+    fn a_warned_result_carries_no_structured_content_and_still_leads_with_json() {
+        let result = job_run_result(job_run_fixture(), Some("nothing is serving it".to_string()));
+
+        assert!(result.structured_content.is_none(), "{:?}", result.structured_content);
+        assert_eq!(result.content.len(), 2);
+
+        let text = result.content[0].as_text().unwrap().text.as_str();
+        let parsed: serde_json::Value = serde_json::from_str(text).expect(text);
+        assert_eq!(parsed["status"], serde_json::json!("pending"));
+
+        assert_eq!(result.content[1].as_text().unwrap().text, "nothing is serving it");
+    }
+
+    /// The unwarned half of the same rule: nothing changes for the ordinary result, which
+    /// still carries the run as structured content beside the identical text.
+    #[test]
+    fn an_unwarned_result_still_carries_the_run_as_structured_content() {
+        let result = job_run_result(job_run_fixture(), None);
+
+        assert_eq!(result.content.len(), 1);
+        assert_eq!(result.structured_content.unwrap()["status"], serde_json::json!("pending"));
+    }
+
     /// `submit_job` without `job`, `file` or `yaml` at all deserializes fine - `params`
     /// alone would otherwise look like a fourth way in.
     #[test]
@@ -735,6 +936,24 @@ mod tests {
     #[test]
     fn an_empty_stream_is_returned_byte_identical() {
         assert_eq!(truncate_tail("", 0), "");
+    }
+
+    /// A pending `JobRun` with everything but its status filled with filler - what
+    /// `job_run_result`'s tests build against, standing in for a row `submit_job` would
+    /// otherwise have to seed a whole data directory to produce.
+    fn job_run_fixture() -> JobRun {
+        JobRun {
+            id: 1,
+            job_id: "job".to_string(),
+            job_name: "Job".to_string(),
+            job_description: String::new(),
+            parameters: sqlx::types::Json(BTreeMap::new()),
+            created_at: chrono::Utc::now(),
+            scheduled_at: None,
+            started_at: None,
+            finished_at: None,
+            status: JobRunStatus::Pending,
+        }
     }
 
     /// A `TaskRunAttempt` with everything but the id filled with filler - what
