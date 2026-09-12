@@ -26,23 +26,25 @@ Three discovery rules worth knowing:
 
 ## The `from_yaml` pattern
 
-Both models expose the same three-step constructor, and a new model should copy it verbatim:
+`ScheduleYaml::from_yaml` is the three-step constructor a new model should copy:
 
 ```rust
 pub fn from_yaml(path: &Path) -> anyhow::Result<Self> {
     let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read Job YAML from {}", path.display()))?;
+        .with_context(|| format!("Failed to read Schedule YAML from {}", path.display()))?;
 
-    let job: JobYaml = serde_yaml::from_str(&content)
-        .with_context(|| format!("Failed to parse Job YAML from {}", path.display()))?;
+    let schedule: ScheduleYaml = serde_yaml::from_str(&content)
+        .with_context(|| format!("Failed to parse Schedule YAML from {}", path.display()))?;
 
-    job.validate().with_context(|| format!("Invalid Job YAML at {}", path.display()))?;
+    schedule.validate().with_context(|| format!("Invalid Schedule YAML at {}", path.display()))?;
 
-    Ok(job)
+    Ok(schedule)
 }
 ```
 
 Every step names the file it failed on — that context is the only thing that tells a user *which* config file is broken, so keep it on anything new.
+
+`JobYaml` has outgrown that shape in two ways, and a new model only needs them if it shares the reasons. It splits the tail into `from_yaml_str(content, label)` so the MCP `submit_job` tool's inline `yaml` argument is parsed and message-formatted exactly as a file is, passing `"<inline yaml>"` where a path would go — which is why every message takes a `label` rather than a `path`. And it runs a fourth step, `validate_secret_env`, because `secret_env` can only come from a file and its self-consistency is worth checking once at parse rather than on every read.
 
 ## Serde conventions
 
