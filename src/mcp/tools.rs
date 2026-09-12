@@ -44,6 +44,12 @@ use super::McpServer;
 /// `get_task_output`'s default, applied per stream when the caller does not name one.
 const DEFAULT_MAX_BYTES: usize = 20_000;
 
+/// The most `get_task_output` will keep of one stream, whatever the caller asks for. Ten
+/// times the default, the ratio `MAX_JOB_RUN_LIMIT` keeps to its own: a caller that wants
+/// more than the default gets meaningfully more, and a command that spent an hour looping on
+/// a warning still cannot spend a whole context window on it.
+const MAX_STREAM_BYTES: usize = 200_000;
+
 /// `list_job_runs`'s default page, applied when the caller does not name one.
 const DEFAULT_JOB_RUN_LIMIT: i64 = 20;
 
@@ -126,7 +132,8 @@ pub struct GetTaskOutput {
     /// Only this task's attempts, by task id. Every task in the run otherwise.
     pub task: Option<String>,
     /// The most bytes to keep of each stream, counted from the end. Applied to stdout and
-    /// stderr independently, on every attempt. Defaults to 20000.
+    /// stderr independently, on every attempt. Defaults to 20000, and 200000 is the most
+    /// that will be kept however large a number is named.
     pub max_bytes: Option<usize>,
 }
 
@@ -190,7 +197,7 @@ impl McpServer {
     /// Show what each attempt of a job run wrote to stdout and stderr.
     #[tool]
     async fn get_task_output(&self, Parameters(args): Parameters<GetTaskOutput>) -> CallToolResult {
-        let max_bytes = args.max_bytes.unwrap_or(DEFAULT_MAX_BYTES);
+        let max_bytes = clamp_stream_bytes(args.max_bytes);
 
         match get_task_output_logs(&self.toolkit, args.job_run_id, args.task.as_deref(), max_bytes).await {
             Ok(logs) => success_json(logs),
@@ -460,8 +467,8 @@ fn unserved_directory_warning(data_dir: &str) -> Option<String> {
     }
 }
 
-/// `list_job_runs`'s bound, the counterpart of `clamp_wait_seconds`: of the three tools
-/// that can flood a context window, this was the one left unbounded.
+/// `list_job_runs`'s bound, beside `clamp_wait_seconds` and `clamp_stream_bytes`: every
+/// argument a caller can name that decides how much comes back has a ceiling.
 ///
 /// Anything below 1 means the default rather than "everything". `limit` is bound straight
 /// into SQL `LIMIT ?`, and SQLite reads a negative LIMIT as no limit at all - so `-1` asked
@@ -471,6 +478,23 @@ fn clamp_job_run_limit(limit: Option<i64>) -> i64 {
     match limit {
         Some(limit) if limit > 0 => limit.min(MAX_JOB_RUN_LIMIT),
         _ => DEFAULT_JOB_RUN_LIMIT,
+    }
+}
+
+/// `get_task_output`'s bound, and the one this pair was missing. Truncation is tail-biased
+/// and defaults to 20000 a stream, so the tool cannot flood a context window on its own -
+/// but the argument that sets that had no ceiling, and a caller naming a large enough number
+/// undid the default by asking. The whole of a log some command looped on all night is the
+/// case this exists for.
+///
+/// Anything below 1 means the default rather than "nothing". A stream cut to zero bytes is a
+/// marker line and no output, which answers nothing an agent asked - and unlike a negative
+/// `limit`, which SQLite read as no limit at all, it fails towards silence rather than
+/// towards everything.
+fn clamp_stream_bytes(max_bytes: Option<usize>) -> usize {
+    match max_bytes {
+        Some(max_bytes) if max_bytes > 0 => max_bytes.min(MAX_STREAM_BYTES),
+        _ => DEFAULT_MAX_BYTES,
     }
 }
 
@@ -815,6 +839,33 @@ mod tests {
     fn a_limit_at_or_below_the_cap_is_used_as_given() {
         assert_eq!(clamp_job_run_limit(Some(MAX_JOB_RUN_LIMIT)), MAX_JOB_RUN_LIMIT);
         assert_eq!(clamp_job_run_limit(Some(1)), 1);
+    }
+
+    /// The hole this clamp closes: the tail-biased default is what keeps a task's output
+    /// from filling a context window, and before this a caller could undo it by naming a
+    /// number larger than the log.
+    #[test]
+    fn a_stream_budget_above_the_cap_clamps_to_it() {
+        assert_eq!(clamp_stream_bytes(Some(50_000_000)), MAX_STREAM_BYTES);
+        assert_eq!(clamp_stream_bytes(Some(MAX_STREAM_BYTES + 1)), MAX_STREAM_BYTES);
+    }
+
+    #[test]
+    fn a_stream_budget_at_or_below_the_cap_is_used_as_given() {
+        assert_eq!(clamp_stream_bytes(Some(MAX_STREAM_BYTES)), MAX_STREAM_BYTES);
+        assert_eq!(clamp_stream_bytes(Some(500)), 500);
+    }
+
+    /// Zero asked for a marker line and no output at all, which answers nothing - so it
+    /// means the default, the way a non-positive `limit` does.
+    #[test]
+    fn a_zero_stream_budget_means_the_default() {
+        assert_eq!(clamp_stream_bytes(Some(0)), DEFAULT_MAX_BYTES);
+    }
+
+    #[test]
+    fn an_absent_stream_budget_means_the_default() {
+        assert_eq!(clamp_stream_bytes(None), DEFAULT_MAX_BYTES);
     }
 
     /// The remedy an agent reads names the argument it actually sent. The CLI's own wording
