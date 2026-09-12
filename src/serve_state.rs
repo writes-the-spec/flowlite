@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// serving. Nothing central: a data directory carries its own answer to "is this being
 /// served", so a directory that is moved or copied stays self-describing and no record
 /// anywhere else can disagree with it.
-pub const STATE_DIR: &str = ".flowlite";
+const STATE_DIR: &str = ".flowlite";
 
 
 /// What a running `serve` says about itself. Only ever read while the lock beside it is
@@ -38,11 +38,11 @@ pub enum ServeStatus {
 }
 
 
-pub fn state_dir(data_dir: &Path) -> PathBuf {
+fn state_dir(data_dir: &Path) -> PathBuf {
     data_dir.join(STATE_DIR)
 }
 
-pub fn lock_path(data_dir: &Path) -> PathBuf {
+fn lock_path(data_dir: &Path) -> PathBuf {
     state_dir(data_dir).join("serve.lock")
 }
 
@@ -198,7 +198,12 @@ pub fn write_state(data_dir: &Path, state: &ServeState) -> Result<()> {
 /// None for a file that is absent, or present but not yet readable as state. The second
 /// is not an error: a server caught mid-write has not finished starting, which is what
 /// `status` reports it as.
-pub fn read_state(data_dir: &Path) -> Result<Option<ServeState>> {
+///
+/// Private on purpose. The state file is not the answer to "is this served" - a process
+/// killed with SIGKILL leaves one behind and cannot hold the lock - so every reader goes
+/// through `status`, which asks the lock first and reads this only once the lock has
+/// proved somebody holds it.
+fn read_state(data_dir: &Path) -> Result<Option<ServeState>> {
 
     let path = state_path(data_dir);
 
