@@ -2,6 +2,9 @@
 name = "flowlite"
 version = "0.1.0"
 edition = "2024"
+# The LICENSE file, the README and THIRD_PARTY_LICENSES.md all say Zero-Clause BSD. This is
+# the one place a machine reads it.
+license = "0BSD"
 
 [dependencies]
 anyhow = "1.0.102"

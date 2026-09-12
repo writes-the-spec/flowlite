@@ -85,3 +85,40 @@ fn the_readme_prints_the_real_defaults() {
         wrong.join("\n"),
     );
 }
+
+/// The README shows `flowlite status` output, which prints the version the binary was
+/// built with. A release that bumps the version leaves those two lines describing the one
+/// before it - a small lie, in the part of the README a reader is most likely to compare
+/// against what their own terminal just said.
+#[test]
+fn the_readme_prints_the_current_version() {
+
+    let version = env!("CARGO_PKG_VERSION");
+    let readme = std::fs::read_to_string("README.md").unwrap();
+
+    let stale: Vec<_> = ["flowlite ", "\"version\":\""]
+        .into_iter()
+        .flat_map(|prefix| versions_after(&readme, prefix))
+        .filter(|found| found != version)
+        .collect();
+
+    assert!(
+        stale.is_empty(),
+        "The README shows a version this crate is not: {stale:?}, but Cargo.toml says \
+         {version}. The status examples print what the binary reports, so they have to move \
+         with it.",
+    );
+}
+
+/// Every `X.Y.Z` immediately following `prefix` in the text.
+fn versions_after(text: &str, prefix: &str) -> Vec<String> {
+    text.match_indices(prefix)
+        .filter_map(|(start, _)| {
+            let rest = &text[start + prefix.len()..];
+            let end = rest.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
+            let found = &rest[..end];
+
+            (found.matches('.').count() == 2 && !found.ends_with('.')).then(|| found.to_string())
+        })
+        .collect()
+}
