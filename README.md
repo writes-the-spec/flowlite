@@ -865,10 +865,11 @@ No port, no HTTP and nothing to start first: the client spawns the binary, talks
 over its stdio, and the process exits when the client closes stdin. `-D` / `--data-dir`
 names the directory, the same way every other command learns it.
 
-Six tools, each a projection of a command that already exists:
+Seven tools, each a projection of a command that already exists:
 
 | Tool | Answers |
 |---|---|
+| `init_data_dir` | Set this empty directory up with an example job and schedule. |
 | `list_jobs` | What jobs does this data directory declare? |
 | `submit_job` | Run this — and, with `wait_seconds`, how did it end? |
 | `list_job_runs` | What has run lately, by job and by status? |
@@ -877,7 +878,7 @@ Six tools, each a projection of a command that already exists:
 | `stop_job_run` | Stop run 42, and tell me what it settled to. |
 
 Each returns the JSON its `--json` twin prints, so an agent and a shell script reading one
-run read the same fields. Two differ, each for a stated reason.
+run read the same fields. Three differ, each for a stated reason.
 
 `get_task_output` differs only in length: it keeps the last `max_bytes` of each stream,
 20000 by default and 200000 at most, and says on a marker line how many bytes it dropped. A
@@ -891,6 +892,26 @@ one you can remove. `list_job_runs` bounds its page the same way, 20 runs by def
 way means an agent reads `.status` off the result instead of branching on which argument it
 sent — the same reason `job submit --json` reads the run back and prints it with and without
 `--wait`.
+
+`init_data_dir` has no `--json` twin to match, because `flowlite init` prints prose rather
+than rows — it is `serve`-shaped, not `job list`-shaped. It takes no arguments at all: the
+directory is the one `-D` named when the server was started, as it is for every other tool,
+so an agent cannot point it somewhere nobody asked for. Nothing is overwritten, and the
+result says which files it wrote and which were already there:
+
+```json
+{
+  "data_dir": "./data",
+  "files": [
+    { "path": "jobs/hello.yaml", "created": true },
+    { "path": "schedules/daily-hello.yaml", "created": true },
+    { "path": "config.toml", "created": false }
+  ]
+}
+```
+
+The job it writes is submittable on the next call — every tool seeds its own view of the
+data directory, so nothing has to be restarted first.
 
 `submit_job` names what to run exactly one of three ways:
 

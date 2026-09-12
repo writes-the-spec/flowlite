@@ -9,6 +9,7 @@
 //! its own remedy. `wait::DataDirNotServed` is the worked example.
 
 pub mod format;
+pub mod init;
 pub mod job;
 pub mod job_run;
 pub mod limits;

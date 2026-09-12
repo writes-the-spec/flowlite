@@ -239,7 +239,7 @@ fn initialize_names_the_server_and_its_version() {
 /// cut, is this cut's own: `stop_job_run` alongside the other five, and nothing else,
 /// named by `tools/list` - the full set the design promises.
 #[test]
-fn the_handshake_declares_tools_and_lists_the_six_tools() {
+fn the_handshake_declares_tools_and_lists_the_seven_tools() {
     let dir = data_dir("tools");
     let mut client = McpClient::start(&dir);
 
@@ -263,7 +263,15 @@ fn the_handshake_declares_tools_and_lists_the_six_tools() {
 
     assert_eq!(
         names,
-        vec!["get_job_run", "get_task_output", "list_job_runs", "list_jobs", "stop_job_run", "submit_job"],
+        vec![
+            "get_job_run",
+            "get_task_output",
+            "init_data_dir",
+            "list_job_runs",
+            "list_jobs",
+            "stop_job_run",
+            "submit_job",
+        ],
     );
 }
 
@@ -930,4 +938,73 @@ fn a_misspelled_argument_key_is_refused_naming_it() {
     assert_eq!(result["isError"], json!(true), "the misspelled key was accepted: {result}");
     assert!(tool_text(&result).contains("parmas"), "{}", tool_text(&result));
     assert!(tool_text(&result).contains("params"), "{}", tool_text(&result));
+}
+
+/// The tool half of `flowlite init`: an agent handed an empty data directory can lay the
+/// example job and schedule into it without a shell, and the job it wrote is submittable on
+/// the very next call - the same fresh-`mem` seeding that makes a late job file visible to
+/// `list_jobs`.
+#[test]
+fn init_data_dir_scaffolds_the_directory_and_then_lists_the_job_it_wrote() {
+    let dir = data_dir("init");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("init_data_dir", json!({}));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let written: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    let paths: Vec<&str> = written["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["path"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(paths, vec!["jobs/hello.yaml", "schedules/daily-hello.yaml", "config.toml"]);
+    assert!(written["files"].as_array().unwrap().iter().all(|file| file["created"] == json!(true)), "{written}");
+    assert_eq!(written["data_dir"], dir.display().to_string());
+
+    let jobs: Value = serde_json::from_str(tool_text(&client.call_tool("list_jobs", json!({})))).unwrap();
+    let job_ids: Vec<&str> = jobs.as_array().unwrap().iter().map(|job| job["job_id"].as_str().unwrap()).collect();
+
+    assert_eq!(job_ids, vec!["hello-world"], "the scaffolded job was not seeded: {jobs}");
+}
+
+/// Nothing is overwritten, and the result says so rather than silently reporting a write:
+/// an agent that called this twice must be able to tell that the second call changed
+/// nothing, or it has no way to know whose file it is looking at.
+#[test]
+fn a_second_init_data_dir_reports_every_file_as_kept() {
+    let dir = data_dir("init-twice");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    client.call_tool("init_data_dir", json!({}));
+    let result = client.call_tool("init_data_dir", json!({}));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let written: Value = serde_json::from_str(tool_text(&result)).unwrap();
+
+    assert!(
+        written["files"].as_array().unwrap().iter().all(|file| file["created"] == json!(false)),
+        "a second call reported a write: {written}",
+    );
+}
+
+/// The data directory is the one `-D` named at launch, as it is for every other tool, so
+/// the arguments object is empty and a key naming another path is a refusal rather than a
+/// directory scaffolded somewhere nobody asked for.
+#[test]
+fn init_data_dir_refuses_an_argument_naming_another_directory() {
+    let dir = data_dir("init-elsewhere");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("init_data_dir", json!({ "data_dir": "/tmp/somewhere-else" }));
+
+    assert_eq!(result["isError"], json!(true), "{result}");
 }
