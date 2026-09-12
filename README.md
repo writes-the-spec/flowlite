@@ -106,7 +106,7 @@ name: Nightly pipeline
 # A pasted five-field crontab line is rejected. This is 03:30:00 every day.
 cron: "0 30 3 * * *"
 # The zone the cron fields are read in, so the run does not drift with DST.
-timezone: Europe/Vienna
+timezone: Europe/Paris
 start_date: 2026-01-01    # nothing fires before this date; omit for "from now on"
 end_date: 2026-12-31      # nothing fires after it; omit for "forever"
 disabled: false           # true keeps the file and stops the firing
@@ -142,7 +142,7 @@ tasks:
     command: ./extract.sh
     env:
       # Overrides the job's TZ; PYTHONUNBUFFERED still comes from the job.
-      TZ: Europe/Vienna
+      TZ: Europe/Paris
     working_dir: /srv/etl
 ```
 
@@ -863,8 +863,11 @@ Each returns the JSON its `--json` twin prints, so an agent and a shell script r
 run read the same fields. Two differ, each for a stated reason.
 
 `get_task_output` differs only in length: it keeps the last `max_bytes` of each stream,
-20000 by default, and says on a marker line how many bytes it dropped. A terminal has a
-scrollback and a `| tail`; a context window has neither.
+20000 by default and 200000 at most, and says on a marker line how many bytes it dropped. A
+terminal has a scrollback and a `| tail`; a context window has neither, so asking for more
+than the cap gets the cap rather than an error — the default is a floor you can raise, not
+one you can remove. `list_job_runs` bounds its page the same way, 20 runs by default and
+200 at most.
 
 `stop_job_run` returns the whole run, waited or not, where `job-run stop --json` prints
 `{"job_run_id": 42, "stop_requested": true}` unless you passed `--wait`. One shape either
