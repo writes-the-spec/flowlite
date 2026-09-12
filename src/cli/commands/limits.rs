@@ -1,6 +1,6 @@
 use clap::Args;
 use crate::crud::CRUD;
-use crate::router::app::limits;
+use crate::shared::limits;
 use crate::toolkit::Toolkit;
 
 
@@ -90,7 +90,7 @@ pub fn limits_json(rows: &[limits::LimitRow]) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use crate::router::app::limits::LimitRow;
+    use crate::shared::limits::LimitRow;
     use super::*;
 
     fn sample_rows() -> Vec<LimitRow> {

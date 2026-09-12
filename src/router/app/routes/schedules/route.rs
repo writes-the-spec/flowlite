@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::crud::CRUD;
 use crate::crud::schedule::{SelectSchedulesData, SelectSchedulesDataFilter, SelectSchedulesDataSort};
 use crate::router::app::app_state::AppState;
-use crate::router::app::format;
+use crate::shared::format;
 
 pub struct ScheduleEntry {
     pub schedule_id: String,

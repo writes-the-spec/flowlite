@@ -9,11 +9,11 @@ use rmcp::schemars::{self, JsonSchema};
 use rmcp::{tool, tool_router};
 use serde::Deserialize;
 
-use crate::cli::commands::job_run::TaskRunAttemptLog;
 use crate::crud::task_run_attempt::TaskRunAttempt;
 use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStreams;
 use crate::crud::CRUD;
 use crate::mcp::McpServer;
+use crate::shared::job_run::TaskRunAttemptLog;
 use crate::toolkit::Toolkit;
 
 use super::result::{error_result, success_json};

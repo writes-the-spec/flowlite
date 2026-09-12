@@ -7,7 +7,7 @@ use crate::crud::CRUD;
 use crate::crud::schedule::{SelectSchedulesData, SelectSchedulesDataFilter, SelectSchedulesDataSort};
 use crate::crud::schedule_job::{ScheduleJob, SelectScheduleJobsData, SelectScheduleJobsDataFilter, SelectScheduleJobsDataSort};
 use crate::router::app::app_state::AppState;
-use crate::router::app::format;
+use crate::shared::format;
 
 pub struct ScheduleDisplay {
     pub schedule_id: String,

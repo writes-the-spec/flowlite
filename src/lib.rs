@@ -2,6 +2,7 @@ pub mod app_config;
 pub mod cli;
 pub mod mcp;
 pub mod router;
+pub mod shared;
 pub mod toolkit;
 pub mod crud;
 pub mod yaml_models;

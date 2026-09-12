@@ -7,7 +7,7 @@ use axum::response::{Html, IntoResponse};
 
 use crate::crud::CRUD;
 use crate::router::app::app_state::AppState;
-use crate::router::app::limits;
+use crate::shared::limits;
 
 /// The shape the panel template renders. `full` is decided once here (via
 /// `limits::is_full`) rather than as a `>=` comparison in the template, the same reason

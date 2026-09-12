@@ -5,10 +5,6 @@ use std::collections::BTreeMap;
 /// many it allows. `global` is a row of this same shape - reserving that key at load time
 /// (`AppConfig::load` rejects it in `[concurrency_limits]`) is what buys the uniform
 /// rendering below rather than a special case for the cap.
-///
-/// Lives on the router side, not in `cli/commands/limits.rs`, so the dashboard panel can
-/// share it without the CLI importing from the CLI - `cli/commands/status.rs` already
-/// pulls its rendering from `router::app::format` for the same reason.
 pub struct LimitRow {
     pub name: String,
     pub in_use: u32,

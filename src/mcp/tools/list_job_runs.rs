@@ -8,10 +8,10 @@ use rmcp::schemars::{self, JsonSchema};
 use rmcp::{tool, tool_router};
 use serde::Deserialize;
 
-use crate::cli::commands::job_run::parse_job_run_status;
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
 use crate::crud::CRUD;
 use crate::mcp::McpServer;
+use crate::shared::job_run::parse_job_run_status;
 use crate::toolkit::Toolkit;
 
 use super::result::{error_result, success_json};

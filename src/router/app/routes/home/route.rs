@@ -9,7 +9,7 @@ use crate::crud::CRUD;
 use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
 use crate::crud::job_run::JobRunStatus;
 use crate::router::app::app_state::AppState;
-use crate::router::app::format;
+use crate::shared::format;
 
 pub const ALL_STATUSES: [JobRunStatus; 8] = JobRunStatus::ALL;
 

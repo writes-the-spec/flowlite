@@ -1,6 +1,6 @@
 //! The bounded wait shared by `submit_job`, `get_job_run` and `stop_job_run`.
 //!
-//! `wait_for_job_run` (`src/cli/commands/job.rs`) already polls a run at the orchestrator's
+//! `wait_for_job_run` (`src/shared/wait.rs`) already polls a run at the orchestrator's
 //! own interval until it finishes. This wraps that same loop in `tokio::time::timeout`
 //! rather than rewriting it, so the polling loop itself gains no notion of a deadline. On
 //! elapse the run is read once more and returned unfinished, never as an error: "still
@@ -15,9 +15,10 @@
 
 use std::time::Duration;
 
-use crate::cli::commands::job::{select_job_run, wait_for_job_run};
 use crate::crud::job_run::JobRun;
 use crate::crud::CRUD;
+use crate::shared::job_run::select_job_run;
+use crate::shared::wait::wait_for_job_run;
 
 /// The most a caller may ask to wait. The client's own call timeout, not this server's, is
 /// what a longer wait would actually run into - see the design's "Waiting, bounded".

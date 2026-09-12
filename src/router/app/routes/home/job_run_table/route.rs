@@ -10,7 +10,7 @@ use crate::crud::CRUD;
 use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
 use crate::router::app::app_state::AppState;
-use crate::router::app::format;
+use crate::shared::format;
 use crate::router::app::routes::home::route::{HomeQuery, Pagination, runs_href};
 
 pub struct JobRunDisplay {

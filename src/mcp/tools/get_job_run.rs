@@ -9,11 +9,11 @@ use rmcp::schemars::{self, JsonSchema};
 use rmcp::{tool, tool_router};
 use serde::Deserialize;
 
-use crate::cli::commands::job::ensure_data_dir_is_served;
-use crate::cli::commands::job_run::JobRunDetail;
 use crate::crud::CRUD;
 use crate::mcp::wait::{clamp_wait_seconds, wait_for_settled_job_run};
 use crate::mcp::McpServer;
+use crate::shared::job_run::JobRunDetail;
+use crate::shared::wait::ensure_data_dir_is_served;
 use crate::toolkit::Toolkit;
 
 use super::result::{describe_unserved_data_dir, error_result, success_json};

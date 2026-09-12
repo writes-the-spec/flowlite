@@ -5,7 +5,7 @@ use crate::crud::task_run::{TaskRun, TaskRunStatus};
 use crate::crud::task_run_attempt::TaskRunAttempt;
 use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStreams;
 use crate::notifications::slack;
-use crate::router::app::format;
+use crate::shared::format;
 
 /// What one notification says: the two parts every channel has some form of - a line
 /// naming it and the text itself - and the same thing rendered again for the channels

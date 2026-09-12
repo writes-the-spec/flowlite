@@ -11,7 +11,7 @@ use crate::crud::job_run::{JobRunStatus, SelectJobRunsData, SelectJobRunsDataFil
 use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
 use crate::crud::task_run::{TaskRun, SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRunStatus};
 use crate::router::app::app_state::AppState;
-use crate::router::app::format;
+use crate::shared::format;
 
 pub struct JobRunDisplay {
     pub id: i64,

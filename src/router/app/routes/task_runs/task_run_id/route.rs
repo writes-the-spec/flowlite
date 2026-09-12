@@ -9,7 +9,7 @@ use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRu
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
 use crate::crud::task_run_attempt_output::{group_task_run_attempt_output, SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort, TaskRunAttemptOutputStreams};
 use crate::router::app::app_state::AppState;
-use crate::router::app::format;
+use crate::shared::format;
 
 pub struct TaskRunDisplay {
     pub id: i64,

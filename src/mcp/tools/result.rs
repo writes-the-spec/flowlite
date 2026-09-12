@@ -7,9 +7,9 @@ use std::path::Path;
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde::Serialize;
 
-use crate::cli::commands::job::DataDirNotServed;
 use crate::crud::job_run::JobRun;
 use crate::serve_state::{status, ServeStatus};
+use crate::shared::wait::DataDirNotServed;
 
 /// The tool result for a value whose JSON is already the fact in question: the same
 /// pretty-printed text `--json` prints, as the text content every client can read, and the
