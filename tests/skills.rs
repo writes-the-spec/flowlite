@@ -231,3 +231,31 @@ fn columns(sql: &str) -> Vec<String> {
         .collect()
 }
 
+
+/// A skill-eval file tests whether one skill's description gets it loaded, so it is named
+/// for that skill. `fc6e80f` deleted the job and task skills and left their evals behind:
+/// forty queries measuring the triggering of a description that no longer exists, and whose
+/// negative cases had become wrong - several named what is now squarely the entities skill's
+/// territory.
+#[test]
+fn every_skill_eval_names_a_skill_that_exists() {
+
+    let mut orphans = Vec::new();
+
+    for file in files_under(Path::new(".claude/skill-evals"), "json") {
+        let skill = file.file_stem().unwrap().to_string_lossy().to_string();
+
+        if !Path::new(".claude/skills").join(&skill).join("SKILL.md").exists() {
+            orphans.push(skill);
+        }
+    }
+
+    orphans.sort();
+
+    assert!(
+        orphans.is_empty(),
+        "A skill-eval names no skill: {orphans:?}\n\nRename it with the skill, fold its \
+         queries into the eval that covers that ground now, or delete it. Its labels were \
+         written against a description that is gone.",
+    );
+}

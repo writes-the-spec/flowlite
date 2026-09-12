@@ -1,0 +1,82 @@
+[
+  {
+    "query": "add a webhook channel alongside email and slack",
+    "should_trigger": true
+  },
+  {
+    "query": "why did my notification close as skipped",
+    "should_trigger": true
+  },
+  {
+    "query": "where does the message a failure email sends get built",
+    "should_trigger": true
+  },
+  {
+    "query": "a job asks for slack but nothing is configured - what happens",
+    "should_trigger": true
+  },
+  {
+    "query": "how does one notification row become a delivered message",
+    "should_trigger": true
+  },
+  {
+    "query": "the slack post returned 200 but nothing arrived",
+    "should_trigger": true
+  },
+  {
+    "query": "should the message html and the slack blocks be separate renderers",
+    "should_trigger": true
+  },
+  {
+    "query": "how do i test a real send without hitting slack",
+    "should_trigger": true
+  },
+  {
+    "query": "a run failed and two people should hear about it, how many rows",
+    "should_trigger": true
+  },
+  {
+    "query": "what bounds how much task output a message carries",
+    "should_trigger": true
+  },
+  {
+    "query": "how do i add a column to task_run_attempt",
+    "should_trigger": false
+  },
+  {
+    "query": "the dashboard should refresh every second",
+    "should_trigger": false
+  },
+  {
+    "query": "add an mcp tool that lists schedules",
+    "should_trigger": false
+  },
+  {
+    "query": "why is the cron read in the schedule's own zone",
+    "should_trigger": false
+  },
+  {
+    "query": "what does the job run dispatcher check before starting",
+    "should_trigger": false
+  },
+  {
+    "query": "where do i put something the cli and the mcp server share",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i write a multistatement crud method",
+    "should_trigger": false
+  },
+  {
+    "query": "my template links an asset that 404s",
+    "should_trigger": false
+  },
+  {
+    "query": "does job submit publish a signal",
+    "should_trigger": false
+  },
+  {
+    "query": "what is the default page size",
+    "should_trigger": false
+  }
+]

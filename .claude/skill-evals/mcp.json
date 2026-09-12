@@ -1,0 +1,82 @@
+[
+  {
+    "query": "add a tool that lists schedules to the mcp server",
+    "should_trigger": true
+  },
+  {
+    "query": "how do i register a new #[tool] so the client actually sees it",
+    "should_trigger": true
+  },
+  {
+    "query": "my mcp client says parse error and names nothing, what did i print",
+    "should_trigger": true
+  },
+  {
+    "query": "should a tool argument struct deny unknown fields",
+    "should_trigger": true
+  },
+  {
+    "query": "how does a tool return an error the model can act on rather than a protocol error",
+    "should_trigger": true
+  },
+  {
+    "query": "why does every tool call open its own connection with a fresh mem",
+    "should_trigger": true
+  },
+  {
+    "query": "what bounds wait_seconds and where is the clamp",
+    "should_trigger": true
+  },
+  {
+    "query": "the tool result needs to carry both text and structured content, whats the convention",
+    "should_trigger": true
+  },
+  {
+    "query": "an agent asked for a megabyte of task output, what actually comes back",
+    "should_trigger": true
+  },
+  {
+    "query": "where do i put the rationale for a tool - the doc comment or a normal comment?",
+    "should_trigger": true
+  },
+  {
+    "query": "add a --json flag to job-run logs",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i write an insert that fans out into several child rows",
+    "should_trigger": false
+  },
+  {
+    "query": "the dashboard page size is stuck at 25",
+    "should_trigger": false
+  },
+  {
+    "query": "what does Skipped mean at the job-run level",
+    "should_trigger": false
+  },
+  {
+    "query": "which migration directory does a new table go in",
+    "should_trigger": false
+  },
+  {
+    "query": "how does the scheduler decide a schedule is due",
+    "should_trigger": false
+  },
+  {
+    "query": "my task run attempt is Running but the process died",
+    "should_trigger": false
+  },
+  {
+    "query": "where do smtp credentials belong",
+    "should_trigger": false
+  },
+  {
+    "query": "write a test that needs a seeded mem database",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i stop a run from the ui without a cancel status",
+    "should_trigger": false
+  }
+]

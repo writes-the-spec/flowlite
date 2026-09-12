@@ -1,0 +1,82 @@
+[
+  {
+    "query": "add a page at /widgets to the dashboard",
+    "should_trigger": true
+  },
+  {
+    "query": "how do i wire an htmx partial that refreshes itself",
+    "should_trigger": true
+  },
+  {
+    "query": "my template renders 'Error rendering template' and i cant see why",
+    "should_trigger": true
+  },
+  {
+    "query": "where should i format a duration - in the handler or in the html",
+    "should_trigger": true
+  },
+  {
+    "query": "how does a route get a CRUD, do i build one in the handler",
+    "should_trigger": true
+  },
+  {
+    "query": "a form post needs to change a run and then show the result page",
+    "should_trigger": true
+  },
+  {
+    "query": "why does a route never return Result",
+    "should_trigger": true
+  },
+  {
+    "query": "the schedules page needs a new column, what do i touch",
+    "should_trigger": true
+  },
+  {
+    "query": "should this route publish a signal after it writes",
+    "should_trigger": true
+  },
+  {
+    "query": "where does the dashboard read jobs from if they live in mem",
+    "should_trigger": true
+  },
+  {
+    "query": "add a job-run rerun subcommand to the cli",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i bound the output an agent tool returns",
+    "should_trigger": false
+  },
+  {
+    "query": "which entity file does a new select method belong in",
+    "should_trigger": false
+  },
+  {
+    "query": "the cron expression takes six fields or five?",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i reset a dev database after editing a migration",
+    "should_trigger": false
+  },
+  {
+    "query": "what wakes a poller besides its interval",
+    "should_trigger": false
+  },
+  {
+    "query": "where do i put a helper the cli and the mcp tool share",
+    "should_trigger": false
+  },
+  {
+    "query": "smtp is configured but nothing was delivered",
+    "should_trigger": false
+  },
+  {
+    "query": "what happens to a running attempt when flowlite is sigkilled",
+    "should_trigger": false
+  },
+  {
+    "query": "how does a secret reach a spawned command",
+    "should_trigger": false
+  }
+]

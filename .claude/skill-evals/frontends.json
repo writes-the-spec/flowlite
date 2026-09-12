@@ -1,0 +1,82 @@
+[
+  {
+    "query": "where should a helper live that both the cli command and the mcp tool need",
+    "should_trigger": true
+  },
+  {
+    "query": "can src/mcp import ensure_data_dir_is_served straight from the cli command file?",
+    "should_trigger": true
+  },
+  {
+    "query": "the frontend_boundaries test started failing after i moved a function, what did i break",
+    "should_trigger": true
+  },
+  {
+    "query": "my new mcp tool wants the same status parser the --status flag uses",
+    "should_trigger": true
+  },
+  {
+    "query": "i want the dashboard and job-run list to spell a status the same way, where does that go",
+    "should_trigger": true
+  },
+  {
+    "query": "what actually belongs in src/shared and what should stay in the frontend",
+    "should_trigger": true
+  },
+  {
+    "query": "if frontends cant import each other why does serve.rs import create_router",
+    "should_trigger": true
+  },
+  {
+    "query": "two callers need this refusal but they word it differently - typed error or string?",
+    "should_trigger": true
+  },
+  {
+    "query": "is it ok to re-export format from router::app so the cli keeps compiling",
+    "should_trigger": true
+  },
+  {
+    "query": "does the notification service count as a frontend for the no-import rule",
+    "should_trigger": true
+  },
+  {
+    "query": "add a new subcommand under job-run that prints the last attempt",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i add a nullable column to task_run",
+    "should_trigger": false
+  },
+  {
+    "query": "the scheduler fired twice right after a restart, is that expected",
+    "should_trigger": false
+  },
+  {
+    "query": "write me a select_widgets with a name_like filter and a row_id sort",
+    "should_trigger": false
+  },
+  {
+    "query": "why is my page rendering 'Error rendering template'",
+    "should_trigger": false
+  },
+  {
+    "query": "what does the attempt monitor do when the child process is gone from the map",
+    "should_trigger": false
+  },
+  {
+    "query": "restyle this match arm, the nesting is out of hand",
+    "should_trigger": false
+  },
+  {
+    "query": "how long does a poller wait before restarting after a select error",
+    "should_trigger": false
+  },
+  {
+    "query": "my config.toml key seems to do nothing at all",
+    "should_trigger": false
+  },
+  {
+    "query": "does a rerun read the yaml again or replay the old snapshot",
+    "should_trigger": false
+  }
+]

@@ -1,0 +1,82 @@
+[
+  {
+    "query": "i want a new background service, what do i implement",
+    "should_trigger": true
+  },
+  {
+    "query": "my service loops far more often than it should",
+    "should_trigger": true
+  },
+  {
+    "query": "one bad row seems to stop everything else being handled",
+    "should_trigger": true
+  },
+  {
+    "query": "does a wake-up published while the poller was busy get lost",
+    "should_trigger": true
+  },
+  {
+    "query": "what restarts a service after its select fails, and how long does it wait",
+    "should_trigger": true
+  },
+  {
+    "query": "should this new work go in handle or in the loop itself",
+    "should_trigger": true
+  },
+  {
+    "query": "how does a service know another service wrote a row",
+    "should_trigger": true
+  },
+  {
+    "query": "what does row_context get used for",
+    "should_trigger": true
+  },
+  {
+    "query": "my service never wakes even though something published",
+    "should_trigger": true
+  },
+  {
+    "query": "is the poll interval a constant or configurable",
+    "should_trigger": true
+  },
+  {
+    "query": "add a new column to the job_run table",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i render a duration in the dashboard",
+    "should_trigger": false
+  },
+  {
+    "query": "what does the mcp submit_job tool do with inline yaml",
+    "should_trigger": false
+  },
+  {
+    "query": "where do i put a function the cli and the router share",
+    "should_trigger": false
+  },
+  {
+    "query": "why is my secret not reaching the command",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i write an update with a nullable column",
+    "should_trigger": false
+  },
+  {
+    "query": "the README says 20000 bytes, where is that enforced",
+    "should_trigger": false
+  },
+  {
+    "query": "which zone is a cron expression read in",
+    "should_trigger": false
+  },
+  {
+    "query": "does a rerun copy the original parameters",
+    "should_trigger": false
+  },
+  {
+    "query": "add a LICENSE header to every file",
+    "should_trigger": false
+  }
+]

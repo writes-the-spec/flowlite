@@ -1,0 +1,82 @@
+[
+  {
+    "query": "i need a database in this unit test",
+    "should_trigger": true
+  },
+  {
+    "query": "how do i build a dispatcher with a secret in a test",
+    "should_trigger": true
+  },
+  {
+    "query": "my test passes alone and fails in a full run",
+    "should_trigger": true
+  },
+  {
+    "query": "how do i assert on what a slack send actually posted",
+    "should_trigger": true
+  },
+  {
+    "query": "should this be a unit test or go in tests/",
+    "should_trigger": true
+  },
+  {
+    "query": "how do i make an attempt look older than it is",
+    "should_trigger": true
+  },
+  {
+    "query": "why does TestDb leave the mem schema unmigrated",
+    "should_trigger": true
+  },
+  {
+    "query": "two tests are fighting over an environment variable",
+    "should_trigger": true
+  },
+  {
+    "query": "is there a helper for building an env map in a test",
+    "should_trigger": true
+  },
+  {
+    "query": "how do i get a task run attempt into Running for a monitor test",
+    "should_trigger": true
+  },
+  {
+    "query": "add a --wait flag to job-run stop",
+    "should_trigger": false
+  },
+  {
+    "query": "where does the smtp password belong",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i add a section to the dashboard masthead",
+    "should_trigger": false
+  },
+  {
+    "query": "what does the scheduler do with a disabled schedule",
+    "should_trigger": false
+  },
+  {
+    "query": "my migration checksum changed and serve refuses to start",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i bound what an agent tool returns",
+    "should_trigger": false
+  },
+  {
+    "query": "which module owns the polling loop",
+    "should_trigger": false
+  },
+  {
+    "query": "why does the cli not import the router any more",
+    "should_trigger": false
+  },
+  {
+    "query": "add a notification channel for webhooks",
+    "should_trigger": false
+  },
+  {
+    "query": "what happens to a pending run when the job is deleted",
+    "should_trigger": false
+  }
+]

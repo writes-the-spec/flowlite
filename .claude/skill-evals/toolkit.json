@@ -1,0 +1,82 @@
+[
+  {
+    "query": "i need a connection and a pool for a new command",
+    "should_trigger": true
+  },
+  {
+    "query": "no such table: mem.job - what did i forget",
+    "should_trigger": true
+  },
+  {
+    "query": "when should something call with_fresh_mem",
+    "should_trigger": true
+  },
+  {
+    "query": "database schema is locked: mem, where does that come from",
+    "should_trigger": true
+  },
+  {
+    "query": "why does serve share one mem and the mcp server not",
+    "should_trigger": true
+  },
+  {
+    "query": "who runs the migrations and when",
+    "should_trigger": true
+  },
+  {
+    "query": "my seeded jobs vanish partway through the command",
+    "should_trigger": true
+  },
+  {
+    "query": "what is MIGRATION_LOCK actually protecting against",
+    "should_trigger": true
+  },
+  {
+    "query": "should a new service take a Toolkit or an Arc<Toolkit>",
+    "should_trigger": true
+  },
+  {
+    "query": "where does the current timestamp come from when crud inserts a row",
+    "should_trigger": true
+  },
+  {
+    "query": "add a column to the task table",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i name a new migration file",
+    "should_trigger": false
+  },
+  {
+    "query": "the run list should default to 50 rows",
+    "should_trigger": false
+  },
+  {
+    "query": "write a tool that stops a job run and waits",
+    "should_trigger": false
+  },
+  {
+    "query": "how does a job's env reach the spawned process",
+    "should_trigger": false
+  },
+  {
+    "query": "why did the notification close as skipped",
+    "should_trigger": false
+  },
+  {
+    "query": "add a --status filter to job-run list",
+    "should_trigger": false
+  },
+  {
+    "query": "what does the poller do when one row fails to handle",
+    "should_trigger": false
+  },
+  {
+    "query": "which template does the task run page use",
+    "should_trigger": false
+  },
+  {
+    "query": "a second serve on the same directory is refused - where",
+    "should_trigger": false
+  }
+]

@@ -1,0 +1,82 @@
+[
+  {
+    "query": "how does flowlite know whether a directory is being served",
+    "should_trigger": true
+  },
+  {
+    "query": "a killed server still shows as up",
+    "should_trigger": true
+  },
+  {
+    "query": "why is a second serve on the same data directory refused",
+    "should_trigger": true
+  },
+  {
+    "query": "what is .flowlite/serve.lock for",
+    "should_trigger": true
+  },
+  {
+    "query": "my ServeLock releases immediately and i dont know why",
+    "should_trigger": true
+  },
+  {
+    "query": "can status be asked on a read-only mount",
+    "should_trigger": true
+  },
+  {
+    "query": "what does Starting mean as opposed to Up",
+    "should_trigger": true
+  },
+  {
+    "query": "where does the pid and port a running server reports come from",
+    "should_trigger": true
+  },
+  {
+    "query": "should a wait check whether the directory is served first",
+    "should_trigger": true
+  },
+  {
+    "query": "is there cleanup of serve.json on shutdown",
+    "should_trigger": true
+  },
+  {
+    "query": "add a new mcp tool for listing schedules",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i seed a job into mem for a test",
+    "should_trigger": false
+  },
+  {
+    "query": "what does the attempt reader do with a huge stdout",
+    "should_trigger": false
+  },
+  {
+    "query": "which file declares the ui page size default",
+    "should_trigger": false
+  },
+  {
+    "query": "write the select for job runs filtered by status",
+    "should_trigger": false
+  },
+  {
+    "query": "my template variable is undefined and the element is unstyled",
+    "should_trigger": false
+  },
+  {
+    "query": "how many retries does a task get by default",
+    "should_trigger": false
+  },
+  {
+    "query": "the entities map does not mention a column i added",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i stop the cli importing from the router",
+    "should_trigger": false
+  },
+  {
+    "query": "what wakes the notification service",
+    "should_trigger": false
+  }
+]

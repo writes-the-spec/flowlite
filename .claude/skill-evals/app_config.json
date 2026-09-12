@@ -1,0 +1,82 @@
+[
+  {
+    "query": "add a [metrics] section to config.toml",
+    "should_trigger": true
+  },
+  {
+    "query": "where does the default for max_running_attempts live",
+    "should_trigger": true
+  },
+  {
+    "query": "i set a key in config.toml and nothing changed",
+    "should_trigger": true
+  },
+  {
+    "query": "should this new setting be an Option or have a default",
+    "should_trigger": true
+  },
+  {
+    "query": "how do i set the slack token without putting it in the file",
+    "should_trigger": true
+  },
+  {
+    "query": "why is [smtp] an Option when everything else has a default",
+    "should_trigger": true
+  },
+  {
+    "query": "where is the reserved 'global' concurrency limit refused",
+    "should_trigger": true
+  },
+  {
+    "query": "a duration setting - seconds as a number or a Duration?",
+    "should_trigger": true
+  },
+  {
+    "query": "does a config file naming one key lose all the other defaults",
+    "should_trigger": true
+  },
+  {
+    "query": "what stops a debug print from dumping every secret",
+    "should_trigger": true
+  },
+  {
+    "query": "add a timezone field to the schedule yaml model",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i declare that task-b runs after task-a",
+    "should_trigger": false
+  },
+  {
+    "query": "write the migration for a new job_run_note table",
+    "should_trigger": false
+  },
+  {
+    "query": "the mcp tool should accept a limit argument",
+    "should_trigger": false
+  },
+  {
+    "query": "why did my page stop being styled",
+    "should_trigger": false
+  },
+  {
+    "query": "what does the task run dispatcher do with a Pending row",
+    "should_trigger": false
+  },
+  {
+    "query": "how do i assert on what a service wrote in a test",
+    "should_trigger": false
+  },
+  {
+    "query": "can the cli import the router's format module",
+    "should_trigger": false
+  },
+  {
+    "query": "my schedule fires an hour late in summer",
+    "should_trigger": false
+  },
+  {
+    "query": "which statuses count as finished",
+    "should_trigger": false
+  }
+]
