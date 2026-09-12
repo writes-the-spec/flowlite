@@ -57,7 +57,7 @@ impl CRUD {
     /// acquires a connection first (`let mut conn = conn_pool.acquire().await?;`). The
     /// skill's own warning is exactly what an earlier version of this method hit: generic
     /// over a single `Acquire<'e>` lifetime, it could no longer be proven `Send` from
-    /// inside an rmcp `#[tool]` fn (task 3's `src/mcp/tools.rs`), which needs that bound to
+    /// inside an rmcp `#[tool]` fn (task 3's `src/mcp/tools/`), which needs that bound to
     /// box its future. This signature is the one the skill already prescribes for it.
     pub async fn init(&self, conn: &mut SqliteConnection) -> anyhow::Result<u64> {
         let data_dir = PathBuf::from(&self.toolkit.app_config.data_dir);

@@ -26,10 +26,10 @@ pub struct Toolkit {
 /// Serializes every schema migration this process runs, disk or memory.
 ///
 /// Discovered while building the MCP `submit_job` tool's concurrency test (the regression
-/// test for `with_fresh_mem` itself, in `src/mcp/tools.rs`). `with_fresh_mem` gives each
-/// call a `mem` name nothing else has, so on that path no two concurrent calls share a
-/// cache and the one object they still share is the `flowlite.db` *file* - which is what
-/// races there. `serve` is the other path and shares more: its pool attaches one
+/// test for `with_fresh_mem` itself, in `src/mcp/tools/submit_job.rs`). `with_fresh_mem`
+/// gives each call a `mem` name nothing else has, so on that path no two concurrent calls
+/// share a cache and the one object they still share is the `flowlite.db` *file* - which
+/// is what races there. `serve` is the other path and shares more: its pool attaches one
 /// `cache=shared` `mem` for the whole process, so two of its connections genuinely do
 /// share a cache, and migrating one database while a racing connection holds the other
 /// open is where `SQLITE_LOCKED_SHAREDCACHE` ("database schema is locked") was observed.

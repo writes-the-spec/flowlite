@@ -80,7 +80,7 @@ pub struct JobRunRerunCmd {
 /// A run and the task runs under it, flattened so that `.status` reads off the run itself
 /// - the same field name `job submit --json` prints, rather than one nested a level down.
 ///
-/// `pub(crate)` rather than private: the MCP `get_job_run` tool (`src/mcp/tools.rs`)
+/// `pub(crate)` rather than private: the MCP `get_job_run` tool (`src/mcp/tools/`)
 /// prints the identical shape and imports this rather than declaring its own.
 #[derive(Serialize)]
 pub(crate) struct JobRunDetail {
@@ -319,7 +319,7 @@ impl JobRunRerunCmd {
 /// A settled run is refused rather than accepted: its row would never be read, and a
 /// caller told the stop succeeded would have been told something untrue.
 ///
-/// `pub(crate)` rather than private: the MCP `stop_job_run` tool (`src/mcp/tools.rs`)
+/// `pub(crate)` rather than private: the MCP `stop_job_run` tool (`src/mcp/tools/`)
 /// writes the same row this command does, ahead of its own optional wait.
 pub(crate) async fn stop_job_run(
     crud: &CRUD,
@@ -482,7 +482,7 @@ fn print_task_run_attempt(
 /// Derived from `JobRunStatus::ALL` rather than matched by hand: a status added to the
 /// enum reaches this parser and its error message without anyone remembering to come here.
 ///
-/// `pub(crate)` so the MCP `list_job_runs` tool (`src/mcp/tools.rs`) parses `status`
+/// `pub(crate)` so the MCP `list_job_runs` tool (`src/mcp/tools/`) parses `status`
 /// through the identical words this CLI flag accepts, rather than a second spelling.
 pub(crate) fn parse_job_run_status(raw: &str) -> Result<JobRunStatus, String> {
 

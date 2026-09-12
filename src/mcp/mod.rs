@@ -14,7 +14,7 @@ mod wait;
 /// It holds an `Arc<Toolkit>` and nothing mutable, so rmcp is free to run calls
 /// concurrently: each tool will open its own connection rather than share a pool.
 ///
-/// `toolkit` is private rather than `pub`: only `tools.rs`, a child module, reads it now,
+/// `toolkit` is private rather than `pub`: only the tools, in child modules, read it now,
 /// and a private field says so.
 pub struct McpServer {
     toolkit: Arc<Toolkit>,
@@ -22,8 +22,9 @@ pub struct McpServer {
 }
 
 /// This block keeps `allow_empty` because it still declares no `#[tool]` fn of its own -
-/// the six tools live in `tools.rs`'s own `#[tool_router(router = tools_router)]` block,
-/// composed below. The attribute is a compile error on an empty block without it.
+/// the six tools live one to a file under `tools/`, each with its own `#[tool_router]`
+/// block, which `tools/mod.rs`'s `tools_router` adds together for the composition below.
+/// The attribute is a compile error on an empty block without it.
 #[tool_router(allow_empty)]
 impl McpServer {
 
