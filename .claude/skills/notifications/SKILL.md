@@ -77,7 +77,7 @@ A channel with nothing configured is `None` rather than absent, and asking for i
 2. A module beside [slack.rs](../../../src/notifications/slack.rs) with its own `send` and `max_output_bytes`.
 3. Its config section on `AppConfig`, and a field on `NotificationChannels` built in `from_config`.
 4. The arms the compiler now demands in `send` and `max_output_bytes`.
-5. A field on `JobYamlNotify`, and its line in `job_notify_recipients` ([crud.rs](../../../src/crud/crud.rs)) — the one place the YAML's per-channel fields become the `channel -> recipients` map the job row stores, once per notify block. `job_run_notification_definitions` in [misc.rs](../../../src/crud/multistatements/misc.rs) walks those maps and needs no change.
+5. A field on `JobYamlNotify`, and its line in `job_notify_recipients` ([crud.rs](../../../src/crud/crud.rs)) — the one place the YAML's per-channel fields become the `channel -> recipients` map the job row stores, once per notify block. `job_run_notification_definitions` in [job_run_definition.rs](../../../src/crud/multistatements/job_run_definition.rs) walks those maps and needs no change.
 6. The arm the compiler demands in `CRUD::validate_job_notifications`, saying which config section the channel needs to work at all. It is checked once per block, so nothing there is per-ending either.
 
 Steps 4 and 6 are the point of the enum: a channel cannot be added without saying both how to deliver it and what makes it deliverable, because neither match compiles until it does.

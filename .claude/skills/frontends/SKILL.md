@@ -61,6 +61,6 @@ File names mirror `src/crud/` and the `entities` skill, so a job-run thing is in
 - **No frontend imports another.** `crate::cli::`, `crate::mcp::` and `crate::router::` never appear in the other two directories, except the three `CARVE_OUTS` lines.
 - **Non-frontend modules may import `src/shared/` freely.** [src/notifications/message.rs](../../../src/notifications/message.rs) uses `shared::format` to spell a status; that is the module working as intended, not a violation.
 - **`src/shared/` imports no frontend.** It sits under all three. A shared item that needs something from `src/router/` is misplaced, or the thing it needs is what should have moved.
-- **Shared raises typed values, frontends word the sentence.** See `DataDirNotServed` above and `JobIdAlreadyInstalled` in [src/crud/multistatements/misc.rs](../../../src/crud/multistatements/misc.rs) for the same pattern one layer down.
+- **Shared raises typed values, frontends word the sentence.** See `DataDirNotServed` above and `JobIdAlreadyInstalled` in [src/crud/multistatements/ad_hoc_job.rs](../../../src/crud/multistatements/ad_hoc_job.rs) for the same pattern one layer down.
 - **An MCP tool mirrors the matching CLI command's `--json` branch by sharing its shape, not by importing it.** `JobRunDetail` is in `src/shared/`, so `job-run get --json` and the `get_job_run` tool print the same fields without either one reaching into the other. See the `mcp` skill.
 - Design note: [docs/2026-09-12-frontend-boundaries-design.md](../../../docs/2026-09-12-frontend-boundaries-design.md).
