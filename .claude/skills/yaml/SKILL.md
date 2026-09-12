@@ -49,7 +49,7 @@ Every step names the file it failed on — that context is the only thing that t
 ## Serde conventions
 
 - **A field without `#[serde(default)]` is required**, and a missing one fails startup. `Option<T>` fields are the exception: serde fills them with `None`.
-- **A field whose default is configurable is `Option<T>`**, filled in by `CRUD::init` from `[job_defaults]` or `[schedule_defaults]` — `timeout`, `max_retries`, `retry_delay`, `max_parallel_runs`, `timezone`. Don't write the fallback into a `#[serde(default = ...)]`; the model's job is to say what the file declared. (There is no longer a `defaults.rs`: its last helper went when `timezone` became configurable.)
+- **A field whose default is configurable is `Option<T>`**, filled in by `CRUD::init` from `[job_defaults]` or `[schedule_defaults]` (the [app_config skill](../app_config/SKILL.md) owns that side) — `timeout`, `max_retries`, `retry_delay`, `max_parallel_runs`, `timezone`. Don't write the fallback into a `#[serde(default = ...)]`; the model's job is to say what the file declared. (There is no longer a `defaults.rs`: its last helper went when `timezone` became configurable.)
 - **Unknown keys are ignored.** No model sets `deny_unknown_fields`, so a misspelled or unsupported key is silently dropped — the single most likely reason a setting "doesn't work". Consider adding `#[serde(deny_unknown_fields)]` if you touch a model and want typos to fail loudly.
 - **Parsing does the type validation.** `cron: Schedule` and `timezone: Option<Tz>` deserialize into real parsed types, so an invalid value fails at load with the file path — which is why `CronTrigger::from_schedule` can unwrap them later. The configured fallback zone is parsed the same way, by `AppConfig`.
 
