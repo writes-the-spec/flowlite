@@ -1,4 +1,4 @@
-//! `get_task_output`: what each attempt of a job run wrote to stdout and stderr, as
+//! `get_job_run_logs`: what each attempt of a job run wrote to stdout and stderr, as
 //! `job-run logs --json` prints it, with each stream cut to a budget from the tail.
 
 use std::sync::Arc;
@@ -29,7 +29,7 @@ const MAX_STREAM_BYTES: usize = 200_000;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct GetTaskOutput {
+pub struct GetJobRunLogs {
     /// The id of the job run whose task output to read.
     pub job_run_id: i64,
     /// Only this task's attempts, by task id. Every task in the run otherwise.
@@ -40,15 +40,15 @@ pub struct GetTaskOutput {
     pub max_bytes: Option<usize>,
 }
 
-#[tool_router(router = get_task_output_router, vis = "pub(super)")]
+#[tool_router(router = get_job_run_logs_router, vis = "pub(super)")]
 impl McpServer {
 
     /// Show what each attempt of a job run wrote to stdout and stderr.
     #[tool]
-    async fn get_task_output(&self, Parameters(args): Parameters<GetTaskOutput>) -> CallToolResult {
+    async fn get_job_run_logs(&self, Parameters(args): Parameters<GetJobRunLogs>) -> CallToolResult {
         let max_bytes = clamp_stream_bytes(args.max_bytes);
 
-        match get_task_output_logs(&self.toolkit, args.job_run_id, args.task.as_deref(), max_bytes).await {
+        match get_job_run_logs_rows(&self.toolkit, args.job_run_id, args.task.as_deref(), max_bytes).await {
             Ok(logs) => success_json(logs),
             Err(err) => error_result(&err),
         }
@@ -74,7 +74,7 @@ fn clamp_stream_bytes(max_bytes: Option<usize>) -> usize {
 
 /// Keeps at most `max_bytes` of `stream`, from the tail - the end of a log is where the
 /// error is. A stream already within the limit passes through byte-identical, which is
-/// what keeps an untruncated `get_task_output` stream identical to `job-run logs --json`.
+/// what keeps an untruncated `get_job_run_logs` stream identical to `job-run logs --json`.
 ///
 /// The cut point is rounded up to the next char boundary, so a multi-byte UTF-8 character
 /// is never split - which would otherwise panic when slicing.
@@ -91,10 +91,10 @@ fn truncate_tail(stream: &str, max_bytes: usize) -> String {
     format!("[truncated: {tail_start} earlier bytes dropped]\n{}", &stream[tail_start..])
 }
 
-/// `get_task_output`'s own connection, and the same cross-entity assembly `job-run logs`
+/// `get_job_run_logs`'s own connection, and the same cross-entity assembly `job-run logs`
 /// reads through `CRUD::select_task_run_attempt_logs` - narrowed by `task_id` exactly as
 /// `--task` narrows it, and with each stream truncated to `max_bytes` from the tail.
-async fn get_task_output_logs(
+async fn get_job_run_logs_rows(
     toolkit: &Toolkit,
     job_run_id: i64,
     task_id: Option<&str>,
@@ -119,7 +119,7 @@ async fn get_task_output_logs(
 }
 
 /// One attempt's log, both streams truncated to `max_bytes` independently - pulled out of
-/// `get_task_output_logs`'s mapping so a test can build a `TaskRunAttemptLog` the same way
+/// `get_job_run_logs_rows`'s mapping so a test can build a `TaskRunAttemptLog` the same way
 /// the tool does, rather than only exercising `truncate_tail` on strings that were never
 /// attached to a stream field.
 fn truncated_task_run_attempt_log(
@@ -228,7 +228,7 @@ mod tests {
     }
 
     /// The property `stdout_and_stderr_are_truncated_independently` used to claim but not
-    /// test: `get_task_output`'s real per-attempt mapping - not `truncate_tail` called
+    /// test: `get_job_run_logs`'s real per-attempt mapping - not `truncate_tail` called
     /// twice on unrelated strings - truncates `stdout` and `stderr` each to `max_bytes`,
     /// on their own budget, and the fields land on the `TaskRunAttemptLog` the tool
     /// actually returns.

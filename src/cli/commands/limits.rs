@@ -36,7 +36,7 @@ impl LimitsCmd {
         );
 
         if self.json {
-            println!("{}", limits_json(&rows));
+            println!("{}", serde_json::to_string_pretty(&rows)?);
         } else {
             println!("{}", limits_table(&rows));
         }
@@ -69,22 +69,6 @@ pub fn limits_table(rows: &[limits::LimitRow]) -> String {
     }
 
     lines.join("\n")
-}
-
-
-/// No envelope, matching the rule the `--json` cut established: a redirected file holds
-/// rows or nothing, never a wrapper a script has to unwrap first. `max` stays the
-/// configured `0` here - the dash is a human rendering only.
-pub fn limits_json(rows: &[limits::LimitRow]) -> serde_json::Value {
-    serde_json::Value::Array(
-        rows.iter()
-            .map(|row| serde_json::json!({
-                "name": row.name,
-                "in_use": row.in_use,
-                "max": row.max,
-            }))
-            .collect()
-    )
 }
 
 
@@ -146,14 +130,16 @@ mod tests {
         assert!(!table.contains("FULL"), "{table}");
     }
 
+    /// The rows serialize as themselves - no envelope, and a `0` max stays the number it
+    /// was configured as. The dash the table prints for it is a human rendering only.
     #[test]
-    fn json_has_no_envelope_and_keeps_a_zero_max_as_a_number() {
+    fn the_json_has_no_envelope_and_keeps_a_zero_max_as_a_number() {
         let rows = vec![
             LimitRow { name: "global".to_string(), in_use: 32, max: 32 },
             LimitRow { name: "disabled".to_string(), in_use: 0, max: 0 },
         ];
 
-        let json = limits_json(&rows);
+        let json = serde_json::to_value(&rows).unwrap();
 
         assert!(json.is_array());
         assert_eq!(json[0]["name"], "global");

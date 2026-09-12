@@ -868,7 +868,7 @@ over its stdio, and the process exits when the client closes stdin. `-D` / `--da
 names the directory, the same way every other command learns it — and the `init` line is
 optional, since an agent handed an empty directory can call `init_data_dir` itself.
 
-Seven tools, each a projection of a command that already exists:
+Nine tools, each a projection of a command that already exists:
 
 | Tool | Answers |
 |---|---|
@@ -877,13 +877,15 @@ Seven tools, each a projection of a command that already exists:
 | `submit_job` | Run this — and, with `wait_seconds`, how did it end? |
 | `list_job_runs` | What has run lately, by job and by status? |
 | `get_job_run` | What happened to run 42, task by task? |
-| `get_task_output` | What did each attempt write to stdout and stderr? |
+| `get_job_run_logs` | What did each attempt write to stdout and stderr? |
 | `stop_job_run` | Stop run 42, and tell me what it settled to. |
+| `get_serve_status` | Is anything actually serving this directory? |
+| `list_limits` | What is a run waiting behind? |
 
 Each returns the JSON its `--json` twin prints, so an agent and a shell script reading one
 run read the same fields. Three differ, each for a stated reason.
 
-`get_task_output` differs only in length: it keeps the last `max_bytes` of each stream,
+`get_job_run_logs` differs only in length: it keeps the last `max_bytes` of each stream,
 20000 by default and 200000 at most, and says on a marker line how many bytes it dropped. A
 terminal has a scrollback and a `| tail`; a context window has neither, so asking for more
 than the cap gets the cap rather than an error — the default is a floor you can raise, not
@@ -895,6 +897,11 @@ one you can remove. `list_job_runs` bounds its page the same way, 20 runs by def
 way means an agent reads `.status` off the result instead of branching on which argument it
 sent — the same reason `job submit --json` reads the run back and prints it with and without
 `--wait`.
+
+`get_serve_status` and `list_limits` are the pair an agent reaches for when a submitted run
+sits at `pending`: the first says whether anything is serving the directory at all, the
+second what the run is waiting behind. `submit_job` warns about an unserved directory once,
+at the moment it writes; these are how the agent checks for itself at any point after.
 
 `init_data_dir` has no `--json` twin to match, because `flowlite init` prints prose rather
 than rows — it is `serve`-shaped, not `job list`-shaped. It takes no arguments at all: the

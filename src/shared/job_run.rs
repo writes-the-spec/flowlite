@@ -16,7 +16,7 @@ pub(crate) struct JobRunDetail {
     pub(crate) task_runs: Vec<TaskRun>,
 }
 
-/// One attempt with what it wrote. The MCP `get_task_output` tool fills the same shape
+/// One attempt with what it wrote. The MCP `get_job_run_logs` tool fills the same shape
 /// with `stdout`/`stderr` truncated rather than copied whole.
 #[derive(Serialize)]
 pub(crate) struct TaskRunAttemptLog {

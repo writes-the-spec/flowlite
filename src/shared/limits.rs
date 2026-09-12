@@ -1,10 +1,16 @@
 use std::collections::BTreeMap;
+use serde::Serialize;
 
 
 /// One row of the answer: a name, how many running attempts currently claim it, and how
 /// many it allows. `global` is a row of this same shape - reserving that key at load time
 /// (`AppConfig::load` rejects it in `[concurrency_limits]`) is what buys the uniform
 /// rendering below rather than a special case for the cap.
+///
+/// Serialized as it stands by both `flowlite limits --json` and the `list_limits` tool -
+/// `max` keeps the configured `0` there, since the dash that spells "no ceiling" is a
+/// human rendering and belongs to the table.
+#[derive(Serialize)]
 pub struct LimitRow {
     pub name: String,
     pub in_use: u32,

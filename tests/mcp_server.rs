@@ -239,7 +239,7 @@ fn initialize_names_the_server_and_its_version() {
 /// cut, is this cut's own: `stop_job_run` alongside the other five, and nothing else,
 /// named by `tools/list` - the full set the design promises.
 #[test]
-fn the_handshake_declares_tools_and_lists_the_seven_tools() {
+fn the_handshake_declares_tools_and_lists_the_nine_tools() {
     let dir = data_dir("tools");
     let mut client = McpClient::start(&dir);
 
@@ -265,10 +265,12 @@ fn the_handshake_declares_tools_and_lists_the_seven_tools() {
         names,
         vec![
             "get_job_run",
-            "get_task_output",
+            "get_job_run_logs",
+            "get_serve_status",
             "init_data_dir",
             "list_job_runs",
             "list_jobs",
+            "list_limits",
             "stop_job_run",
             "submit_job",
         ],
@@ -354,7 +356,7 @@ fn get_job_run_on_an_unknown_id_is_a_tool_error_naming_the_id() {
 /// same task output `job-run logs --json` would print, since there is no `submit_job` tool
 /// yet to reach it any other way.
 #[test]
-fn get_task_output_returns_what_a_tasks_command_echoed() {
+fn get_job_run_logs_returns_what_a_tasks_command_echoed() {
     let dir = data_dir("task-output");
     install_job(&dir, "echoer.yaml", "id: echoer\nname: Echoer\ntasks:\n  - id: say\n    command: echo mcp-task-output\n");
 
@@ -372,7 +374,7 @@ fn get_task_output_returns_what_a_tasks_command_echoed() {
     let mut client = McpClient::start(&dir);
     client.handshake();
 
-    let result = client.call_tool("get_task_output", json!({ "job_run_id": job_run_id }));
+    let result = client.call_tool("get_job_run_logs", json!({ "job_run_id": job_run_id }));
     assert_ne!(result["isError"], json!(true), "{result}");
 
     let logs: Value = serde_json::from_str(tool_text(&result)).unwrap();
@@ -410,7 +412,7 @@ fn a_long_stream_comes_back_truncated_carrying_the_marker() {
 
     // Each echo writes 11 bytes (10 characters plus the newline); keeping 4 keeps only
     // the last 4 of each stream, independently.
-    let result = client.call_tool("get_task_output", json!({ "job_run_id": job_run_id, "max_bytes": 4 }));
+    let result = client.call_tool("get_job_run_logs", json!({ "job_run_id": job_run_id, "max_bytes": 4 }));
     assert_ne!(result["isError"], json!(true), "{result}");
 
     let logs: Value = serde_json::from_str(tool_text(&result)).unwrap();
@@ -1007,4 +1009,78 @@ fn init_data_dir_refuses_an_argument_naming_another_directory() {
     let result = client.call_tool("init_data_dir", json!({ "data_dir": "/tmp/somewhere-else" }));
 
     assert_eq!(result["isError"], json!(true), "{result}");
+}
+
+/// The question an agent has to be able to ask after a submit comes back `pending`: is
+/// anything actually going to run this? `submit_job`'s warning says so once, at the moment
+/// of writing; this is how the agent checks for itself afterwards.
+#[test]
+fn get_serve_status_reads_down_for_a_directory_nothing_is_serving() {
+    let dir = data_dir("status-down");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("get_serve_status", json!({}));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let status: Value = serde_json::from_str(tool_text(&result)).unwrap();
+
+    assert_eq!(status["status"], json!("down"));
+    assert!(status.get("port").is_none(), "a down directory reported a port: {status}");
+}
+
+/// The other half, against a real server: the same shape `flowlite status --json` prints,
+/// carrying the port the dashboard is actually on.
+#[test]
+fn get_serve_status_reads_up_and_names_the_port_for_a_served_directory() {
+    let dir = data_dir("status-up");
+
+    let mut server = ServerGuard::new(serve(&dir, 18238), libc::SIGTERM);
+    assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("get_serve_status", json!({}));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let status: Value = serde_json::from_str(tool_text(&result)).unwrap();
+
+    server.stop();
+
+    assert_eq!(status["status"], json!("up"));
+    assert_eq!(status["port"], json!(18238));
+    assert!(status["pid"].is_number(), "{status}");
+    assert_eq!(status["version"], json!(env!("CARGO_PKG_VERSION")));
+}
+
+/// The second question, once the directory turns out to be served and the run still is not
+/// moving: what is it waiting behind? The global cap is a row of the same shape as every
+/// named limit, so one answer covers both.
+#[test]
+fn list_limits_returns_the_global_cap_as_a_row_of_its_own() {
+    let dir = data_dir("limits");
+    std::fs::write(
+        dir.join("config.toml"),
+        "[orchestrator]\nmax_running_attempts = 4\n\n[concurrency_limits]\nwarehouse = 2\n",
+    ).unwrap();
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("list_limits", json!({}));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let rows: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    let by_name: HashMap<&str, &Value> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| (row["name"].as_str().unwrap(), row))
+        .collect();
+
+    assert_eq!(by_name["global"]["max"], json!(4));
+    assert_eq!(by_name["global"]["in_use"], json!(0));
+    assert_eq!(by_name["warehouse"]["max"], json!(2));
 }

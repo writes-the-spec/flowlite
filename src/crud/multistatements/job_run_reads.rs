@@ -47,7 +47,7 @@ impl CRUD {
     }
 
     /// Every task run attempt of a run, grouped with what each wrote to stdout and
-    /// stderr — what `job-run logs` and the MCP `get_task_output` tool both assemble.
+    /// stderr — what `job-run logs` and the MCP `get_job_run_logs` tool both assemble.
     /// `task_id` narrows to one task's attempts, exactly as `job-run logs --task` does.
     ///
     /// Checked against `job_run` first so an id nothing matches is reported as that,
