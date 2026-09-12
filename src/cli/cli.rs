@@ -7,6 +7,7 @@ use crate::cli::commands::job_run::JobRunCmd;
 use crate::cli::commands::status::StatusCmd;
 use crate::cli::commands::limits::LimitsCmd;
 use crate::cli::commands::mcp::McpCmd;
+use crate::cli::commands::init::InitCmd;
 use crate::toolkit::Toolkit;
 
 
@@ -23,6 +24,9 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Lay an example job, an example schedule and a commented config.toml into this data
+    /// directory, leaving any of the three that are already there untouched.
+    Init(InitCmd),
     Serve(ServeCmd),
     Job(JobCmd),
     JobRun(JobRunCmd),
@@ -45,6 +49,7 @@ impl Cli {
         let toolkit = Toolkit::new(app_config);
 
         match &self.command {
+            Command::Init(cmd) => cmd.run(toolkit).await?,
             Command::Serve(cmd) => cmd.run(toolkit).await?,
             Command::Job(cmd) => cmd.run(toolkit).await?,
             Command::JobRun(cmd) => cmd.run(toolkit).await?,

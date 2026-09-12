@@ -29,11 +29,20 @@ Or clone and `cargo build --release`, which leaves the binary at `target/release
 
 ## Quick start
 
-Define a job in `jobs/hello.yaml` (`.yml` works too):
+Lay out a data directory with an example job and an example schedule in it:
+
+```bash
+flowlite init
+```
+
+That writes `jobs/hello.yaml` (`.yml` works too), `schedules/daily-hello.yaml` and a
+`config.toml` that is entirely comments — a map of what can be set and what each key
+defaults to, so the directory behaves exactly as one with no `config.toml` at all. The job
+it leaves behind:
 
 ```yaml
 id: hello-world
-name: Hello World Job
+name: Hello World
 tasks:
   - id: say-hello
     description: Says hello
@@ -49,9 +58,11 @@ flowlite serve
 
 flowlite reads `jobs/`, `schedules/` and an optional `config.toml` from its data directory,
 and writes `flowlite.db` there. That directory is the current one unless `-D` /
-`--data-dir` / `FLOWLITE_DATA_DIR` says otherwise:
+`--data-dir` / `FLOWLITE_DATA_DIR` says otherwise — which `init` follows like every other
+command, so the directory need not exist yet:
 
 ```bash
+flowlite --data-dir /var/lib/flowlite init
 flowlite --data-dir /var/lib/flowlite serve
 ```
 
@@ -61,6 +72,9 @@ Submit the job and check on it:
 flowlite job submit hello-world
 flowlite job list
 ```
+
+`init` never overwrites: a file already there is kept and reported as kept, so it is safe
+to re-run in a directory you have been working in.
 
 ## Jobs
 
