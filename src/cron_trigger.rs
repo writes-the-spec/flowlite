@@ -82,105 +82,114 @@ impl CronTrigger {
         Some(next)
     }
 
-    pub fn get_next_runs(&self, n: i32, start_from: Option<DateTime<Utc>>) -> Vec<DateTime<Utc>> {
-        let mut runs = Vec::new();
-        let mut current_start = start_from;
+}
 
-        for _ in 0..n {
-            if let Some(next) = self.get_next_run_tz(current_start) {
-                let next_utc = next.with_timezone(&Utc);
-                runs.push(next_utc);
-                current_start = Some(next_utc);
-            } else {
-                break;
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        runs
+    /// The repo's own spelling: six fields, seconds first, as `.data/schedules/` uses.
+    fn trigger(cron: &str, start_date: Option<NaiveDate>, end_date: Option<NaiveDate>) -> CronTrigger {
+        CronTrigger::new(
+            CronSchedule::from_str(cron).unwrap(),
+            Tz::Europe__Vienna,
+            start_date,
+            end_date,
+        )
     }
 
-    pub fn get_previous_run(&self, start_from: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
-        self.get_previous_run_tz(start_from).map(|dt| dt.with_timezone(&Utc))
+    fn at(instant: &str) -> DateTime<Utc> {
+        instant.parse().unwrap()
     }
 
-    fn get_previous_run_tz(&self, start_from: Option<DateTime<Utc>>) -> Option<DateTime<Tz>> {
-        let start_from = match start_from {
-            Some(t) => t.with_timezone(&self.timezone),
-            None => Utc::now().with_timezone(&self.timezone),
-        };
-
-        let start_from = if let Some(end_date) = self.end_date {
-            let end_dt = end_date
-                .and_hms_opt(23, 59, 59)?
-                .and_local_timezone(self.timezone)
-                .latest()?;
-            if start_from > end_dt {
-                end_dt
-            } else {
-                start_from
-            }
-        } else {
-            start_from
-        };
-
-        let prev = self.schedule.after(&start_from).rev().next()?;
-
-        if let Some(start_date) = self.start_date {
-            let start_dt = start_date
-                .and_hms_opt(0, 0, 0)?
-                .and_local_timezone(self.timezone)
-                .earliest()?;
-            if prev < start_dt {
-                return None;
-            }
-        }
-
-        Some(prev)
+    fn date(day: &str) -> Option<NaiveDate> {
+        Some(day.parse().unwrap())
     }
 
-    pub fn get_previous_runs(&self, n: i32, start_from: Option<DateTime<Utc>>) -> Vec<DateTime<Utc>> {
-        let mut runs = Vec::new();
-        let mut current_start = start_from;
+    #[test]
+    fn the_next_run_is_the_next_time_the_cron_matches() {
+        let nightly = trigger("0 30 3 * * *", None, None);
 
-        for _ in 0..n {
-            if let Some(prev) = self.get_previous_run_tz(current_start) {
-                let prev_utc = prev.with_timezone(&Utc);
-                runs.push(prev_utc);
-                current_start = Some(prev_utc);
-            } else {
-                break;
-            }
-        }
-
-        runs
+        assert_eq!(
+            nightly.get_next_run(Some(at("2026-06-10T00:00:00Z"))),
+            Some(at("2026-06-10T01:30:00Z")),
+        );
     }
 
-    pub fn get_runs_between(&self, from_ts: DateTime<Utc>, to_ts: DateTime<Utc>) -> Vec<DateTime<Utc>> {
-        let mut runs = Vec::new();
-        let mut current_ts = Some(from_ts);
+    /// The cron fields are read in the schedule's own zone, so it is the *local* time that
+    /// stays put across a DST change and the UTC instant that moves. 03:30 in Vienna is
+    /// 02:30Z in winter and 01:30Z in summer - the property the README promises, and the
+    /// reason the zone is stored on the row rather than assumed.
+    #[test]
+    fn the_cron_is_read_in_its_own_zone_so_the_utc_instant_moves_with_dst() {
+        let nightly = trigger("0 30 3 * * *", None, None);
 
-        let to_ts_tz = to_ts.with_timezone(&self.timezone);
-
-        while let Some(next) = self.get_next_run_tz(current_ts) {
-            if next > to_ts_tz {
-                break;
-            }
-            let next_utc = next.with_timezone(&Utc);
-            runs.push(next_utc);
-            current_ts = Some(next_utc);
-        }
-
-        runs
+        assert_eq!(
+            nightly.get_next_run(Some(at("2026-01-10T00:00:00Z"))),
+            Some(at("2026-01-10T02:30:00Z")),
+        );
+        assert_eq!(
+            nightly.get_next_run(Some(at("2026-06-10T00:00:00Z"))),
+            Some(at("2026-06-10T01:30:00Z")),
+        );
     }
 
-    pub fn validate_expression(expression: &str) -> anyhow::Result<()> {
-        CronSchedule::from_str(expression)?;
-        Ok(())
+    /// `start_date` moves the search forward to midnight on that day, so a schedule seeded
+    /// before it begins gets its first run on the date it names rather than tomorrow.
+    #[test]
+    fn a_start_date_in_the_future_is_where_the_search_begins() {
+        let nightly = trigger("0 30 3 * * *", date("2026-06-01"), None);
+
+        assert_eq!(
+            nightly.get_next_run(Some(at("2026-01-10T00:00:00Z"))),
+            Some(at("2026-06-01T01:30:00Z")),
+        );
     }
 
-    pub fn validate_timezone(timezone: &str) -> anyhow::Result<()> {
-        Tz::from_str(timezone)?;
-        Ok(())
+    /// None is what stops `next_run` advancing, which is how a bounded schedule retires
+    /// rather than firing for ever.
+    #[test]
+    fn nothing_fires_after_the_end_date() {
+        let nightly = trigger("0 30 3 * * *", None, date("2026-12-31"));
+
+        assert_eq!(nightly.get_next_run(Some(at("2026-12-31T04:00:00Z"))), None);
     }
 
+    /// The end date is inclusive to its last second, so the run on the day itself is not
+    /// the one lost to the bound.
+    #[test]
+    fn the_end_date_itself_still_fires() {
+        let nightly = trigger("0 30 3 * * *", None, date("2026-12-31"));
+
+        assert_eq!(
+            nightly.get_next_run(Some(at("2026-12-30T04:00:00Z"))),
+            Some(at("2026-12-31T02:30:00Z")),
+        );
+    }
+
+    /// Vienna skips 02:00-03:00 on 2026-03-29, so a 02:30 schedule has no instant to fire
+    /// at that day and the run is lost rather than moved: the next one is the 30th. Worth
+    /// knowing before choosing an hour for something that must run every day.
+    #[test]
+    fn a_time_the_spring_change_skips_loses_that_days_run() {
+        let in_the_gap = trigger("0 30 2 * * *", None, None);
+
+        assert_eq!(
+            in_the_gap.get_next_run(Some(at("2026-03-28T12:00:00Z"))),
+            Some(at("2026-03-30T00:30:00Z")),
+        );
+    }
+
+    /// And 02:30 happens twice on 2026-10-25, once at UTC+2 and again at UTC+1. The first
+    /// is taken, so the schedule fires once rather than twice - the other half of the same
+    /// rule, and the reason `.earliest()` is not an arbitrary choice.
+    #[test]
+    fn a_time_the_autumn_change_repeats_fires_on_the_first_of_the_two() {
+        let repeated = trigger("0 30 2 * * *", None, None);
+
+        assert_eq!(
+            repeated.get_next_run(Some(at("2026-10-24T12:00:00Z"))),
+            Some(at("2026-10-25T00:30:00Z")),
+        );
+    }
 }
