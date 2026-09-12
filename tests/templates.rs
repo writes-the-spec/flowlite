@@ -4,7 +4,8 @@
 //! direction needs no test. The two that rot silently are the other way round: a template
 //! nobody renders any more compiles for ever, and an `/assets/...` URL whose file has moved
 //! is a 404 in the browser and nothing at all in the build - rust_embed serves what is in
-//! `assets/`, and the page asks for what the markup says.
+//! `assets/`, and the page asks for what the markup says. A mistyped CSS custom property
+//! and a vendored file updated without its paperwork fail the same quiet way.
 
 use std::path::{Path, PathBuf};
 
@@ -106,4 +107,103 @@ fn files_under(dir: &Path, extension: &str) -> Vec<PathBuf> {
     }
 
     files
+}
+
+/// An undefined custom property is not an error: the declaration using it is simply
+/// dropped, so a mistyped `var(--accnet)` leaves an element unstyled and says nothing. The
+/// ones the stylesheet does not define are set inline by the markup - `--span` on a
+/// duration bar, `--at` and `--start` on the run timeline - so both halves count as defined.
+#[test]
+fn every_css_variable_is_defined_somewhere() {
+
+    let css = std::fs::read_to_string("assets/css/app.css").unwrap();
+    let markup = read_dir_to_string(Path::new("templates"), "html");
+
+    let mut undefined = Vec::new();
+
+    for used in custom_properties(&css, "var(") {
+        let in_stylesheet = css.contains(&format!("{used}:"));
+        let set_inline = markup.contains(&format!("{used}:"));
+
+        if !in_stylesheet && !set_inline {
+            undefined.push(used);
+        }
+    }
+
+    undefined.sort();
+    undefined.dedup();
+
+    assert!(
+        undefined.is_empty(),
+        "A stylesheet reads a custom property nothing sets:\n{}\n\nDefine it, set it inline \
+         from the markup, or fix the spelling. An undefined one drops the declaration \
+         silently.",
+        undefined.join("\n"),
+    );
+}
+
+/// Vendoring a new version means editing three things: the file, its `SOURCE.md`, and the
+/// licenses table. This is the one that is easy to forget, and the one a reader checking
+/// what the binary ships trusts.
+#[test]
+fn every_vendored_package_matches_the_licenses_file() {
+
+    let licenses = std::fs::read_to_string("THIRD_PARTY_LICENSES.md").unwrap();
+
+    let mut problems = Vec::new();
+
+    for entry in std::fs::read_dir("assets/vendors").unwrap() {
+        let directory = entry.unwrap().path();
+        let name = directory.file_name().unwrap().to_string_lossy().to_string();
+
+        if !directory.join("LICENSE").exists() {
+            problems.push(format!("{name}: no LICENSE file"));
+        }
+
+        let Ok(source) = std::fs::read_to_string(directory.join("SOURCE.md")) else {
+            problems.push(format!("{name}: no SOURCE.md"));
+            continue;
+        };
+
+        if !licenses.contains(&format!("assets/vendors/{name}/")) {
+            problems.push(format!("{name}: not listed in THIRD_PARTY_LICENSES.md"));
+            continue;
+        }
+
+        // The table's short form, e.g. "v25" where SOURCE.md says "v25 (variable, ...)".
+        if let Some(version) = source
+            .lines()
+            .find(|line| line.trim_start().starts_with("| Version"))
+            .and_then(|line| line.split('|').nth(2))
+            .and_then(|value| value.split_whitespace().next())
+        {
+            if !licenses.contains(version) {
+                problems.push(format!("{name}: SOURCE.md says {version}, the licenses file does not"));
+            }
+        }
+    }
+
+    problems.sort();
+
+    assert!(
+        problems.is_empty(),
+        "A vendored package and its paperwork disagree:\n{}\n\nTHIRD_PARTY_LICENSES.md is \
+         what says which versions this binary ships.",
+        problems.join("\n"),
+    );
+}
+
+/// Every `--name` following `prefix` in the text.
+fn custom_properties(text: &str, prefix: &str) -> Vec<String> {
+    text.match_indices(prefix)
+        .filter_map(|(start, _)| {
+            let rest = &text[start + prefix.len()..];
+            rest.starts_with("--").then(|| {
+                let end = rest
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                    .unwrap_or(rest.len());
+                rest[..end].to_string()
+            })
+        })
+        .collect()
 }
