@@ -224,11 +224,11 @@ fn initialize_names_the_server_and_its_version() {
 }
 
 /// The capability is what makes a client ask for tools at all - the durable half of this
-/// test, true whether zero tools are registered or five. The other half, extended from cut
-/// 3's four read tools, is this cut's own: `submit_job` alongside them, and nothing else,
-/// named by `tools/list`.
+/// test, true whether zero tools are registered or six. The other half, extended cut by
+/// cut, is this cut's own: `stop_job_run` alongside the other five, and nothing else,
+/// named by `tools/list` - the full set the design promises.
 #[test]
-fn the_handshake_declares_tools_and_lists_the_five_tools() {
+fn the_handshake_declares_tools_and_lists_the_six_tools() {
     let dir = data_dir("tools");
     let mut client = McpClient::start(&dir);
 
@@ -250,7 +250,10 @@ fn the_handshake_declares_tools_and_lists_the_five_tools() {
         .collect();
     names.sort();
 
-    assert_eq!(names, vec!["get_job_run", "get_task_output", "list_job_runs", "list_jobs", "submit_job"]);
+    assert_eq!(
+        names,
+        vec!["get_job_run", "get_task_output", "list_job_runs", "list_jobs", "stop_job_run", "submit_job"],
+    );
 }
 
 /// The only way a client stops a server it spawned. A process that lingered would outlive
@@ -405,6 +408,11 @@ fn a_long_stream_comes_back_truncated_carrying_the_marker() {
 }
 
 const HELLO: &str = "id: hello\nname: Hello\ntasks:\n  - id: say\n    command: \"true\"\n";
+
+/// A job that outlives every short `wait_seconds` this file waits with, so a wait can be
+/// observed elapsing, and a stop can be observed reaching a run that is genuinely running
+/// rather than one the dispatcher settled before it ever started.
+const SLEEPER: &str = "id: sleeper\nname: Sleeper\ntasks:\n  - id: say\n    command: \"sleep 30\"\n";
 
 /// The `job` argument: an installed job submits without touching the filesystem, and the
 /// result is the pending run `job submit --json` would have printed for it.
@@ -594,4 +602,198 @@ fn the_warning_block_appears_only_while_the_directory_is_unserved() {
     assert_eq!(served_content.len(), 1, "{served}");
 
     server.stop();
+}
+
+/// `get_job_run`'s `status` field, read without waiting - `until`'s predicate below needs
+/// a plain boolean, and this is the one query it polls with.
+fn job_run_status(client: &mut McpClient, job_run_id: i64) -> String {
+    let result = client.call_tool("get_job_run", json!({ "job_run_id": job_run_id }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let detail: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    detail["status"].as_str().unwrap().to_string()
+}
+
+/// `wait_seconds` closes the loop in one turn: a job that succeeds comes back settled
+/// rather than merely queued - the whole reason `submit_job` grew a wait at all.
+#[test]
+fn submitting_with_wait_seconds_against_a_served_directory_comes_back_settled() {
+    let dir = data_dir("wait-submit-succeeds");
+    install_job(&dir, "hello.yaml", HELLO);
+
+    let mut server = ServerGuard::new(serve(&dir, 18233), libc::SIGTERM);
+    assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("submit_job", json!({ "job": "hello", "wait_seconds": 10 }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    assert_eq!(job_run["status"], json!("succeeded"), "{job_run}");
+
+    server.stop();
+}
+
+/// A wait that elapses before the run settles is answered, not refused: the id and its
+/// unfinished status are exactly what let the agent ask again, which a timeout error would
+/// have thrown away along with the id.
+#[test]
+fn a_wait_that_expires_returns_the_run_still_running() {
+    let dir = data_dir("wait-submit-expires");
+    install_job(&dir, "sleeper.yaml", SLEEPER);
+
+    let mut server = ServerGuard::new(serve(&dir, 18234), libc::SIGTERM);
+    assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("submit_job", json!({ "job": "sleeper", "wait_seconds": 1 }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    assert!(job_run["id"].as_i64().unwrap() > 0, "{job_run}");
+
+    let status = job_run["status"].as_str().unwrap();
+    assert!(
+        status == "pending" || status == "running",
+        "expected an unfinished status, got {status}: {job_run}",
+    );
+
+    server.stop();
+}
+
+/// `get_job_run`'s own wait: submitted without one, then read back through a second tool
+/// call that waits instead - the same bound and the same clamp, shared through `wait.rs`
+/// rather than reimplemented per tool.
+#[test]
+fn get_job_run_with_wait_seconds_returns_the_settled_run() {
+    let dir = data_dir("wait-get-job-run");
+    install_job(&dir, "hello.yaml", HELLO);
+
+    let mut server = ServerGuard::new(serve(&dir, 18235), libc::SIGTERM);
+    assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let submitted = client.call_tool("submit_job", json!({ "job": "hello" }));
+    let job_run_id = serde_json::from_str::<Value>(tool_text(&submitted)).unwrap()["id"].as_i64().unwrap();
+
+    let result = client.call_tool("get_job_run", json!({ "job_run_id": job_run_id, "wait_seconds": 10 }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let detail: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    assert_eq!(detail["status"], json!("succeeded"), "{detail}");
+
+    server.stop();
+}
+
+/// `stop_job_run` waited settles a run that is genuinely running, not one the dispatcher
+/// merely skipped before it ever started - the case that exercises the orchestrator's own
+/// stop handling.
+#[test]
+fn stop_job_run_with_wait_seconds_settles_a_running_run() {
+    let dir = data_dir("wait-stop-running");
+    install_job(&dir, "sleeper.yaml", SLEEPER);
+
+    let mut server = ServerGuard::new(serve(&dir, 18236), libc::SIGTERM);
+    assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let submitted = client.call_tool("submit_job", json!({ "job": "sleeper" }));
+    let job_run_id = serde_json::from_str::<Value>(tool_text(&submitted)).unwrap()["id"].as_i64().unwrap();
+
+    assert!(
+        until(Duration::from_secs(30), || job_run_status(&mut client, job_run_id) == "running"),
+        "the run never started running",
+    );
+
+    let result = client.call_tool("stop_job_run", json!({ "job_run_id": job_run_id, "wait_seconds": 10 }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    let status = job_run["status"].as_str().unwrap();
+    assert!(
+        status != "pending" && status != "running",
+        "expected a settled status, got {status}: {job_run}",
+    );
+
+    server.stop();
+}
+
+/// Without a wait, `stop_job_run` still returns the `JobRun` row rather than the CLI's
+/// `{job_run_id, stop_requested}` shape, so a caller reads `.status` off the result either
+/// way - the same rule `submit_job` already keeps with and without a wait.
+#[test]
+fn stop_job_run_without_wait_seconds_returns_the_same_job_run_shape() {
+    let dir = data_dir("wait-stop-queued");
+    install_job(&dir, "sleeper.yaml", SLEEPER);
+
+    let mut server = ServerGuard::new(serve(&dir, 18237), libc::SIGTERM);
+    assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let submitted = client.call_tool("submit_job", json!({ "job": "sleeper" }));
+    let job_run_id = serde_json::from_str::<Value>(tool_text(&submitted)).unwrap()["id"].as_i64().unwrap();
+
+    let result = client.call_tool("stop_job_run", json!({ "job_run_id": job_run_id }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    assert_eq!(job_run["id"], json!(job_run_id), "{job_run}");
+    assert!(job_run.get("stop_requested").is_none(), "{job_run}");
+
+    server.stop();
+}
+
+/// The refusal every waiting tool takes: `wait_seconds > 0` against a directory nothing is
+/// serving is a tool error naming the directory, raised before any row is written - a wait
+/// nothing can service must change nothing.
+#[test]
+fn submit_job_with_wait_seconds_on_an_unserved_directory_is_a_tool_error_naming_it() {
+    let dir = data_dir("wait-submit-unserved");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("submit_job", json!({ "job": "hello", "wait_seconds": 5 }));
+
+    assert_eq!(result["isError"], json!(true), "{result}");
+    assert!(tool_text(&result).contains(&dir.to_string_lossy().to_string()), "{}", tool_text(&result));
+}
+
+/// Same refusal, reached through `get_job_run` - it never even opens `mem` before checking.
+#[test]
+fn get_job_run_with_wait_seconds_on_an_unserved_directory_is_a_tool_error_naming_it() {
+    let dir = data_dir("wait-get-unserved");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("get_job_run", json!({ "job_run_id": 1, "wait_seconds": 5 }));
+
+    assert_eq!(result["isError"], json!(true), "{result}");
+    assert!(tool_text(&result).contains(&dir.to_string_lossy().to_string()), "{}", tool_text(&result));
+}
+
+/// Same refusal again, reached through `stop_job_run` - before the stop row is written, so
+/// a run nothing will ever settle is not left carrying a stop request no server will read.
+#[test]
+fn stop_job_run_with_wait_seconds_on_an_unserved_directory_is_a_tool_error_naming_it() {
+    let dir = data_dir("wait-stop-unserved");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("stop_job_run", json!({ "job_run_id": 1, "wait_seconds": 5 }));
+
+    assert_eq!(result["isError"], json!(true), "{result}");
+    assert!(tool_text(&result).contains(&dir.to_string_lossy().to_string()), "{}", tool_text(&result));
 }

@@ -4,10 +4,15 @@
 //! same shape - so an agent reading a run through MCP and a person reading it through the
 //! CLI read the same fields. Every call opens its own connection through a freshly named
 //! `mem`, never `self.toolkit`'s own: `list_jobs` and `submit_job` seed it, and the other
-//! three never read it at all, but taking a fresh name uniformly is one rule instead of
+//! four never read it at all, but taking a fresh name uniformly is one rule instead of
 //! two, and it is what lets a file written into `jobs/` after this process started still
 //! reach `list_jobs`, and what lets `submit_job` seed the same inline id twice in one
 //! session without the second call colliding with the first's rows.
+//!
+//! `submit_job`, `get_job_run` and `stop_job_run` also take `wait_seconds`, bounded and
+//! clamped by `super::wait` - reused rather than copied three times, since the clamp and
+//! the "wait nothing can service is refused" rule are each one concept the three calls
+//! must not drift apart on.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -19,8 +24,10 @@ use rmcp::schemars::{self, JsonSchema};
 use rmcp::{tool, tool_router};
 use serde::{Deserialize, Serialize};
 
-use crate::cli::commands::job::{installed_job_id, select_job_run};
-use crate::cli::commands::job_run::{parse_job_run_status, JobRunDetail, TaskRunAttemptLog};
+use crate::cli::commands::job::{ensure_data_dir_is_served, installed_job_id};
+use crate::cli::commands::job_run::{
+    parse_job_run_status, stop_job_run as request_job_run_stop, JobRunDetail, TaskRunAttemptLog,
+};
 use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
 use crate::crud::multistatements::misc::JobIdAlreadyInstalled;
@@ -31,6 +38,7 @@ use crate::serve_state::{status, ServeStatus};
 use crate::toolkit::Toolkit;
 use crate::yaml_models::job_yaml::JobYaml;
 
+use super::wait::{clamp_wait_seconds, wait_for_settled_job_run};
 use super::McpServer;
 
 /// `get_task_output`'s default, applied per stream when the caller does not name one.
@@ -55,6 +63,10 @@ pub struct SubmitJob {
     /// Values for the job's declared parameters, by name. A name the job does not declare
     /// is refused.
     pub params: Option<BTreeMap<String, String>>,
+    /// Wait up to this many seconds for the run to finish before returning it. Absent or 0
+    /// returns the pending run at once. Clamps to 300 rather than refusing above it; on
+    /// elapse the run comes back merely unfinished, never as an error.
+    pub wait_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -72,6 +84,20 @@ pub struct ListJobRuns {
 pub struct GetJobRun {
     /// The id of the job run to show.
     pub job_run_id: i64,
+    /// Wait up to this many seconds for the run to finish before returning it. Absent or 0
+    /// returns it at once. Clamps to 300 rather than refusing above it; on elapse the run
+    /// comes back merely unfinished, never as an error.
+    pub wait_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StopJobRun {
+    /// The id of the job run to stop.
+    pub job_run_id: i64,
+    /// Wait up to this many seconds for the run to settle before returning it. Absent or 0
+    /// returns as soon as the stop has been requested. Clamps to 300 rather than refusing
+    /// above it; on elapse the run comes back merely unfinished, never as an error.
+    pub wait_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -101,8 +127,9 @@ impl McpServer {
     }
 
     /// Submit a run of a job: one installed in the data directory, a file that is never
-    /// installed there, or a definition given inline. Mirrors `job submit --json` without
-    /// `--wait`, which a later cut adds back as `wait_seconds`.
+    /// installed there, or a definition given inline. Mirrors `job submit --json`, with
+    /// `wait_seconds` standing in for `--wait` - bounded rather than blocking, since it is
+    /// the client's own call timeout, not this server's, that would otherwise cut it off.
     #[tool]
     async fn submit_job(&self, Parameters(args): Parameters<SubmitJob>) -> CallToolResult {
         match submit_job_run(&self.toolkit, args).await {
@@ -128,10 +155,11 @@ impl McpServer {
         }
     }
 
-    /// Show one job run and the task runs under it.
+    /// Show one job run and the task runs under it. `wait_seconds` waits for it to settle
+    /// first, bounded the same way `submit_job`'s is.
     #[tool]
     async fn get_job_run(&self, Parameters(args): Parameters<GetJobRun>) -> CallToolResult {
-        match get_job_run_detail(&self.toolkit, args.job_run_id).await {
+        match get_job_run_detail(&self.toolkit, args.job_run_id, args.wait_seconds).await {
             Ok(detail) => success_json(detail),
             Err(err) => error_result(&err),
         }
@@ -144,6 +172,18 @@ impl McpServer {
 
         match get_task_output_logs(&self.toolkit, args.job_run_id, args.task.as_deref(), max_bytes).await {
             Ok(logs) => success_json(logs),
+            Err(err) => error_result(&err),
+        }
+    }
+
+    /// Ask for a running job run to be stopped. Mirrors `JobRunStopCmd::run`, but always
+    /// returns the `JobRun` row - waited to settle, or merely queued - rather than the
+    /// CLI's `{job_run_id, stop_requested}` shape without a wait, so a caller reads
+    /// `.status` off the result either way.
+    #[tool]
+    async fn stop_job_run(&self, Parameters(args): Parameters<StopJobRun>) -> CallToolResult {
+        match stop_job_run_and_wait(&self.toolkit, args).await {
+            Ok(job_run) => success_json(job_run),
             Err(err) => error_result(&err),
         }
     }
@@ -269,6 +309,14 @@ fn describe_ad_hoc_job_collision(err: anyhow::Error) -> anyhow::Error {
 async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(JobRun, Option<String>)> {
     let definition = resolve_definition(&args)?;
     let overrides = args.params.unwrap_or_default();
+    let wait_seconds = clamp_wait_seconds(args.wait_seconds);
+
+    // Before the run is written, so a wait that cannot be serviced leaves no queued run
+    // behind for a server that is not there to run it - the same ordering `job submit
+    // --wait` keeps.
+    if wait_seconds > 0 {
+        ensure_data_dir_is_served(&toolkit.app_config.data_dir)?;
+    }
 
     let toolkit = toolkit.with_fresh_mem();
     let _memory_conn = toolkit.get_memory_conn().await?;
@@ -297,7 +345,7 @@ async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(J
     };
 
     let job_run_id = crud.submit_job(&mut conn, &job_id, &overrides, None).await?;
-    let job_run = select_job_run(&crud, &mut conn, job_run_id).await?;
+    let job_run = wait_for_settled_job_run(&crud, &mut conn, job_run_id, wait_seconds).await?;
 
     // A lookup failure here is not a failure to submit - the run is already written by
     // this point, so surfacing it as a tool error would read as "the submit failed" to an
@@ -373,12 +421,32 @@ async fn list_job_runs_rows(
 }
 
 /// `get_job_run`'s own connection, and the same cross-entity assembly `job-run get` reads
-/// through `CRUD::select_job_run_with_task_runs`.
-async fn get_job_run_detail(toolkit: &Toolkit, job_run_id: i64) -> anyhow::Result<JobRunDetail> {
+/// through `CRUD::select_job_run_with_task_runs`. A wait, if any, is spent on the run alone
+/// - `wait_for_settled_job_run` knows nothing of task runs - and the detail is assembled
+/// fresh afterwards either way, so a `wait_seconds` of `0` costs nothing beyond the one
+/// query `job-run get` already runs.
+async fn get_job_run_detail(
+    toolkit: &Toolkit,
+    job_run_id: i64,
+    wait_seconds: Option<u64>,
+) -> anyhow::Result<JobRunDetail> {
+    let wait_seconds = clamp_wait_seconds(wait_seconds);
+
+    // Before the wait, for the same reason `job-run stop --wait` checks first: nothing but
+    // the serve process settles this row, so waiting on a directory nothing serves is a
+    // silent hang.
+    if wait_seconds > 0 {
+        ensure_data_dir_is_served(&toolkit.app_config.data_dir)?;
+    }
+
     let toolkit = toolkit.with_fresh_mem();
     let mut conn = toolkit.get_conn().await?;
 
     let crud = CRUD::new(Arc::new(toolkit));
+
+    if wait_seconds > 0 {
+        wait_for_settled_job_run(&crud, &mut conn, job_run_id, wait_seconds).await?;
+    }
 
     let (job_run, task_runs) = crud.select_job_run_with_task_runs(&mut conn, job_run_id).await?;
 
@@ -428,6 +496,28 @@ fn truncated_task_run_attempt_log(
     }
 }
 
+/// `stop_job_run`'s own connection. Writes the stop row before any wait, mirroring
+/// `JobRunStopCmd::run`'s own ordering: the refusal below runs first so a wait nothing can
+/// service changes nothing, but once the wait is allowed to proceed the stop is requested
+/// regardless of whether `wait_seconds` is `0` - a caller that never asked to wait still
+/// gets the stop queued.
+async fn stop_job_run_and_wait(toolkit: &Toolkit, args: StopJobRun) -> anyhow::Result<JobRun> {
+    let wait_seconds = clamp_wait_seconds(args.wait_seconds);
+
+    if wait_seconds > 0 {
+        ensure_data_dir_is_served(&toolkit.app_config.data_dir)?;
+    }
+
+    let toolkit = toolkit.with_fresh_mem();
+    let mut conn = toolkit.get_conn().await?;
+
+    let crud = CRUD::new(Arc::new(toolkit));
+
+    request_job_run_stop(&crud, &mut conn, args.job_run_id).await?;
+
+    wait_for_settled_job_run(&crud, &mut conn, args.job_run_id, wait_seconds).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,7 +546,7 @@ mod tests {
         });
 
         let yaml = "id: probe\nname: Probe\ntasks:\n  - id: say\n    command: \"true\"\n".to_string();
-        let args = || SubmitJob { job: None, file: None, yaml: Some(yaml.clone()), params: None };
+        let args = || SubmitJob { job: None, file: None, yaml: Some(yaml.clone()), params: None, wait_seconds: None };
 
         let (first, second) = tokio::join!(
             submit_job_run(&toolkit, args()),
@@ -479,6 +569,7 @@ mod tests {
             file: file.map(str::to_string),
             yaml: yaml.map(str::to_string),
             params: None,
+            wait_seconds: None,
         }
     }
 

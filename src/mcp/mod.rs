@@ -7,6 +7,7 @@ use rmcp::{tool_handler, tool_router, ServerHandler};
 use crate::toolkit::Toolkit;
 
 mod tools;
+mod wait;
 
 /// flowlite as a set of tools an agent calls, over JSON-RPC on stdin and stdout.
 ///
@@ -21,7 +22,7 @@ pub struct McpServer {
 }
 
 /// This block keeps `allow_empty` because it still declares no `#[tool]` fn of its own -
-/// the four tools live in `tools.rs`'s own `#[tool_router(router = tools_router)]` block,
+/// the six tools live in `tools.rs`'s own `#[tool_router(router = tools_router)]` block,
 /// composed below. The attribute is a compile error on an empty block without it.
 #[tool_router(allow_empty)]
 impl McpServer {

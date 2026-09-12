@@ -317,7 +317,10 @@ impl JobRunRerunCmd {
 ///
 /// A settled run is refused rather than accepted: its row would never be read, and a
 /// caller told the stop succeeded would have been told something untrue.
-async fn stop_job_run(
+///
+/// `pub(crate)` rather than private: the MCP `stop_job_run` tool (`src/mcp/tools.rs`)
+/// writes the same row this command does, ahead of its own optional wait.
+pub(crate) async fn stop_job_run(
     crud: &CRUD,
     conn: &mut sqlx::SqliteConnection,
     job_run_id: i64,
