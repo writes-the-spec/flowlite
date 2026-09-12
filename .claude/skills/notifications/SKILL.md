@@ -1,3 +1,8 @@
+---
+name: notifications
+description: The notification service (src/notifications/) - the background loop that delivers a job run's outcome over email or Slack, the NotificationChannel enum that decides how, and the single NotificationMessage rendered as text, HTML and Slack blocks. Use when adding or changing a channel, changing what a notification says or how it is rendered, tracing why one was sent, skipped or left pending, or working with job_run_notification rows, FakeSlack, or the [smtp] and [slack] config sections.
+---
+
 # Notifications
 
 `src/notifications/` delivers the messages something else decided to send. One background service, one channel per way of reaching somebody, and one table between it and whatever produced the work.

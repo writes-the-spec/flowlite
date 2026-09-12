@@ -3,7 +3,7 @@
 //! See the `frontends` skill for what belongs there and what stays frontend-side.
 //!
 //! Here rather than inline because what it reads is the source tree rather than the crate,
-//! so it belongs to no module in particular. `skill_links.rs` is here for the same reason;
+//! so it belongs to no module in particular. `skills.rs` is here for the same reason;
 //! the rest of this directory needs a real second process.
 
 use std::path::{Path, PathBuf};
