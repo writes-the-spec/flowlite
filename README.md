@@ -835,6 +835,61 @@ block, so the browser can change what a run is submitted with but not what the j
 that stays a file in git. The run records the values it was submitted with, so a rerun
 replays them.
 
+## Driving flowlite from an agent
+
+`flowlite mcp` speaks the Model Context Protocol on stdin and stdout, so an agent drives
+flowlite through the same reads and writes the CLI makes. Install it with one line:
+
+```bash
+claude mcp add flowlite -- flowlite -D ./data mcp
+```
+
+No port, no HTTP and nothing to start first: the client spawns the binary, talks JSON-RPC
+over its stdio, and the process exits when the client closes stdin. `-D` / `--data-dir`
+names the directory, the same way every other command learns it.
+
+Six tools, each a projection of a command that already exists:
+
+| Tool | Answers |
+|---|---|
+| `list_jobs` | What jobs does this data directory declare? |
+| `submit_job` | Run this — and, with `wait_seconds`, how did it end? |
+| `list_job_runs` | What has run lately, by job and by status? |
+| `get_job_run` | What happened to run 42, task by task? |
+| `get_task_output` | What did each attempt write to stdout and stderr? |
+| `stop_job_run` | Stop run 42, and tell me what it settled to. |
+
+Each returns the JSON its `--json` twin prints, so an agent and a shell script reading one
+run read the same fields. `get_task_output` is the only one that differs, and only in
+length: it keeps the last `max_bytes` of each stream, 20000 by default, and says on a marker
+line how many bytes it dropped. A terminal has a scrollback and a `| tail`; a context window
+has neither.
+
+`submit_job` names what to run exactly one of three ways:
+
+```jsonc
+{ "job": "etl" }                                 // a job installed under jobs/
+{ "file": "pipelines/probe.yaml" }               // a path, read where it lies
+{ "yaml": "id: probe\ntasks:\n  - id: ..." }     // the definition itself, inline
+```
+
+The last two are [a run from a file](#a-run-from-a-file) reached two ways — nothing is
+installed, and the run stays inspectable and rerunnable afterwards because it snapshots the
+definition it executed. `params` is a JSON object rather than repeated `name=value` strings,
+and a name the job does not declare is refused exactly as `--param` refuses it.
+
+`submit_job`, `get_job_run` and `stop_job_run` each take `wait_seconds`, which is how an
+agent gets an outcome in one call instead of a polling loop. It polls the run's row and
+returns as soon as the run settles; if the time runs out first the run comes back merely
+unfinished rather than as an error, because its id is what lets the agent ask again. A value
+above 300 clamps to 300 rather than being refused.
+
+**A submit into a directory nothing is serving queues a run that will not start.** It is
+allowed, for the same reason the command line allows it — work queued for a server that is
+not up yet is legitimate — and the tool result says so in a line beside the JSON. Run
+`flowlite serve` against that directory and the queued run is picked up. A `wait_seconds`
+above 0 is refused there outright, since nothing would ever settle the row it would poll.
+
 ## Configuration
 
 Everything below has a default, so flowlite runs with no `config.toml` at all. Write one in

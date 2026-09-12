@@ -26,20 +26,24 @@ pub struct Toolkit {
 /// Serializes every schema migration this process runs, disk or memory.
 ///
 /// Discovered while building the MCP `submit_job` tool's concurrency test (the regression
-/// test for `with_fresh_mem` itself, in `src/mcp/tools.rs`): two connections each attaching
-/// a `cache=shared` database and migrating at the same time can raise
-/// `SQLITE_LOCKED_SHAREDCACHE` ("database schema is locked") against the *other* database
-/// the racing connection has open, not only the one being migrated - a genuine SQLite
-/// hazard, not anything this crate's own SQL does, and one no per-call `mem` name can dodge
-/// because every call still migrates the *disk* schema on the *same* file. A CLI command
-/// never hit this because it is the only connection its process ever opens; `serve` and
-/// `mcp` are the first long-lived processes where a second migration can start before the
-/// first has finished.
+/// test for `with_fresh_mem` itself, in `src/mcp/tools.rs`). `with_fresh_mem` gives each
+/// call a `mem` name nothing else has, so no two concurrent calls share a cache; the one
+/// object they all still share is the `flowlite.db` *file*, and that is what races.
 ///
-/// A migration is a handful of queries per call - `list_applied_migrations` and nothing
-/// else once the schema is current - so serializing every one of them costs nothing worth
-/// measuring, and it is far simpler to reason about than trying to prove which combination
-/// of concurrent calls is safe to migrate in parallel.
+/// sqlx-sqlite implements `Migrate::lock` and `unlock` as no-ops, so nothing serializes two
+/// connections migrating the same fresh database: both read zero applied migrations and
+/// both run the same `CREATE TABLE`s. A CLI command never hit this because it is the only
+/// connection its process ever opens; `serve` and `mcp` are the first long-lived processes
+/// where a second migration can start before the first has finished.
+///
+/// This is not free even once the schema is current: `ensure_migrations_table` issues a
+/// `CREATE TABLE IF NOT EXISTS` - a write, taking a write lock - on every connection open,
+/// so every migration here is a write and not just a read of `_sqlx_migrations`.
+///
+/// It is the in-process analogue of the `ServeLock` (`src/cli/commands/serve.rs:37`), taken
+/// cross-process for the same reason, and it does **not** close the cross-process case: two
+/// flowlite processes first-migrating one fresh data directory can still collide, since
+/// only `serve` holds that lock.
 static MIGRATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 
