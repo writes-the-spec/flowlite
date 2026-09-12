@@ -2,14 +2,6 @@ use sqlx::{SqliteConnection, SqlitePool, Connection};
 use crate::app_config::AppConfig;
 use std::path::{Path};
 use chrono::{DateTime, Utc};
-use argon2::{
-    password_hash::{
-        PasswordHash, PasswordHasher, PasswordVerifier, SaltString
-    },
-    Argon2
-};
-use sha2::{Sha256, Digest};
-use rand::rngs::OsRng;
 use sqlx::sqlite::SqlitePoolOptions;
 use uuid::Uuid;
 
@@ -159,37 +151,6 @@ impl Toolkit {
         Ok(())
     }
 
-    pub fn argon2_hash(&self, password: &str) -> anyhow::Result<String> {
-        let salt = SaltString::generate(&mut OsRng);
-        let argon2 = Argon2::default();
-        let password_hash = argon2.hash_password(password.as_bytes(), &salt)
-            .map_err(|e| anyhow::anyhow!("failed to hash password: {}", e))?
-            .to_string();
-        Ok(password_hash)
-    }
-
-    pub fn argon2_verify(&self, password: &str, hash: &str) -> anyhow::Result<bool> {
-        let parsed_hash = PasswordHash::new(hash)
-            .map_err(|e| anyhow::anyhow!("failed to parse password hash: {}", e))?;
-        let argon2 = Argon2::default();
-        match argon2.verify_password(password.as_bytes(), &parsed_hash) {
-            Ok(_) => Ok(true),
-            Err(argon2::password_hash::Error::Password) => Ok(false),
-            Err(e) => Err(anyhow::anyhow!("failed to verify password: {}", e)),
-        }
-    }
-
-    pub fn sha256_hash(&self, data: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(data.as_bytes());
-        let result = hasher.finalize();
-        format!("{:x}", result)
-    }
-
-    pub fn generate_token(&self) -> String {
-        Uuid::new_v4().to_string().replace("-", "")
-    }
-
     pub fn get_current_ts(&self) -> DateTime<Utc> {
         Utc::now()
     }
@@ -285,6 +246,35 @@ tasks:
 
         let _ = std::fs::remove_dir_all(&data_dir_a);
         let _ = std::fs::remove_dir_all(&data_dir_b);
+    }
+
+    /// `get_conn` attaches `mem` but deliberately does not migrate it: the memory schema
+    /// belongs to `get_memory_conn`, whose connection is also what keeps the database
+    /// alive. Attaching both here instead would mean every CLI command that reads only run
+    /// history paid for a schema it never queries - and would quietly create an empty `mem`
+    /// for callers that expect to attach the one `serve` seeded.
+    ///
+    /// The failure this pins is the confusing one: an attached but unmigrated database is
+    /// not an error until something reads it, and then it reads as a missing table.
+    #[tokio::test]
+    async fn a_connection_attaches_mem_without_migrating_it() {
+        let data_dir = std::env::temp_dir().join(format!("flowlite-toolkit-test-{}", Uuid::new_v4()));
+
+        let toolkit = Toolkit::new(AppConfig {
+            data_dir: data_dir.to_string_lossy().into_owned(),
+            ..AppConfig::default()
+        }).with_fresh_mem();
+
+        let mut conn = toolkit.get_conn().await.unwrap();
+        let error = sqlx::query("SELECT job_id FROM mem.job")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("no such table: mem.job"), "{error}");
+
+        let _ = std::fs::remove_dir_all(&data_dir);
     }
 
     /// `Toolkit::new` must still open `flowlite_mem` - every existing CLI command and test
