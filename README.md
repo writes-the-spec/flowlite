@@ -860,10 +860,17 @@ Six tools, each a projection of a command that already exists:
 | `stop_job_run` | Stop run 42, and tell me what it settled to. |
 
 Each returns the JSON its `--json` twin prints, so an agent and a shell script reading one
-run read the same fields. `get_task_output` is the only one that differs, and only in
-length: it keeps the last `max_bytes` of each stream, 20000 by default, and says on a marker
-line how many bytes it dropped. A terminal has a scrollback and a `| tail`; a context window
-has neither.
+run read the same fields. Two differ, each for a stated reason.
+
+`get_task_output` differs only in length: it keeps the last `max_bytes` of each stream,
+20000 by default, and says on a marker line how many bytes it dropped. A terminal has a
+scrollback and a `| tail`; a context window has neither.
+
+`stop_job_run` returns the whole run, waited or not, where `job-run stop --json` prints
+`{"job_run_id": 42, "stop_requested": true}` unless you passed `--wait`. One shape either
+way means an agent reads `.status` off the result instead of branching on which argument it
+sent — the same reason `job submit --json` reads the run back and prints it with and without
+`--wait`.
 
 `submit_job` names what to run exactly one of three ways:
 
