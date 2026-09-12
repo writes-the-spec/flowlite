@@ -41,6 +41,6 @@ Read the doc comments on `MIGRATION_LOCK` and both methods before changing eithe
 ## Rules
 
 - **Nothing but `Toolkit` opens a database.** A connection string, an `ATTACH`, or a `SqlitePoolOptions` anywhere else is a second place the two schemas have to agree.
-- **`toolkit.get_current_ts()` is the clock**, not `Utc::now()` scattered about — one seam, and the thing a test would replace.
+- **`toolkit.get_current_ts()` is how CRUD stamps a row.** Every `created_at` an insert writes goes through it, and the `Scheduler` reads "now" through it to find due schedules. It is *not* a single clock seam for the whole program: the orchestrator services, the router and the CLI call `Utc::now()` directly, so a test that needs to control time inserts a backdated row (`TestDb::backdate_task_run_attempt`) rather than replacing a clock.
 - **`Toolkit` is cheap to clone and is passed by value**; services hold an `Arc<Toolkit>`.
 - **Don't reach for `with_fresh_mem` by default.** A fresh name is a private, empty `mem` — right for a process that seeds repeatedly, wrong for anything that expects to see what `serve` seeded.

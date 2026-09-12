@@ -6,11 +6,16 @@ use cron::Schedule as CronSchedule;
 use std::str::FromStr;
 use crate::crud::schedule::Schedule;
 
+/// A schedule's cron expression, the zone it is read in, and the dates that bound it.
+///
+/// The fields are private because the bounds are the whole point: reading `schedule` and
+/// calling `after()` on it directly would skip `start_date` and `end_date`, which is the
+/// one thing `get_next_run` is here to apply.
 pub struct CronTrigger {
-    pub schedule: CronSchedule,
-    pub timezone: Tz,
-    pub start_date: Option<NaiveDate>,
-    pub end_date: Option<NaiveDate>,
+    schedule: CronSchedule,
+    timezone: Tz,
+    start_date: Option<NaiveDate>,
+    end_date: Option<NaiveDate>,
 }
 
 impl CronTrigger {
