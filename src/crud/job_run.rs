@@ -438,6 +438,204 @@ mod tests {
         SelectJobRunsDataFilter { id: None, job_id: None, status: None, statuses: None }
     }
 
+    fn ids(runs: &[JobRun]) -> Vec<i64> {
+        runs.iter().map(|run| run.id).collect()
+    }
+
+    async fn count(db: &crate::test_support::TestDb, filter: SelectJobRunsDataFilter) -> i64 {
+        db.crud.count_job_runs(&*db.conn_pool, &CountJobRunsData { filter }).await.unwrap()
+    }
+
+    /// Sorted, because `SELECT DISTINCT` promises no order of its own.
+    async fn job_ids(db: &crate::test_support::TestDb, filter: SelectJobRunsDataFilter) -> Vec<String> {
+
+        let mut job_ids = db.crud.select_job_run_job_ids(
+            &*db.conn_pool,
+            &SelectJobRunJobIdsData { filter },
+        ).await.unwrap();
+
+        job_ids.sort();
+        job_ids
+    }
+
+    /// A run under a caller-chosen job id — `TestDb::insert_job_run` always writes
+    /// `job_id: "job"`, and every filter here needs at least two job ids to tell apart.
+    async fn insert_run_for(db: &crate::test_support::TestDb, job_id: &str, status: JobRunStatus) -> JobRun {
+
+        let id = db.crud.insert_job_run(
+            &*db.conn_pool,
+            &InsertJobRunData {
+                input: InsertJobRunDataInput {
+                    job_id: job_id.to_string(),
+                    job_name: "Job".to_string(),
+                    job_description: String::new(),
+                    parameters: BTreeMap::new(),
+                    scheduled_at: None,
+                    status,
+                },
+            },
+        ).await.unwrap();
+
+        db.job_run(id).await
+    }
+
+    /// Three runs over two jobs and three statuses — enough for every filter field of
+    /// `count_job_runs` and `select_job_run_job_ids` to pick out a different subset.
+    async fn three_runs(db: &crate::test_support::TestDb) -> (JobRun, JobRun, JobRun) {
+        (
+            insert_run_for(db, "job-a", JobRunStatus::Succeeded).await,
+            insert_run_for(db, "job-a", JobRunStatus::Failed).await,
+            insert_run_for(db, "job-b", JobRunStatus::Aborted).await,
+        )
+    }
+
+    /// An empty filter counts the whole table — the count's half of the parity the delete
+    /// filter's own test pins.
+    #[tokio::test]
+    async fn count_job_runs_counts_every_row_of_an_empty_filter() {
+
+        let db = crate::test_support::TestDb::new().await;
+        three_runs(&db).await;
+
+        assert_eq!(count(&db, empty_filter()).await, 3);
+    }
+
+    #[tokio::test]
+    async fn count_job_runs_filters_by_job_id() {
+
+        let db = crate::test_support::TestDb::new().await;
+        three_runs(&db).await;
+
+        assert_eq!(count(&db, SelectJobRunsDataFilter { job_id: Some("job-a".to_string()), ..empty_filter() }).await, 2);
+        assert_eq!(count(&db, SelectJobRunsDataFilter { job_id: Some("job-b".to_string()), ..empty_filter() }).await, 1);
+    }
+
+    #[tokio::test]
+    async fn count_job_runs_filters_by_status() {
+
+        let db = crate::test_support::TestDb::new().await;
+        three_runs(&db).await;
+
+        assert_eq!(count(&db, SelectJobRunsDataFilter { status: Some(JobRunStatus::Failed), ..empty_filter() }).await, 1);
+        assert_eq!(count(&db, SelectJobRunsDataFilter { status: Some(JobRunStatus::Pending), ..empty_filter() }).await, 0);
+    }
+
+    #[tokio::test]
+    async fn count_job_runs_filters_by_statuses() {
+
+        let db = crate::test_support::TestDb::new().await;
+        three_runs(&db).await;
+
+        let two_of_three = SelectJobRunsDataFilter {
+            statuses: Some(vec![JobRunStatus::Succeeded, JobRunStatus::Aborted]),
+            ..empty_filter()
+        };
+
+        assert_eq!(count(&db, two_of_three).await, 2);
+    }
+
+    #[tokio::test]
+    async fn count_job_runs_filters_by_id() {
+
+        let db = crate::test_support::TestDb::new().await;
+        let (first, _, _) = three_runs(&db).await;
+
+        assert_eq!(count(&db, SelectJobRunsDataFilter { id: Some(first.id), ..empty_filter() }).await, 1);
+    }
+
+    /// The projection deduplicates: `job-a` owns two runs and comes back once.
+    #[tokio::test]
+    async fn select_job_run_job_ids_returns_each_job_id_once() {
+
+        let db = crate::test_support::TestDb::new().await;
+        three_runs(&db).await;
+
+        assert_eq!(job_ids(&db, empty_filter()).await, vec!["job-a".to_string(), "job-b".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn select_job_run_job_ids_filters_by_job_id() {
+
+        let db = crate::test_support::TestDb::new().await;
+        three_runs(&db).await;
+
+        let only_a = SelectJobRunsDataFilter { job_id: Some("job-a".to_string()), ..empty_filter() };
+
+        assert_eq!(job_ids(&db, only_a).await, vec!["job-a".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn select_job_run_job_ids_filters_by_status() {
+
+        let db = crate::test_support::TestDb::new().await;
+        three_runs(&db).await;
+
+        let aborted = SelectJobRunsDataFilter { status: Some(JobRunStatus::Aborted), ..empty_filter() };
+
+        assert_eq!(job_ids(&db, aborted).await, vec!["job-b".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn select_job_run_job_ids_filters_by_statuses() {
+
+        let db = crate::test_support::TestDb::new().await;
+        three_runs(&db).await;
+
+        let succeeded_or_failed = SelectJobRunsDataFilter {
+            statuses: Some(vec![JobRunStatus::Succeeded, JobRunStatus::Failed]),
+            ..empty_filter()
+        };
+
+        assert_eq!(job_ids(&db, succeeded_or_failed).await, vec!["job-a".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn select_job_run_job_ids_filters_by_id() {
+
+        let db = crate::test_support::TestDb::new().await;
+        let (_, _, third) = three_runs(&db).await;
+
+        assert_eq!(job_ids(&db, SelectJobRunsDataFilter { id: Some(third.id), ..empty_filter() }).await, vec!["job-b".to_string()]);
+    }
+
+    /// `status` and `statuses` ask different questions and **both** apply when both are
+    /// set, as `SelectJobRunsDataFilter` documents. Pinned on all three methods that render
+    /// the filter, since they render it through one shared helper and a change to it would
+    /// otherwise move all three at once, unnoticed.
+    ///
+    /// The fixture makes an intersection the only answer that fits: `status: Failed` alone
+    /// would match one run, `statuses: [Succeeded, Failed]` alone two, and the pair one —
+    /// then `status: Aborted` with those same statuses matches none, which no
+    /// "last-one-wins" reading of the two fields could produce.
+    #[tokio::test]
+    async fn status_and_statuses_both_apply_when_both_are_set() {
+
+        let db = crate::test_support::TestDb::new().await;
+        let (_, failed, _) = three_runs(&db).await;
+
+        let succeeded_or_failed = vec![JobRunStatus::Succeeded, JobRunStatus::Failed];
+
+        let overlapping = SelectJobRunsDataFilter {
+            status: Some(JobRunStatus::Failed),
+            statuses: Some(succeeded_or_failed.clone()),
+            ..empty_filter()
+        };
+
+        assert_eq!(ids(&select(&db, overlapping.clone()).await), vec![failed.id]);
+        assert_eq!(count(&db, overlapping.clone()).await, 1);
+        assert_eq!(job_ids(&db, overlapping).await, vec!["job-a".to_string()]);
+
+        let disjoint = SelectJobRunsDataFilter {
+            status: Some(JobRunStatus::Aborted),
+            statuses: Some(succeeded_or_failed),
+            ..empty_filter()
+        };
+
+        assert!(select(&db, disjoint.clone()).await.is_empty());
+        assert_eq!(count(&db, disjoint.clone()).await, 0);
+        assert!(job_ids(&db, disjoint).await.is_empty());
+    }
+
     /// `status` really filters: deleting by status only removes the matching run, and its
     /// neighbour of a different status survives.
     #[tokio::test]
