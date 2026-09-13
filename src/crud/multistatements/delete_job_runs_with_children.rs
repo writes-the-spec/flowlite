@@ -131,6 +131,61 @@ mod tests {
     use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
     use crate::test_support::TestDb;
 
+    /// Offsets every child table's own autoincrement id by a different amount before a
+    /// test builds its `full_job_run`s, so that within one job run's six rows, no two of
+    /// `job_run.id`, `task_run.id`, `task_run_attempt.id`, `task_run_attempt_output.id`,
+    /// `job_run_stop.id` and `job_run_notification.id` ever coincide.
+    ///
+    /// Without this, a fixture built from exactly one row per table advances every one of
+    /// those six sequences in lockstep - `full_job_run` called twice gives ids (1,1,1,1,1,1)
+    /// and (2,2,2,2,2,2) - so a child delete that filtered on the wrong column (its own
+    /// `id`, or a sibling table's id) would still happen to hit the right row, and neither
+    /// cascade test below would notice.
+    async fn prime_distinct_child_ids(db: &TestDb) {
+
+        let padding_job_run = db.insert_job_run(JobRunStatus::Succeeded).await;
+
+        let mut padding_task_run = db.insert_task_run(padding_job_run.id, TaskRunStatus::Succeeded).await;
+        for _ in 0..1 {
+            padding_task_run = db.insert_task_run(padding_job_run.id, TaskRunStatus::Succeeded).await;
+        }
+
+        let mut padding_attempt = db.insert_task_run_attempt(&padding_task_run, 1, TaskRunAttemptStatus::Succeeded).await;
+        for attempt_number in 2..=3 {
+            padding_attempt = db.insert_task_run_attempt(&padding_task_run, attempt_number, TaskRunAttemptStatus::Succeeded).await;
+        }
+
+        for _ in 0..4 {
+            db.crud.insert_task_run_attempt_output(
+                &*db.conn_pool,
+                &InsertTaskRunAttemptOutputData {
+                    input: InsertTaskRunAttemptOutputDataInput {
+                        task_run_attempt_id: padding_attempt.id,
+                        task_run_id: padding_task_run.id,
+                        job_run_id: padding_job_run.id,
+                        job_id: padding_task_run.job_id.clone(),
+                        task_id: padding_task_run.task_id.clone(),
+                        stream: TaskRunAttemptOutputStream::Stdout,
+                        content: "padding".to_string(),
+                    },
+                },
+            ).await.unwrap();
+        }
+
+        for _ in 0..5 {
+            db.insert_job_run_stop(padding_job_run.id).await;
+        }
+
+        for _ in 0..6 {
+            db.insert_job_run_notification(
+                padding_job_run.id,
+                NotifyOn::Failure,
+                NotificationChannel::Email,
+                &["oncall@example.com"],
+            ).await;
+        }
+    }
+
     fn delete_by_id(job_run_id: i64) -> DeleteJobRunsData {
         DeleteJobRunsData {
             filter: DeleteJobRunsDataFilter {
@@ -244,10 +299,16 @@ mod tests {
 
     /// Every row a run can own - across all six tables - is gone once it is deleted, and
     /// the run itself with them.
+    ///
+    /// `prime_distinct_child_ids` keeps `job_run.id`, `task_run.id`, `task_run_attempt.id`,
+    /// `task_run_attempt_output.id`, `job_run_stop.id` and `job_run_notification.id` from
+    /// coinciding, so a child delete that filtered on the wrong column would leave a
+    /// nonzero count here rather than passing by coincidence.
     #[tokio::test]
     async fn deleting_a_job_run_removes_its_rows_from_all_six_tables() {
 
         let db = TestDb::new().await;
+        prime_distinct_child_ids(&db).await;
         let (job_run, _task_run) = full_job_run(&db).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
@@ -264,10 +325,14 @@ mod tests {
     /// The whole point of keying every statement on `job_run_id` (or, for `job_run`
     /// itself, `id`): a neighbouring run's rows in the very same six tables are left
     /// completely untouched.
+    ///
+    /// `prime_distinct_child_ids` keeps every child table's id from coinciding with
+    /// `job_run.id` - see its doc comment.
     #[tokio::test]
     async fn a_neighbouring_runs_rows_survive_deletion() {
 
         let db = TestDb::new().await;
+        prime_distinct_child_ids(&db).await;
         let (deleted, _) = full_job_run(&db).await;
         let (kept, _) = full_job_run(&db).await;
 

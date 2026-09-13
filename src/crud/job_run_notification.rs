@@ -403,10 +403,17 @@ mod tests {
 
     /// `job_run_id` really filters: deleting by one job run's id only removes its
     /// notification, leaving a neighbouring job run's notification untouched.
+    ///
+    /// A throwaway job run with no notification of its own is inserted first so
+    /// `job_run.id` and `job_run_notification.id` diverge (2 and 1, not both 1) -
+    /// otherwise a delete that filtered on the notification's own `id` instead of
+    /// `job_run_id` would still happen to hit the right row and this test would not notice.
     #[tokio::test]
     async fn delete_job_run_notifications_filters_by_job_run_id() {
 
         let db = TestDb::new().await;
+
+        db.insert_job_run(JobRunStatus::Failed).await;
 
         let job_run = db.insert_job_run(JobRunStatus::Failed).await;
         db.insert_job_run_notification(job_run.id, NotifyOn::Failure, NotificationChannel::Email, &["oncall@example.com"]).await;

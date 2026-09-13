@@ -373,10 +373,17 @@ mod tests {
 
     /// `job_run_id` really filters: deleting by one job run's id only removes its attempt,
     /// leaving a neighbouring job run's attempt untouched.
+    ///
+    /// A throwaway job run is inserted first so `job_run.id` diverges from `task_run.id`
+    /// and `task_run_attempt.id` (2, then 1 and 1 - not all three coinciding) - otherwise a
+    /// delete that filtered on the attempt's own `id` or on `task_run_id` instead of
+    /// `job_run_id` would still happen to hit the right row and this test would not notice.
     #[tokio::test]
     async fn delete_task_run_attempts_filters_by_job_run_id() {
 
         let db = crate::test_support::TestDb::new().await;
+
+        db.insert_job_run(crate::crud::job_run::JobRunStatus::Failed).await;
 
         let job_run = db.insert_job_run(crate::crud::job_run::JobRunStatus::Failed).await;
         let task_run = db.insert_task_run(job_run.id, crate::crud::task_run::TaskRunStatus::Failed).await;

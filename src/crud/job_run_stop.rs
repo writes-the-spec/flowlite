@@ -166,10 +166,17 @@ mod tests {
 
     /// `job_run_id` really filters: deleting by one job run's id only removes its stop,
     /// leaving a neighbouring job run's stop untouched.
+    ///
+    /// A throwaway job run with no stop of its own is inserted first so `job_run.id` and
+    /// `job_run_stop.id` diverge (2 and 1, not both 1) - otherwise a delete that filtered on
+    /// the stop's own `id` instead of `job_run_id` would still happen to hit the right row
+    /// and this test would not notice.
     #[tokio::test]
     async fn delete_job_run_stops_filters_by_job_run_id() {
 
         let db = TestDb::new().await;
+
+        db.insert_job_run(JobRunStatus::Failed).await;
 
         let job_run = db.insert_job_run(JobRunStatus::Failed).await;
         db.insert_job_run_stop(job_run.id).await;

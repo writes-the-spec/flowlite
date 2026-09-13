@@ -470,12 +470,22 @@ mod tests {
 
     /// `task_run_attempt_id` really filters: deleting by one attempt's id only removes its
     /// output, leaving a neighbouring attempt's output untouched.
+    ///
+    /// A throwaway attempt is inserted under the same task run first, so the deleted
+    /// output row's `task_run_attempt_id`, `task_run_id`, `job_run_id` and its own `id`
+    /// all differ (2, 1, 1, 1) - otherwise a delete that filtered on one of those other
+    /// columns instead of `task_run_attempt_id` would still happen to hit the right row
+    /// and this test would not notice.
     #[tokio::test]
     async fn delete_task_run_attempt_outputs_filters_by_task_run_attempt_id() {
 
         let db = TestDb::new().await;
 
-        let deleted = attempt(&db).await;
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
+        db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
+        let deleted = db.insert_task_run_attempt(&task_run, 2, TaskRunAttemptStatus::Running).await;
+
         let kept = attempt(&db).await;
 
         insert(&db, &deleted, TaskRunAttemptOutputStream::Stdout, "gone").await;
