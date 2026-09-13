@@ -578,6 +578,37 @@ mod tests {
         assert_eq!(second_pass, vec![runs[2].id, runs[3].id]);
     }
 
+    /// Test 10: a per-job pass too small to take every candidate takes the oldest of them.
+    ///
+    /// Five finished runs, `keep_runs = 3`, a budget of one: the two oldest are deletable
+    /// and the older of those two is the one that goes. Taking the newer converges on the
+    /// same end state, but only after working backwards through the history one pass at a
+    /// time — so a server stopped partway through a backlog would leave a hole in the
+    /// middle of the run history instead of a trimmed tail.
+    #[tokio::test]
+    async fn a_budgeted_per_job_pass_deletes_the_oldest_runs_first() {
+
+        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+        db.insert_job("job", 3).await;
+
+        let mut runs = Vec::new();
+        for _ in 0..5 {
+            runs.push(db.insert_job_run(JobRunStatus::Succeeded).await);
+        }
+
+        // No global ceiling, so the one delete this pass may make is the per-job rule's.
+        let service = service_with_config(&db, AppConfig {
+            retention: AppConfigRetention { keep_runs_total: 0, max_deletes_per_pass: 1 },
+            ..db.app_config()
+        });
+
+        assert_eq!(service.select().await.unwrap(), vec![runs[0].id]);
+
+        service.handle(&runs[0].id).await.unwrap();
+
+        assert_eq!(service.select().await.unwrap(), vec![runs[1].id]);
+    }
+
     /// Test 9: the newest finished run of a job is never selected by the per-job rule.
     #[tokio::test]
     async fn the_newest_run_of_a_job_is_never_selected() {

@@ -8,24 +8,27 @@
 //! `keep_runs` — that policy belongs to the retention service. They only answer, for a
 //! given shape of question, which finished runs are candidates right now.
 
+use serde::{Deserialize, Serialize};
 use sqlx::SqliteConnection;
 
 use crate::crud::CRUD;
 use crate::crud::job_run::JobRunStatus;
 use crate::crud::job_run_notification::JobRunNotificationStatus;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Which end of a job's run list `SelectDeletableJobRunsData::offset` protects. It is not
+/// the order of the result — `select_deletable_job_runs` always returns oldest-first.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub enum SelectDeletableJobRunsDataSort {
     NewestFirst,
     OldestFirst,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SelectDeletableJobRunsDataFilter {
     pub job_id: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SelectDeletableJobRunsData {
     pub filter: SelectDeletableJobRunsDataFilter,
     pub sort: Option<SelectDeletableJobRunsDataSort>,
@@ -72,19 +75,29 @@ impl CRUD {
     }
 
     /// Finished runs matching `data.filter`, minus any that still owe a `Pending`
-    /// notification, ranked and windowed by `data.sort`/`data.offset`, and capped at
-    /// `data.limit`.
+    /// notification, windowed by `data.sort`/`data.offset` and capped at `data.limit`.
     ///
-    /// `offset` **is** `keep_runs`: `sort: NewestFirst` with `offset: Some(keep_runs)` is
-    /// the per-job window ("every finished run of this job past the newest `keep_runs`"),
-    /// and `sort: OldestFirst` with `offset: None` is the global oldest-first sweep across
-    /// every matched job. They are the same query because `offset` and `sort` are exactly
-    /// what distinguish them.
+    /// **The result is always ordered oldest-first**, whatever `sort` says, because
+    /// deletion proceeds oldest-first: a `limit` smaller than the candidate set has to bite
+    /// the newest end of it, so that a backlog is worked down from the old end and a
+    /// half-finished backlog leaves a trimmed tail rather than a hole in the middle of the
+    /// history.
     ///
-    /// **`offset: None` and `offset: Some(0)` both mean no offset** — the inverse of what
-    /// `0` means for every other number in this plan, where `0` means "no limit". With no
-    /// offset (and no `job_id` filter), every finished run of the matched jobs is a
-    /// candidate; deleting all of them is irreversible.
+    /// **`sort` chooses which end of the run list `offset` protects**, not the order of the
+    /// result: `NewestFirst` ranks newest-first, so `offset` skips the newest `offset` runs
+    /// — the per-job window, "every finished run of this job past the newest `keep_runs`".
+    /// `OldestFirst` ranks oldest-first, so `offset` would skip the *oldest* runs; the
+    /// global sweep pairs it with `offset: None` and so protects nothing. With `offset:
+    /// None` the two are therefore equivalent.
+    ///
+    /// **`sort: None` with `offset: Some(n)` is meaningless**: with no `ORDER BY` in the
+    /// inner subquery, which `n` rows the offset skips is whatever SQLite happens to
+    /// return, so no caller should pair them.
+    ///
+    /// `offset` **is** `keep_runs`, and **`offset: None` and `offset: Some(0)` both mean no
+    /// offset** — the inverse of what `0` means for every other number in this plan, where
+    /// `0` means "no limit". With no offset (and no `job_id` filter), every finished run of
+    /// the matched jobs is a candidate; deleting all of them is irreversible.
     ///
     /// `limit: None` means no `LIMIT` clause at all, since SQLite's `LIMIT 0` means zero
     /// rows rather than unlimited.
@@ -96,7 +109,7 @@ impl CRUD {
     /// first `offset`, in this order" without a window function.
     pub async fn select_deletable_job_runs(&self, conn: &mut SqliteConnection, data: &SelectDeletableJobRunsData) -> anyhow::Result<Vec<i64>> {
 
-        let order_by = data.sort.map(|sort| match sort {
+        let rank_by = data.sort.map(|sort| match sort {
             SelectDeletableJobRunsDataSort::NewestFirst => " ORDER BY id DESC",
             SelectDeletableJobRunsDataSort::OldestFirst => " ORDER BY id ASC",
         });
@@ -113,8 +126,8 @@ impl CRUD {
         query_builder.push(" AND status IN ");
         push_finished_statuses(&mut query_builder);
 
-        if let Some(order_by) = order_by {
-            query_builder.push(order_by);
+        if let Some(rank_by) = rank_by {
+            query_builder.push(rank_by);
         }
 
         if let Some(offset) = data.offset {
@@ -128,9 +141,10 @@ impl CRUD {
         query_builder.push_bind(JobRunNotificationStatus::Pending);
         query_builder.push(")");
 
-        if let Some(order_by) = order_by {
-            query_builder.push(order_by);
-        }
+        // Always ascending, never `rank_by`: the rank exists for `offset` to count from,
+        // while this order decides which end a smaller `limit` bites — and deletion
+        // proceeds oldest-first.
+        query_builder.push(" ORDER BY id ASC");
 
         if let Some(limit) = data.limit {
             query_builder.push(" LIMIT ");
@@ -198,8 +212,7 @@ mod tests {
     }
 
     /// Per-job window: `sort: NewestFirst` with `offset: Some(keep_runs)` — five finished
-    /// runs, `keep_runs = 3`: only the two oldest are candidates, whatever order the query
-    /// happens to return them in.
+    /// runs, `keep_runs = 3`: only the two oldest are candidates.
     #[tokio::test]
     async fn newest_first_with_an_offset_keeps_the_newest_n() {
 
@@ -333,6 +346,35 @@ mod tests {
         assert_eq!(candidates.len(), 2);
     }
 
+    /// The per-job window under a budget takes the **oldest** deletable runs, not the
+    /// newest of them: five finished runs with `keep_runs = 3` leave two candidates, and a
+    /// `limit` of one must be the older of those two.
+    ///
+    /// Taking the newer instead converges on the same end state, but works backwards
+    /// through the history one pass at a time — an operator who stops the server partway
+    /// through a large backlog is then left with a hole in the middle of their run history
+    /// rather than a trimmed tail.
+    #[tokio::test]
+    async fn a_limited_per_job_window_takes_the_oldest_deletable_run() {
+
+        let db = TestDb::new().await;
+
+        let mut runs = Vec::new();
+        for _ in 0..5 {
+            runs.push(db.insert_job_run(JobRunStatus::Succeeded).await);
+        }
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let candidates = db.crud.select_deletable_job_runs(&mut conn, &SelectDeletableJobRunsData {
+            filter: SelectDeletableJobRunsDataFilter { job_id: Some("job".to_string()) },
+            sort: Some(SelectDeletableJobRunsDataSort::NewestFirst),
+            limit: Some(1),
+            offset: Some(3),
+        }).await.unwrap();
+
+        assert_eq!(candidates, vec![runs[0].id]);
+    }
+
     /// Global sweep: `sort: OldestFirst` with `offset: None` and no `job_id` filter crosses
     /// jobs rather than partitioning by one, oldest first, truncated at `limit`.
     #[tokio::test]
@@ -381,11 +423,13 @@ mod tests {
         assert!(!oldest.contains(&owed.id));
     }
 
-    /// `sort` really does change which end of the history comes back, on the very same
-    /// fixture: `NewestFirst` with `limit: Some(1)` returns the newest finished run,
-    /// `OldestFirst` returns the oldest.
+    /// `sort` really does still distinguish the two rules on the very same fixture — but
+    /// what it chooses is **which end of the history `offset` protects**, not which end
+    /// comes back. With `offset: Some(3)` over five runs, `NewestFirst` protects the newest
+    /// three and `OldestFirst` protects the oldest three, and both results are returned
+    /// oldest-first.
     #[tokio::test]
-    async fn newest_first_and_oldest_first_return_different_ends_of_the_same_fixture() {
+    async fn sort_chooses_which_end_of_the_history_the_offset_protects() {
 
         let db = TestDb::new().await;
 
@@ -396,22 +440,55 @@ mod tests {
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
 
-        let newest = db.crud.select_deletable_job_runs(&mut conn, &SelectDeletableJobRunsData {
+        let past_the_newest_three = db.crud.select_deletable_job_runs(&mut conn, &SelectDeletableJobRunsData {
             filter: SelectDeletableJobRunsDataFilter { job_id: Some("job".to_string()) },
             sort: Some(SelectDeletableJobRunsDataSort::NewestFirst),
-            limit: Some(1),
-            offset: None,
+            limit: None,
+            offset: Some(3),
         }).await.unwrap();
 
-        let oldest = db.crud.select_deletable_job_runs(&mut conn, &SelectDeletableJobRunsData {
+        let past_the_oldest_three = db.crud.select_deletable_job_runs(&mut conn, &SelectDeletableJobRunsData {
             filter: SelectDeletableJobRunsDataFilter { job_id: Some("job".to_string()) },
             sort: Some(SelectDeletableJobRunsDataSort::OldestFirst),
-            limit: Some(1),
+            limit: None,
+            offset: Some(3),
+        }).await.unwrap();
+
+        assert_eq!(past_the_newest_three, vec![runs[0].id, runs[1].id]);
+        assert_eq!(past_the_oldest_three, vec![runs[3].id, runs[4].id]);
+    }
+
+    /// The consequence of the outer order being fixed: with nothing for `sort` to protect,
+    /// the two variants are the same query. The global sweep passes `OldestFirst` to say
+    /// what it means rather than because it changes anything.
+    #[tokio::test]
+    async fn without_an_offset_the_two_sorts_are_equivalent() {
+
+        let db = TestDb::new().await;
+
+        let mut runs = Vec::new();
+        for _ in 0..5 {
+            runs.push(db.insert_job_run(JobRunStatus::Succeeded).await);
+        }
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+
+        let newest_first = db.crud.select_deletable_job_runs(&mut conn, &SelectDeletableJobRunsData {
+            filter: SelectDeletableJobRunsDataFilter { job_id: Some("job".to_string()) },
+            sort: Some(SelectDeletableJobRunsDataSort::NewestFirst),
+            limit: Some(2),
             offset: None,
         }).await.unwrap();
 
-        assert_eq!(newest, vec![runs[4].id]);
-        assert_eq!(oldest, vec![runs[0].id]);
+        let oldest_first = db.crud.select_deletable_job_runs(&mut conn, &SelectDeletableJobRunsData {
+            filter: SelectDeletableJobRunsDataFilter { job_id: Some("job".to_string()) },
+            sort: Some(SelectDeletableJobRunsDataSort::OldestFirst),
+            limit: Some(2),
+            offset: None,
+        }).await.unwrap();
+
+        assert_eq!(newest_first, vec![runs[0].id, runs[1].id]);
+        assert_eq!(oldest_first, newest_first);
     }
 
     /// Counts settled runs across every job, and leaves `Pending`/`Running` out — what the
