@@ -163,7 +163,8 @@ impl JobRunDispatcher {
                 filter: SelectJobRunsDataFilter {
                     id: None,
                     job_id: None,
-                    status: Some(JobRunStatus::Pending)
+                    status: Some(JobRunStatus::Pending),
+                    statuses: None,
                 },
                 sort: Some(SelectJobRunsDataSort::Id),
                 limit: None,

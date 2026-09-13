@@ -44,6 +44,7 @@ impl CRUD {
                 id: None,
                 job_id: Some(job_id.to_string()),
                 status: Some(JobRunStatus::Running),
+                statuses: None,
             },
             sort: None,
             limit: None,

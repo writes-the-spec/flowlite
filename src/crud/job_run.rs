@@ -94,7 +94,12 @@ pub enum SelectJobRunsDataSort {
 pub struct SelectJobRunsDataFilter {
     pub id: Option<i64>,
     pub job_id: Option<String>,
+    /// Exactly this one status.
     pub status: Option<JobRunStatus>,
+    /// Any of these statuses. It sits beside `status` rather than replacing it — the two
+    /// ask different questions, and both apply when both are set. Pass a non-empty list:
+    /// `IN ()` is not valid SQLite.
+    pub statuses: Option<Vec<JobRunStatus>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -103,6 +108,21 @@ pub struct SelectJobRunsData {
     pub sort: Option<SelectJobRunsDataSort>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+}
+
+/// Counting is asking how many rows a select would return, so it takes the select's own
+/// filter rather than a copy of it: a caller that counts and then selects over "the same
+/// rows" builds one filter and passes it to both, and the two cannot drift.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CountJobRunsData {
+    pub filter: SelectJobRunsDataFilter,
+}
+
+/// Same reasoning as [`CountJobRunsData`]: a projection asks the select's question and
+/// answers it with one column, so it takes the select's filter.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SelectJobRunJobIdsData {
+    pub filter: SelectJobRunsDataFilter,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -197,6 +217,10 @@ impl CRUD {
             query_builder.push_bind(status);
         }
 
+        if let Some(statuses) = &data.filter.statuses {
+            push_statuses_in(&mut query_builder, statuses);
+        }
+
         if let Some(id) = &data.filter.id {
             query_builder.push(" AND id = ");
             query_builder.push_bind(id);
@@ -216,6 +240,10 @@ impl CRUD {
         if let Some(limit) = data.limit {
             query_builder.push(" LIMIT ");
             query_builder.push_bind(limit);
+        } else if data.offset.is_some() {
+            // SQLite has no `OFFSET` without a `LIMIT` before it, and `-1` is how it spells
+            // "no limit" — so an offset on its own still means "every row past the first n".
+            query_builder.push(" LIMIT -1");
         }
 
         if let Some(offset) = data.offset {
@@ -231,7 +259,85 @@ impl CRUD {
         Ok(runs)
     }
 
+    /// How many rows `data.filter` matches — counted by the database rather than by
+    /// selecting the rows and taking their length, because the sets this is asked about are
+    /// unbounded: "every finished run in the database" is 50,000 rows on a long-lived data
+    /// directory, and the answer is one integer.
+    pub async fn count_job_runs<'e, E>(&self, executor: E, data: &CountJobRunsData) -> anyhow::Result<i64>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    {
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+            "SELECT COUNT(*) FROM job_run WHERE 1=1"
+        );
 
+        if let Some(job_id) = &data.filter.job_id {
+            query_builder.push(" AND job_id = ");
+            query_builder.push_bind(job_id);
+        }
+
+        if let Some(status) = &data.filter.status {
+            query_builder.push(" AND status = ");
+            query_builder.push_bind(status);
+        }
+
+        if let Some(statuses) = &data.filter.statuses {
+            push_statuses_in(&mut query_builder, statuses);
+        }
+
+        if let Some(id) = &data.filter.id {
+            query_builder.push(" AND id = ");
+            query_builder.push_bind(id);
+        }
+
+        let count = query_builder
+            .build_query_scalar::<i64>()
+            .fetch_one(executor)
+            .await?;
+
+        Ok(count)
+    }
+
+    /// The distinct `job_id`s among the rows `data.filter` matches — deduplicated by the
+    /// database for the same reason `count_job_runs` counts there: the rows behind a
+    /// handful of job ids can be the whole table.
+    ///
+    /// Nothing is joined against `mem.job`, so a job id whose YAML has since been deleted,
+    /// or which never had a row at all, still comes back.
+    pub async fn select_job_run_job_ids<'e, E>(&self, executor: E, data: &SelectJobRunJobIdsData) -> anyhow::Result<Vec<String>>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    {
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+            "SELECT DISTINCT job_id FROM job_run WHERE 1=1"
+        );
+
+        if let Some(job_id) = &data.filter.job_id {
+            query_builder.push(" AND job_id = ");
+            query_builder.push_bind(job_id);
+        }
+
+        if let Some(status) = &data.filter.status {
+            query_builder.push(" AND status = ");
+            query_builder.push_bind(status);
+        }
+
+        if let Some(statuses) = &data.filter.statuses {
+            push_statuses_in(&mut query_builder, statuses);
+        }
+
+        if let Some(id) = &data.filter.id {
+            query_builder.push(" AND id = ");
+            query_builder.push_bind(id);
+        }
+
+        let job_ids = query_builder
+            .build_query_scalar::<String>()
+            .fetch_all(executor)
+            .await?;
+
+        Ok(job_ids)
+    }
 
     /// Deletes every row in `job_run` matching `data.filter`. An entirely empty filter
     /// matches every row and so deletes the whole table — exact parity with an empty
@@ -311,6 +417,21 @@ impl CRUD {
 
 }
 
+/// Pushes `AND status IN (?, ?, ...)`, one bind per status. Shared by the three queries
+/// that honour a `statuses` filter because it is one clause asked three times, not three
+/// clauses that happen to look alike.
+fn push_statuses_in(query_builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, statuses: &[JobRunStatus]) {
+
+    query_builder.push(" AND status IN (");
+
+    let mut separated = query_builder.separated(", ");
+    for status in statuses {
+        separated.push_bind(*status);
+    }
+
+    query_builder.push(")");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,7 +453,7 @@ mod tests {
     }
 
     fn empty_filter() -> SelectJobRunsDataFilter {
-        SelectJobRunsDataFilter { id: None, job_id: None, status: None }
+        SelectJobRunsDataFilter { id: None, job_id: None, status: None, statuses: None }
     }
 
     /// `status` really filters: deleting by status only removes the matching run, and its

@@ -730,6 +730,7 @@ impl TestDb {
                     id: Some(id),
                     job_id: None,
                     status: None,
+                    statuses: None,
                 },
                 sort: None,
                 limit: Some(1),

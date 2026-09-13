@@ -495,6 +495,7 @@ impl TaskRunAttemptDispatcher {
                     id: Some(task_run_attempt.job_run_id),
                     job_id: None,
                     status: None,
+                    statuses: None,
                 },
                 sort: None,
                 limit: Some(1),

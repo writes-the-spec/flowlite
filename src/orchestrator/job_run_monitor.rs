@@ -205,7 +205,8 @@ impl JobRunMonitor {
                 filter: SelectJobRunsDataFilter {
                     id: None,
                     job_id: None,
-                    status: Some(JobRunStatus::Running)
+                    status: Some(JobRunStatus::Running),
+                    statuses: None,
                 },
                 sort: None,
                 limit: None,

@@ -60,6 +60,7 @@ pub async fn job_run_table_route(
             id: None,
             job_id: filter_job_id.clone(),
             status: query.filter_status,
+            statuses: None,
         },
         sort: Some(SelectJobRunsDataSort::IdDesc),
         limit: Some((page_size + 1) as i64),

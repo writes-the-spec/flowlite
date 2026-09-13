@@ -5,7 +5,9 @@
 //! equivalent `SelectJobRunsDataFilter` - then each of the six per-entity deletes is called
 //! once per id, keyed on its own column (`job_run_id`, or `id` for `job_run` itself). That is
 //! what lets every child delete stay a plain single-statement filter on one column, rather
-//! than a `job_run_id IN (SELECT id FROM job_run WHERE ...)` subquery repeated six times.
+//! than each of the six having to match its rows against a subquery over `job_run` - and so
+//! lets this file, like every multistatement, compose entity methods without writing a
+//! statement of its own.
 //!
 //! Unconditional - it does not check a run's status or whether it still owes an
 //! undelivered notification beyond whatever `DeleteJobRunsDataFilter` says, because those
@@ -43,6 +45,7 @@ impl CRUD {
                 id: data.filter.id,
                 job_id: data.filter.job_id.clone(),
                 status: data.filter.status,
+                statuses: None,
             },
             sort: None,
             limit: None,
@@ -289,6 +292,7 @@ mod tests {
                 id: Some(job_run_id),
                 job_id: None,
                 status: None,
+                statuses: None,
             },
             sort: None,
             limit: Some(1),
