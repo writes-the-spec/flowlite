@@ -68,6 +68,24 @@ pub enum SelectTaskRunAttemptOutputsDataSort {
 }
 
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeleteTaskRunAttemptOutputsDataFilter {
+    pub id: Option<i64>,
+    pub task_run_attempt_id: Option<i64>,
+    pub task_run_id: Option<i64>,
+    pub job_run_id: Option<i64>,
+    pub job_id: Option<String>,
+    pub task_id: Option<String>,
+    pub stream: Option<TaskRunAttemptOutputStream>,
+}
+
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeleteTaskRunAttemptOutputsData {
+    pub filter: DeleteTaskRunAttemptOutputsDataFilter,
+}
+
+
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
 pub struct TaskRunAttemptOutput {
     pub id: i64,
@@ -199,6 +217,57 @@ impl CRUD {
             .await?;
 
         Ok(task_run_attempt_outputs)
+    }
+
+    /// Deletes every row in `task_run_attempt_output` matching `data.filter`. An entirely
+    /// empty filter matches every row and so deletes the whole table — exact parity with an
+    /// empty select filter, and the caller's business, not this method's.
+    pub async fn delete_task_run_attempt_outputs<'e, E>(&self, executor: E, data: &DeleteTaskRunAttemptOutputsData) -> anyhow::Result<()>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    {
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+            "DELETE FROM task_run_attempt_output WHERE 1=1"
+        );
+
+        if let Some(id) = &data.filter.id {
+            query_builder.push(" AND id = ");
+            query_builder.push_bind(id);
+        }
+
+        if let Some(task_run_attempt_id) = &data.filter.task_run_attempt_id {
+            query_builder.push(" AND task_run_attempt_id = ");
+            query_builder.push_bind(task_run_attempt_id);
+        }
+
+        if let Some(task_run_id) = &data.filter.task_run_id {
+            query_builder.push(" AND task_run_id = ");
+            query_builder.push_bind(task_run_id);
+        }
+
+        if let Some(job_run_id) = &data.filter.job_run_id {
+            query_builder.push(" AND job_run_id = ");
+            query_builder.push_bind(job_run_id);
+        }
+
+        if let Some(job_id) = &data.filter.job_id {
+            query_builder.push(" AND job_id = ");
+            query_builder.push_bind(job_id);
+        }
+
+        if let Some(task_id) = &data.filter.task_id {
+            query_builder.push(" AND task_id = ");
+            query_builder.push_bind(task_id);
+        }
+
+        if let Some(stream) = &data.filter.stream {
+            query_builder.push(" AND stream = ");
+            query_builder.push_bind(stream);
+        }
+
+        query_builder.build().execute(executor).await?;
+
+        Ok(())
     }
 
 }
@@ -397,5 +466,45 @@ mod tests {
 
         assert_eq!(streams.stdout, "");
         assert_eq!(streams.stderr, "");
+    }
+
+    /// `task_run_attempt_id` really filters: deleting by one attempt's id only removes its
+    /// output, leaving a neighbouring attempt's output untouched.
+    #[tokio::test]
+    async fn delete_task_run_attempt_outputs_filters_by_task_run_attempt_id() {
+
+        let db = TestDb::new().await;
+
+        let deleted = attempt(&db).await;
+        let kept = attempt(&db).await;
+
+        insert(&db, &deleted, TaskRunAttemptOutputStream::Stdout, "gone").await;
+        insert(&db, &kept, TaskRunAttemptOutputStream::Stdout, "stays").await;
+
+        db.crud.delete_task_run_attempt_outputs(&*db.conn_pool, &DeleteTaskRunAttemptOutputsData {
+            filter: DeleteTaskRunAttemptOutputsDataFilter {
+                id: None, task_run_attempt_id: Some(deleted.id), task_run_id: None, job_run_id: None, job_id: None, task_id: None, stream: None,
+            },
+        }).await.unwrap();
+
+        assert!(select(&db, SelectTaskRunAttemptOutputsDataFilter { task_run_attempt_id: Some(deleted.id), ..filter() }).await.is_empty());
+        assert!(!select(&db, SelectTaskRunAttemptOutputsDataFilter { task_run_attempt_id: Some(kept.id), ..filter() }).await.is_empty());
+    }
+
+    /// The decided behaviour, pinned so a future guard cannot be added silently: an
+    /// entirely empty filter matches every row and so deletes the whole table.
+    #[tokio::test]
+    async fn an_empty_filter_deletes_every_task_run_attempt_output() {
+
+        let db = TestDb::new().await;
+        let task_run_attempt = attempt(&db).await;
+
+        insert(&db, &task_run_attempt, TaskRunAttemptOutputStream::Stdout, "out").await;
+
+        db.crud.delete_task_run_attempt_outputs(&*db.conn_pool, &DeleteTaskRunAttemptOutputsData {
+            filter: DeleteTaskRunAttemptOutputsDataFilter { id: None, task_run_attempt_id: None, task_run_id: None, job_run_id: None, job_id: None, task_id: None, stream: None },
+        }).await.unwrap();
+
+        assert!(select(&db, filter()).await.is_empty());
     }
 }

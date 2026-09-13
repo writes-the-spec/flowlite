@@ -105,6 +105,18 @@ pub struct SelectJobRunsData {
     pub offset: Option<i64>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeleteJobRunsDataFilter {
+    pub id: Option<i64>,
+    pub job_id: Option<String>,
+    pub status: Option<JobRunStatus>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeleteJobRunsData {
+    pub filter: DeleteJobRunsDataFilter,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateJobRunsDataInput {
     pub status: Option<JobRunStatus>,
@@ -221,6 +233,37 @@ impl CRUD {
 
 
 
+    /// Deletes every row in `job_run` matching `data.filter`. An entirely empty filter
+    /// matches every row and so deletes the whole table — exact parity with an empty
+    /// select filter, and the caller's business, not this method's.
+    pub async fn delete_job_runs<'e, E>(&self, executor: E, data: &DeleteJobRunsData) -> anyhow::Result<()>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    {
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+            "DELETE FROM job_run WHERE 1=1"
+        );
+
+        if let Some(job_id) = &data.filter.job_id {
+            query_builder.push(" AND job_id = ");
+            query_builder.push_bind(job_id);
+        }
+
+        if let Some(status) = &data.filter.status {
+            query_builder.push(" AND status = ");
+            query_builder.push_bind(status);
+        }
+
+        if let Some(id) = &data.filter.id {
+            query_builder.push(" AND id = ");
+            query_builder.push_bind(id);
+        }
+
+        query_builder.build().execute(executor).await?;
+
+        Ok(())
+    }
+
     pub async fn update_job_runs<'e, E>(&self, executor: E, data: &UpdateJobRunsData) -> anyhow::Result<()>
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
@@ -277,5 +320,53 @@ mod tests {
     #[test]
     fn an_invalid_run_is_finished() {
         assert!(JobRunStatus::Invalid.is_finished());
+    }
+
+    async fn select(db: &crate::test_support::TestDb, filter: SelectJobRunsDataFilter) -> Vec<JobRun> {
+        db.crud.select_job_runs(&*db.conn_pool, &SelectJobRunsData {
+            filter,
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap()
+    }
+
+    fn empty_filter() -> SelectJobRunsDataFilter {
+        SelectJobRunsDataFilter { id: None, job_id: None, status: None }
+    }
+
+    /// `status` really filters: deleting by status only removes the matching run, and its
+    /// neighbour of a different status survives.
+    #[tokio::test]
+    async fn delete_job_runs_filters_by_status() {
+
+        let db = crate::test_support::TestDb::new().await;
+
+        let failed = db.insert_job_run(JobRunStatus::Failed).await;
+        let succeeded = db.insert_job_run(JobRunStatus::Succeeded).await;
+
+        db.crud.delete_job_runs(&*db.conn_pool, &DeleteJobRunsData {
+            filter: DeleteJobRunsDataFilter { id: None, job_id: None, status: Some(JobRunStatus::Failed) },
+        }).await.unwrap();
+
+        assert!(select(&db, SelectJobRunsDataFilter { id: Some(failed.id), ..empty_filter() }).await.is_empty());
+        assert!(!select(&db, SelectJobRunsDataFilter { id: Some(succeeded.id), ..empty_filter() }).await.is_empty());
+    }
+
+    /// The decided behaviour, pinned so a future guard cannot be added silently: an
+    /// entirely empty filter matches every row and so deletes the whole table.
+    #[tokio::test]
+    async fn an_empty_filter_deletes_every_job_run() {
+
+        let db = crate::test_support::TestDb::new().await;
+
+        db.insert_job_run(JobRunStatus::Failed).await;
+        db.insert_job_run(JobRunStatus::Succeeded).await;
+
+        db.crud.delete_job_runs(&*db.conn_pool, &DeleteJobRunsData {
+            filter: DeleteJobRunsDataFilter { id: None, job_id: None, status: None },
+        }).await.unwrap();
+
+        assert!(select(&db, empty_filter()).await.is_empty());
     }
 }

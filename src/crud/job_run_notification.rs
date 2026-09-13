@@ -160,6 +160,20 @@ pub struct SelectJobRunNotificationsData {
     pub offset: Option<i64>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeleteJobRunNotificationsDataFilter {
+    pub id: Option<i64>,
+    pub job_run_id: Option<i64>,
+    pub notify_on: Option<NotifyOn>,
+    pub channel: Option<NotificationChannel>,
+    pub status: Option<JobRunNotificationStatus>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeleteJobRunNotificationsData {
+    pub filter: DeleteJobRunNotificationsDataFilter,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateJobRunNotificationsDataInput {
     pub status: Option<JobRunNotificationStatus>,
@@ -325,4 +339,103 @@ impl CRUD {
         Ok(())
     }
 
+    /// Deletes every row in `job_run_notification` matching `data.filter`. An entirely
+    /// empty filter matches every row and so deletes the whole table — exact parity with an
+    /// empty select filter, and the caller's business, not this method's.
+    pub async fn delete_job_run_notifications<'e, E>(&self, executor: E, data: &DeleteJobRunNotificationsData) -> anyhow::Result<()>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    {
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+            "DELETE FROM job_run_notification WHERE 1=1"
+        );
+
+        if let Some(id) = &data.filter.id {
+            query_builder.push(" AND id = ");
+            query_builder.push_bind(id);
+        }
+
+        if let Some(job_run_id) = &data.filter.job_run_id {
+            query_builder.push(" AND job_run_id = ");
+            query_builder.push_bind(job_run_id);
+        }
+
+        if let Some(notify_on) = &data.filter.notify_on {
+            query_builder.push(" AND notify_on = ");
+            query_builder.push_bind(notify_on);
+        }
+
+        if let Some(channel) = &data.filter.channel {
+            query_builder.push(" AND channel = ");
+            query_builder.push_bind(channel);
+        }
+
+        if let Some(status) = &data.filter.status {
+            query_builder.push(" AND status = ");
+            query_builder.push_bind(status);
+        }
+
+        query_builder.build().execute(executor).await?;
+
+        Ok(())
+    }
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crud::job_run::JobRunStatus;
+    use crate::test_support::TestDb;
+
+    async fn select(db: &TestDb, filter: SelectJobRunNotificationsDataFilter) -> Vec<JobRunNotification> {
+        db.crud.select_job_run_notifications(&*db.conn_pool, &SelectJobRunNotificationsData {
+            filter,
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap()
+    }
+
+    fn empty_filter() -> SelectJobRunNotificationsDataFilter {
+        SelectJobRunNotificationsDataFilter { id: None, job_run_id: None, notify_on: None, channel: None, status: None }
+    }
+
+    /// `job_run_id` really filters: deleting by one job run's id only removes its
+    /// notification, leaving a neighbouring job run's notification untouched.
+    #[tokio::test]
+    async fn delete_job_run_notifications_filters_by_job_run_id() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Failed).await;
+        db.insert_job_run_notification(job_run.id, NotifyOn::Failure, NotificationChannel::Email, &["oncall@example.com"]).await;
+
+        let other_job_run = db.insert_job_run(JobRunStatus::Failed).await;
+        db.insert_job_run_notification(other_job_run.id, NotifyOn::Failure, NotificationChannel::Email, &["oncall@example.com"]).await;
+
+        db.crud.delete_job_run_notifications(&*db.conn_pool, &DeleteJobRunNotificationsData {
+            filter: DeleteJobRunNotificationsDataFilter { id: None, job_run_id: Some(job_run.id), notify_on: None, channel: None, status: None },
+        }).await.unwrap();
+
+        assert!(select(&db, SelectJobRunNotificationsDataFilter { job_run_id: Some(job_run.id), ..empty_filter() }).await.is_empty());
+        assert!(!select(&db, SelectJobRunNotificationsDataFilter { job_run_id: Some(other_job_run.id), ..empty_filter() }).await.is_empty());
+    }
+
+    /// The decided behaviour, pinned so a future guard cannot be added silently: an
+    /// entirely empty filter matches every row and so deletes the whole table.
+    #[tokio::test]
+    async fn an_empty_filter_deletes_every_job_run_notification() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Failed).await;
+        db.insert_job_run_notification(job_run.id, NotifyOn::Failure, NotificationChannel::Email, &["oncall@example.com"]).await;
+
+        db.crud.delete_job_run_notifications(&*db.conn_pool, &DeleteJobRunNotificationsData {
+            filter: DeleteJobRunNotificationsDataFilter { id: None, job_run_id: None, notify_on: None, channel: None, status: None },
+        }).await.unwrap();
+
+        assert!(select(&db, empty_filter()).await.is_empty());
+    }
 }

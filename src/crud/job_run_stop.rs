@@ -31,6 +31,17 @@ pub enum SelectJobRunStopsSort {
     CreatedAtDesc,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeleteJobRunStopsDataFilter {
+    pub id: Option<i64>,
+    pub job_run_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeleteJobRunStopsData {
+    pub filter: DeleteJobRunStopsDataFilter,
+}
+
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
 pub struct JobRunStop {
     pub id: i64,
@@ -106,4 +117,88 @@ impl CRUD {
         Ok(aborts)
     }
 
+    /// Deletes every row in `job_run_stop` matching `data.filter`. An entirely empty filter
+    /// matches every row and so deletes the whole table — exact parity with an empty
+    /// select filter, and the caller's business, not this method's.
+    pub async fn delete_job_run_stops<'e, E>(&self, executor: E, data: &DeleteJobRunStopsData) -> anyhow::Result<()>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    {
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+            "DELETE FROM job_run_stop WHERE 1=1"
+        );
+
+        if let Some(id) = &data.filter.id {
+            query_builder.push(" AND id = ");
+            query_builder.push_bind(id);
+        }
+
+        if let Some(job_run_id) = &data.filter.job_run_id {
+            query_builder.push(" AND job_run_id = ");
+            query_builder.push_bind(job_run_id);
+        }
+
+        query_builder.build().execute(executor).await?;
+
+        Ok(())
+    }
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crud::job_run::JobRunStatus;
+    use crate::test_support::TestDb;
+
+    async fn select(db: &TestDb, filter: SelectJobRunStopsDataFilter) -> Vec<JobRunStop> {
+        db.crud.select_job_run_stops(&*db.conn_pool, &SelectJobRunStopsData {
+            filter,
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap()
+    }
+
+    fn empty_filter() -> SelectJobRunStopsDataFilter {
+        SelectJobRunStopsDataFilter { id: None, job_run_id: None }
+    }
+
+    /// `job_run_id` really filters: deleting by one job run's id only removes its stop,
+    /// leaving a neighbouring job run's stop untouched.
+    #[tokio::test]
+    async fn delete_job_run_stops_filters_by_job_run_id() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Failed).await;
+        db.insert_job_run_stop(job_run.id).await;
+
+        let other_job_run = db.insert_job_run(JobRunStatus::Failed).await;
+        db.insert_job_run_stop(other_job_run.id).await;
+
+        db.crud.delete_job_run_stops(&*db.conn_pool, &DeleteJobRunStopsData {
+            filter: DeleteJobRunStopsDataFilter { id: None, job_run_id: Some(job_run.id) },
+        }).await.unwrap();
+
+        assert!(select(&db, SelectJobRunStopsDataFilter { job_run_id: Some(job_run.id), ..empty_filter() }).await.is_empty());
+        assert!(!select(&db, SelectJobRunStopsDataFilter { job_run_id: Some(other_job_run.id), ..empty_filter() }).await.is_empty());
+    }
+
+    /// The decided behaviour, pinned so a future guard cannot be added silently: an
+    /// entirely empty filter matches every row and so deletes the whole table.
+    #[tokio::test]
+    async fn an_empty_filter_deletes_every_job_run_stop() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Failed).await;
+        db.insert_job_run_stop(job_run.id).await;
+
+        db.crud.delete_job_run_stops(&*db.conn_pool, &DeleteJobRunStopsData {
+            filter: DeleteJobRunStopsDataFilter { id: None, job_run_id: None },
+        }).await.unwrap();
+
+        assert!(select(&db, empty_filter()).await.is_empty());
+    }
 }
