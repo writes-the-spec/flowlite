@@ -2,6 +2,11 @@
 
 {% block title %}Runs · flowlite{% endblock %}
 
+{# The one view whose length is chosen by the reader (rows per page), so it is the one
+   view that fits itself to the window instead: the run table scrolls inside its own box
+   and the limits panel below it stays on screen. See `.fit-viewport` in app.css. #}
+{% block body_class %}fit-viewport{% endblock %}
+
 {% block content %}
 
 <div class="view-head">
@@ -27,7 +32,7 @@
     </form>
 </div>
 
-<div class="section">
+<div class="section section--fill">
     <div class="section__head">
         <div class="chips">
             {% for chip in status_chips %}
@@ -54,7 +59,7 @@
     </div>
 </div>
 
-<div class="section">
+<div class="section section--cap">
     <div class="section__head">
         <h2 class="section__title">Concurrency limits</h2>
         <span class="section__note">From [concurrency_limits] and orchestrator.max_running_attempts in config.toml — updates every {{ refresh_seconds }} seconds</span>

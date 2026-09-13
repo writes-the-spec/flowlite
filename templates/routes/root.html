@@ -8,7 +8,7 @@
     <script src="/assets/vendors/htmx/htmx.min.js"></script>
     <script defer src="/assets/vendors/alpine/alpine.min.js"></script>
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
 
     <header class="masthead">
         <div class="shell masthead__inner">

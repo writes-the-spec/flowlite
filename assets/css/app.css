@@ -298,13 +298,19 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
 
 .runs { width: 100%; border-collapse: collapse; }
 
+/* The head stays put while the body scrolls under it. Its rule is an inset shadow, not a
+   border: a collapsed border belongs to the table grid and would be left behind. */
 .runs thead th {
     text-align: left;
     font-size: 0.6875rem;
     font-weight: 500;
     color: var(--text-2);
     padding: 0 0.75rem 0.5rem;
-    border-bottom: 1px solid var(--rule);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--ground);
+    box-shadow: inset 0 -1px 0 var(--rule);
 }
 .runs thead th:first-child { padding-left: 0; }
 .runs thead th:last-child { padding-right: 0; }
@@ -568,7 +574,11 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
     font-weight: 500;
     color: var(--text-2);
     padding: 0 1rem 0.5rem 0;
-    border-bottom: 1px solid var(--rule);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--ground);
+    box-shadow: inset 0 -1px 0 var(--rule);
 }
 
 .deftable td {
@@ -799,6 +809,60 @@ dialog::backdrop { background: rgba(10, 8, 14, 0.7); }
 }
 
 .stream__body--err { color: var(--fail); }
+
+/* ---------- Fit to window ---------- */
+
+/* A page that opts in with `fit-viewport` ends at the bottom of the window: one section
+   (`section--fill`) absorbs whatever height is left over and scrolls inside itself, so the
+   sections after it stay on screen no matter how many rows the reader asked for.
+
+   Only worth doing when there is height to divide up — below that the page scrolls the
+   ordinary way, which beats squeezing a table into four rows. */
+@media (min-height: 44rem) {
+    .fit-viewport { height: 100svh; overflow: hidden; }
+
+    /* Content that still will not fit (a very long limits panel, say) scrolls here rather
+       than being cut off at the window's edge. */
+    .fit-viewport main {
+        display: flex;
+        min-height: 0;
+        overflow: auto;
+        padding-bottom: 2.5rem;
+    }
+
+    .fit-viewport main > .shell {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+    }
+
+    .fit-viewport .section--fill {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+    }
+
+    /* The htmx target between the section and the table it swaps in. */
+    .fit-viewport .section--fill > [hx-trigger] {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+    }
+
+    .fit-viewport .section--fill .scroller {
+        flex: 1;
+        min-height: 8rem;
+        overflow: auto;
+    }
+
+    .fit-viewport .section--fill .table-foot { flex: none; }
+
+    /* Sized by config, so it has no natural ceiling: cap it before it crowds out the runs. */
+    .fit-viewport .section--cap .scroller { max-height: 30vh; }
+}
 
 /* ---------- Responsive ---------- */
 
