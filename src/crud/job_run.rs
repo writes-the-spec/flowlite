@@ -207,24 +207,7 @@ impl CRUD {
             "SELECT id, job_id, job_name, job_description, parameters, created_at, scheduled_at, started_at, finished_at, status FROM job_run WHERE 1=1"
         );
 
-        if let Some(job_id) = &data.filter.job_id {
-            query_builder.push(" AND job_id = ");
-            query_builder.push_bind(job_id);
-        }
-
-        if let Some(status) = &data.filter.status {
-            query_builder.push(" AND status = ");
-            query_builder.push_bind(status);
-        }
-
-        if let Some(statuses) = &data.filter.statuses {
-            push_statuses_in(&mut query_builder, statuses);
-        }
-
-        if let Some(id) = &data.filter.id {
-            query_builder.push(" AND id = ");
-            query_builder.push_bind(id);
-        }
+        push_job_run_filter(&mut query_builder, &data.filter);
 
         if let Some(sort) = &data.sort {
             match sort {
@@ -271,24 +254,7 @@ impl CRUD {
             "SELECT COUNT(*) FROM job_run WHERE 1=1"
         );
 
-        if let Some(job_id) = &data.filter.job_id {
-            query_builder.push(" AND job_id = ");
-            query_builder.push_bind(job_id);
-        }
-
-        if let Some(status) = &data.filter.status {
-            query_builder.push(" AND status = ");
-            query_builder.push_bind(status);
-        }
-
-        if let Some(statuses) = &data.filter.statuses {
-            push_statuses_in(&mut query_builder, statuses);
-        }
-
-        if let Some(id) = &data.filter.id {
-            query_builder.push(" AND id = ");
-            query_builder.push_bind(id);
-        }
+        push_job_run_filter(&mut query_builder, &data.filter);
 
         let count = query_builder
             .build_query_scalar::<i64>()
@@ -312,24 +278,7 @@ impl CRUD {
             "SELECT DISTINCT job_id FROM job_run WHERE 1=1"
         );
 
-        if let Some(job_id) = &data.filter.job_id {
-            query_builder.push(" AND job_id = ");
-            query_builder.push_bind(job_id);
-        }
-
-        if let Some(status) = &data.filter.status {
-            query_builder.push(" AND status = ");
-            query_builder.push_bind(status);
-        }
-
-        if let Some(statuses) = &data.filter.statuses {
-            push_statuses_in(&mut query_builder, statuses);
-        }
-
-        if let Some(id) = &data.filter.id {
-            query_builder.push(" AND id = ");
-            query_builder.push_bind(id);
-        }
+        push_job_run_filter(&mut query_builder, &data.filter);
 
         let job_ids = query_builder
             .build_query_scalar::<String>()
@@ -417,9 +366,42 @@ impl CRUD {
 
 }
 
-/// Pushes `AND status IN (?, ?, ...)`, one bind per status. Shared by the three queries
-/// that honour a `statuses` filter because it is one clause asked three times, not three
-/// clauses that happen to look alike.
+/// Pushes every clause of a [`SelectJobRunsDataFilter`] onto a query already ending in
+/// `WHERE 1=1`. Shared by `select_job_runs`, `count_job_runs` and
+/// `select_job_run_job_ids` — the one place in this codebase where the usual preference
+/// for redundancy over abstraction is overruled, because here the three renderings
+/// drifting apart is not a cosmetic inconsistency but an over-delete.
+///
+/// `select_deletable_job_runs` derives its deletion window from `count_job_runs` minus
+/// the job's `keep_runs`, over the filter `select_job_runs` then reads with. A clause
+/// added to the select and forgotten in the count makes the count too large, which makes
+/// the window too wide, which deletes runs the job asked to keep. Sharing the filter
+/// *type* stops the fields drifting; only sharing this function stops the clauses.
+fn push_job_run_filter(query_builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, filter: &SelectJobRunsDataFilter) {
+
+    if let Some(job_id) = &filter.job_id {
+        query_builder.push(" AND job_id = ");
+        query_builder.push_bind(job_id);
+    }
+
+    if let Some(status) = &filter.status {
+        query_builder.push(" AND status = ");
+        query_builder.push_bind(status);
+    }
+
+    if let Some(statuses) = &filter.statuses {
+        push_statuses_in(query_builder, statuses);
+    }
+
+    if let Some(id) = &filter.id {
+        query_builder.push(" AND id = ");
+        query_builder.push_bind(id);
+    }
+}
+
+/// Pushes `AND status IN (?, ?, ...)`, one bind per status. It stays its own function
+/// beside [`push_job_run_filter`] because it is the one clause whose bind count varies
+/// with the filter's contents rather than being a single `push_bind`.
 fn push_statuses_in(query_builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, statuses: &[JobRunStatus]) {
 
     query_builder.push(" AND status IN (");
