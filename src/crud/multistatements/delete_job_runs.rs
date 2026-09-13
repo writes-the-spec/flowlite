@@ -1,60 +1,111 @@
-//! `delete_job_run`: the first deletion in this codebase, and the one place a run's rows
+//! `delete_job_runs`: the first deletion in this codebase, and the one place a run's rows
 //! disappear for good.
 //!
-//! Unconditional - it does not check the run's status or whether it still owes an
-//! undelivered notification, because those guards belong to whichever caller is choosing
-//! *which* runs to delete, not to the primitive that deletes one. A deleter that silently
-//! refuses a run at hand would be a worse tool for a later, deliberate caller (a
-//! `job-run delete` command, say).
+//! The filter is the same `Select<Entity>sDataFilter` shape every select uses, built with
+//! `QueryBuilder` and `WHERE 1=1` - but the five child tables carry no `status` and no `id`
+//! of their own, so it is built once against `job_run` and each child delete instead
+//! matches `job_run_id IN (SELECT id FROM job_run WHERE 1=1 <same filters>)`.
+//!
+//! Unconditional - it does not check a run's status or whether it still owes an
+//! undelivered notification beyond whatever `DeleteJobRunsDataFilter` says, because those
+//! guards belong to whichever caller is choosing *which* runs to delete, not to the
+//! primitive that deletes them. **An entirely empty filter matches every row in `job_run`
+//! and so deletes every job run in the database** - exact parity with an empty select
+//! filter, which matches everything - and that is the caller's business, not this method's.
 
 use sqlx::{Connection, SqliteConnection};
 
 use crate::crud::CRUD;
+use crate::crud::job_run::JobRunStatus;
+
+#[derive(Debug, Clone)]
+pub struct DeleteJobRunsDataFilter {
+    pub id: Option<i64>,
+    pub job_id: Option<String>,
+    pub status: Option<JobRunStatus>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeleteJobRunsData {
+    pub filter: DeleteJobRunsDataFilter,
+}
+
+/// Pushes ` AND job_id = ? AND status = ? AND id = ?` for whichever fields of the filter
+/// are set, onto a `... WHERE 1=1` query already open against `job_run` - shared so every
+/// one of the six deletes below matches exactly the same set of runs.
+fn push_job_run_filter(query_builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, filter: &DeleteJobRunsDataFilter) {
+
+    if let Some(job_id) = &filter.job_id {
+        query_builder.push(" AND job_id = ");
+        query_builder.push_bind(job_id);
+    }
+
+    if let Some(status) = &filter.status {
+        query_builder.push(" AND status = ");
+        query_builder.push_bind(status);
+    }
+
+    if let Some(id) = &filter.id {
+        query_builder.push(" AND id = ");
+        query_builder.push_bind(id);
+    }
+}
 
 impl CRUD {
 
-    /// Deletes one job run and every row across the six tables that carries its
-    /// `job_run_id`, child-first, in one transaction - so no other reader ever sees a run
-    /// whose tasks are half gone.
+    /// Deletes every job run matching `data.filter`, and every row across the five child
+    /// tables that carries its `job_run_id`, child-first, in one transaction - so no other
+    /// reader ever sees a run whose tasks are half gone.
     ///
     /// Child-first is correctness on its own terms, not the database enforcing it:
     /// `PRAGMA foreign_keys` is never set in `src/toolkit.rs`, so SQLite does not enforce
-    /// the declared foreign keys at runtime here. A `job_run_id` with no matching row in
-    /// any of the six tables is a no-op, not an error - this is a primitive, and whether
-    /// that should ever happen is a caller's question.
-    pub async fn delete_job_run(&self, conn: &mut SqliteConnection, job_run_id: i64) -> anyhow::Result<()> {
+    /// the declared foreign keys at runtime here. An entirely empty
+    /// `DeleteJobRunsDataFilter` deletes every job run in the database, and everything that
+    /// hangs off it - see the module doc for why that is not guarded against here.
+    pub async fn delete_job_runs(&self, conn: &mut SqliteConnection, data: &DeleteJobRunsData) -> anyhow::Result<()> {
 
         let mut tx = conn.begin().await?;
 
-        sqlx::query("DELETE FROM task_run_attempt_output WHERE job_run_id = ?")
-            .bind(job_run_id)
-            .execute(&mut *tx)
-            .await?;
+        let mut task_run_attempt_output_query: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+            "DELETE FROM task_run_attempt_output WHERE job_run_id IN (SELECT id FROM job_run WHERE 1=1"
+        );
+        push_job_run_filter(&mut task_run_attempt_output_query, &data.filter);
+        task_run_attempt_output_query.push(")");
+        task_run_attempt_output_query.build().execute(&mut *tx).await?;
 
-        sqlx::query("DELETE FROM task_run_attempt WHERE job_run_id = ?")
-            .bind(job_run_id)
-            .execute(&mut *tx)
-            .await?;
+        let mut task_run_attempt_query: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+            "DELETE FROM task_run_attempt WHERE job_run_id IN (SELECT id FROM job_run WHERE 1=1"
+        );
+        push_job_run_filter(&mut task_run_attempt_query, &data.filter);
+        task_run_attempt_query.push(")");
+        task_run_attempt_query.build().execute(&mut *tx).await?;
 
-        sqlx::query("DELETE FROM task_run WHERE job_run_id = ?")
-            .bind(job_run_id)
-            .execute(&mut *tx)
-            .await?;
+        let mut task_run_query: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+            "DELETE FROM task_run WHERE job_run_id IN (SELECT id FROM job_run WHERE 1=1"
+        );
+        push_job_run_filter(&mut task_run_query, &data.filter);
+        task_run_query.push(")");
+        task_run_query.build().execute(&mut *tx).await?;
 
-        sqlx::query("DELETE FROM job_run_stop WHERE job_run_id = ?")
-            .bind(job_run_id)
-            .execute(&mut *tx)
-            .await?;
+        let mut job_run_stop_query: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+            "DELETE FROM job_run_stop WHERE job_run_id IN (SELECT id FROM job_run WHERE 1=1"
+        );
+        push_job_run_filter(&mut job_run_stop_query, &data.filter);
+        job_run_stop_query.push(")");
+        job_run_stop_query.build().execute(&mut *tx).await?;
 
-        sqlx::query("DELETE FROM job_run_notification WHERE job_run_id = ?")
-            .bind(job_run_id)
-            .execute(&mut *tx)
-            .await?;
+        let mut job_run_notification_query: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+            "DELETE FROM job_run_notification WHERE job_run_id IN (SELECT id FROM job_run WHERE 1=1"
+        );
+        push_job_run_filter(&mut job_run_notification_query, &data.filter);
+        job_run_notification_query.push(")");
+        job_run_notification_query.build().execute(&mut *tx).await?;
 
-        sqlx::query("DELETE FROM job_run WHERE id = ?")
-            .bind(job_run_id)
-            .execute(&mut *tx)
-            .await?;
+        let mut job_run_query: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+            "DELETE FROM job_run WHERE 1=1"
+        );
+        push_job_run_filter(&mut job_run_query, &data.filter);
+        job_run_query.build().execute(&mut *tx).await?;
 
         tx.commit().await?;
 
@@ -66,6 +117,7 @@ impl CRUD {
 mod tests {
     use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
     use crate::crud::job_run_notification::{NotificationChannel, NotifyOn};
+    use crate::crud::multistatements::delete_job_runs::{DeleteJobRunsData, DeleteJobRunsDataFilter};
     use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRun, TaskRunStatus};
     use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, TaskRunAttemptStatus};
     use crate::crud::task_run_attempt_output::{
@@ -74,6 +126,16 @@ mod tests {
     };
     use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
     use crate::test_support::TestDb;
+
+    fn delete_by_id(job_run_id: i64) -> DeleteJobRunsData {
+        DeleteJobRunsData {
+            filter: DeleteJobRunsDataFilter {
+                id: Some(job_run_id),
+                job_id: None,
+                status: None,
+            },
+        }
+    }
 
     /// One job run carrying one row in every one of the six tables, built the way a real
     /// run accumulates them: a task run, an attempt of it, output from that attempt, a
@@ -185,7 +247,7 @@ mod tests {
         let (job_run, _task_run) = full_job_run(&db).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
-        db.crud.delete_job_run(&mut conn, job_run.id).await.unwrap();
+        db.crud.delete_job_runs(&mut conn, &delete_by_id(job_run.id)).await.unwrap();
 
         assert!(job_run_row(&db, job_run.id).await.is_none());
         assert_eq!(task_run_count(&db, job_run.id).await, 0);
@@ -206,7 +268,7 @@ mod tests {
         let (kept, _) = full_job_run(&db).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
-        db.crud.delete_job_run(&mut conn, deleted.id).await.unwrap();
+        db.crud.delete_job_runs(&mut conn, &delete_by_id(deleted.id)).await.unwrap();
 
         assert!(job_run_row(&db, deleted.id).await.is_none());
 
@@ -218,8 +280,9 @@ mod tests {
         assert_eq!(db.job_run_notifications(kept.id).await.len(), 1);
     }
 
-    /// A primitive, not a guarded operation: an id nothing owns is a no-op rather than an
-    /// error, since task 5's selection is the caller that would ever have to explain why.
+    /// A primitive, not a guarded operation: a filter matching nothing is a no-op rather
+    /// than an error, since a caller choosing which runs to delete is the one that would
+    /// ever have to explain why.
     #[tokio::test]
     async fn deleting_a_job_run_that_does_not_exist_is_a_no_op() {
 
@@ -227,6 +290,31 @@ mod tests {
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
 
-        assert!(db.crud.delete_job_run(&mut conn, 999_999).await.is_ok());
+        assert!(db.crud.delete_job_runs(&mut conn, &delete_by_id(999_999)).await.is_ok());
+    }
+
+    /// The decided behaviour, pinned so a future guard cannot be added silently: an
+    /// entirely empty filter matches every row in `job_run`, exactly as an empty select
+    /// filter would, and so deletes every job run in the database.
+    #[tokio::test]
+    async fn an_empty_filter_deletes_every_job_run() {
+
+        let db = TestDb::new().await;
+        let (first, _) = full_job_run(&db).await;
+        let (second, _) = full_job_run(&db).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        db.crud.delete_job_runs(&mut conn, &DeleteJobRunsData {
+            filter: DeleteJobRunsDataFilter {
+                id: None,
+                job_id: None,
+                status: None,
+            },
+        }).await.unwrap();
+
+        assert!(job_run_row(&db, first.id).await.is_none());
+        assert!(job_run_row(&db, second.id).await.is_none());
+        assert_eq!(task_run_count(&db, first.id).await, 0);
+        assert_eq!(task_run_count(&db, second.id).await, 0);
     }
 }
