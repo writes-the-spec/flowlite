@@ -39,7 +39,10 @@ fn the_readme_prints_the_real_defaults() {
         ("job_defaults", "max_retries", job.max_retries.to_string()),
         ("job_defaults", "retry_delay_seconds", job.retry_delay_seconds.to_string()),
         ("job_defaults", "max_parallel_runs", job.max_parallel_runs.to_string()),
+        ("job_defaults", "keep_runs", job.keep_runs.to_string()),
         ("schedule_defaults", "timezone", format!("\"{}\"", defaults.schedule_defaults.timezone)),
+        ("retention", "keep_runs_total", defaults.retention.keep_runs_total.to_string()),
+        ("retention", "max_deletes_per_pass", defaults.retention.max_deletes_per_pass.to_string()),
         ("smtp", "port", smtp.port.to_string()),
         ("smtp", "max_output_bytes", smtp.max_output_bytes.to_string()),
     ];
