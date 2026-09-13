@@ -4,6 +4,7 @@ CREATE TABLE job (
     name TEXT NOT NULL,
     description TEXT NOT NULL,
     max_parallel_runs INTEGER NOT NULL,
+    keep_runs INTEGER NOT NULL,
     parameters TEXT NOT NULL,
     env TEXT NOT NULL,
     secret_env TEXT NOT NULL,

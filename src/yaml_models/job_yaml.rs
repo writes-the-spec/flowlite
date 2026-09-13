@@ -76,6 +76,10 @@ pub struct JobYaml {
     /// declared" — see `JobYamlTask::timeout`.
     #[serde(default)]
     pub max_parallel_runs: Option<u32>,
+    /// How many of this job's newest finished runs retention keeps, 0 for all of them.
+    /// `None` is "not declared" — see `JobYamlTask::timeout`.
+    #[serde(default)]
+    pub keep_runs: Option<u32>,
     /// The parameters this job accepts, name to default value. A schedule or the CLI may
     /// override a declared name; an undeclared one is a submit error.
     #[serde(default, deserialize_with = "deserialize_string_map")]

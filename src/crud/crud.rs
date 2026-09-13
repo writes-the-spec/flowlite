@@ -207,6 +207,8 @@ impl CRUD {
                 description: job_yaml.description,
                 max_parallel_runs: job_yaml.max_parallel_runs
                     .unwrap_or(job_defaults.max_parallel_runs),
+                keep_runs: job_yaml.keep_runs
+                    .unwrap_or(job_defaults.keep_runs),
                 parameters: job_yaml.parameters.clone(),
                 env: job_yaml.env.clone(),
                 secret_env: job_yaml.secret_env.clone(),
@@ -900,6 +902,70 @@ tasks:
         }).await.unwrap().unwrap();
 
         assert!(task.limits.0.is_empty());
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    /// `keep_runs:` follows `max_parallel_runs` exactly - declared, it seeds as declared,
+    /// and the value has to survive the round trip through `select_job` since that is how
+    /// the later retention service reads it back.
+    #[tokio::test]
+    async fn a_job_declaring_keep_runs_seeds_it_and_it_round_trips_through_select_job() {
+        use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
+
+        let data_dir = std::env::temp_dir().join(format!("flowlite-keep-runs-seed-{}", uuid::Uuid::new_v4()));
+        write_job_yaml(&data_dir, "nightly.yaml", "
+id: nightly-sync
+name: Nightly Sync
+keep_runs: 400
+tasks:
+  - id: ingest
+    command: ./run.sh
+");
+
+        let (crud, mut main_conn, _mem_conn) = crud_with_private_mem(&data_dir, BTreeMap::new()).await;
+
+        crud.init(&mut main_conn).await.unwrap();
+
+        let job = crud.select_job(&mut main_conn, &SelectJobsData {
+            filter: SelectJobsDataFilter { job_id: Some("nightly-sync".to_string()), name_like: None },
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap().unwrap();
+
+        assert_eq!(job.keep_runs, 400);
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    /// A job that never declares `keep_runs:` gets `[job_defaults]`'s value, not 0 - the
+    /// same fallback `max_parallel_runs` gets in `seed_job`.
+    #[tokio::test]
+    async fn a_job_omitting_keep_runs_seeds_the_job_defaults_value() {
+        use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
+
+        let data_dir = std::env::temp_dir().join(format!("flowlite-keep-runs-seed-{}", uuid::Uuid::new_v4()));
+        write_job_yaml(&data_dir, "nightly.yaml", "
+id: nightly-sync
+name: Nightly Sync
+tasks:
+  - id: ingest
+    command: ./run.sh
+");
+
+        let (crud, mut main_conn, _mem_conn) = crud_with_private_mem(&data_dir, BTreeMap::new()).await;
+
+        crud.init(&mut main_conn).await.unwrap();
+
+        let job = crud.select_job(&mut main_conn, &SelectJobsData {
+            filter: SelectJobsDataFilter { job_id: Some("nightly-sync".to_string()), name_like: None },
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap().unwrap();
+
+        assert_eq!(job.keep_runs, AppConfig::default().job_defaults.keep_runs);
 
         let _ = std::fs::remove_dir_all(&data_dir);
     }

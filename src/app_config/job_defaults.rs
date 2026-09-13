@@ -12,6 +12,9 @@ pub struct AppConfigJobDefaults {
     pub retry_delay_seconds: u32,
     /// How many runs of one job may run at once, 0 for no limit.
     pub max_parallel_runs: u32,
+    /// The newest finished runs of one job to keep. 0 keeps every run of that job, and
+    /// `[retention] keep_runs_total` is then the only thing bounding it.
+    pub keep_runs: u32,
 }
 
 impl Default for AppConfigJobDefaults {
@@ -21,6 +24,7 @@ impl Default for AppConfigJobDefaults {
             max_retries: 0,
             retry_delay_seconds: 60,
             max_parallel_runs: 1,
+            keep_runs: 100,
         }
     }
 }

@@ -404,6 +404,7 @@ mod tests {
             name: "Job".to_string(),
             description: String::new(),
             max_parallel_runs: 0,
+            keep_runs: 0,
             parameters: sqlx::types::Json(BTreeMap::new()),
             env: sqlx::types::Json(env),
             secret_env: sqlx::types::Json(secret_env),

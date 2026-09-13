@@ -11,6 +11,7 @@ In-memory config, re-seeded on every startup, so nothing here survives a restart
 | `name` | Display label. Deliberately **not** unique and **not** a key. |
 | `description` | `NOT NULL`; the YAML `#[serde(default)]`s it to `""`, so the empty string arrives as a value. |
 | `max_parallel_runs` | How many of this job's runs may be `Running` at once. Defaults to 1; **`0` means no limit** and short-circuits the count entirely. |
+| `keep_runs` | How many of this job's newest finished runs retention keeps. Defaults to `[job_defaults] keep_runs`; **`0` means keep every run of this job**, leaving `[retention] keep_runs_total` as the only thing bounding it. Not yet read by anything — added ahead of the retention service that will. |
 | `parameters` | `NOT NULL`. Declared name to default value, `'{}'` when the job declares none. This table only holds the declaration — resolving it against a caller's overrides happens in `submit_job`, not here. |
 | `env` | `NOT NULL`. Environment variables for every task of the job, `'{}'` when it declares none. Merged with each task's own `env:` by `submit_job` — the task wins a shared name — and only the merged result is stored, on `task_run.env`. |
 | `secret_env` | `NOT NULL`. Environment variable name to secret name — never a value — for every task of the job, `'{}'` when it declares none. Merged with each task's own `secret_env:` the same way `env` is, and only the merged result is stored, on `task_run.secret_env`. |
