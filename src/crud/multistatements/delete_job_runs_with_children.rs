@@ -1,5 +1,5 @@
-//! `delete_job_runs_with_children`: the first deletion in this codebase, and the one place a
-//! run's rows disappear for good.
+//! `delete_job_runs_with_children`: the cascade that deletes a run's rows for good, across
+//! every one of the six tables a job run can own rows in.
 //!
 //! The filter is resolved to matching job run ids first, with `select_job_runs` and the
 //! equivalent `SelectJobRunsDataFilter` - then each of the six per-entity deletes is called
@@ -30,11 +30,12 @@ impl CRUD {
     /// tables that carries its `job_run_id`, child-first, in one transaction - so no other
     /// reader ever sees a run whose tasks are half gone.
     ///
-    /// Child-first is correctness on its own terms, not the database enforcing it:
-    /// `PRAGMA foreign_keys` is never set in `src/toolkit.rs`, so SQLite does not enforce
-    /// the declared foreign keys at runtime here. An entirely empty
-    /// `DeleteJobRunsDataFilter` deletes every job run in the database, and everything that
-    /// hangs off it - see the module doc for why that is not guarded against here.
+    /// Child-first is enforced by the database, not just convention: sqlx's
+    /// `SqliteConnectOptions` turns `PRAGMA foreign_keys` on by default, so deleting a
+    /// `job_run` before its children fails loudly with `FOREIGN KEY constraint failed`
+    /// rather than leaving a silent orphan. An entirely empty `DeleteJobRunsDataFilter`
+    /// deletes every job run in the database, and everything that hangs off it - see the
+    /// module doc for why that is not guarded against here.
     pub async fn delete_job_runs_with_children(&self, conn: &mut SqliteConnection, data: &DeleteJobRunsData) -> anyhow::Result<()> {
 
         let ids = self.select_job_runs(&mut *conn, &SelectJobRunsData {

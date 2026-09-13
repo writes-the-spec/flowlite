@@ -24,6 +24,10 @@ One execution of a [`task_run`](task_run.md)'s command. **This is the only level
 
 **The attempt's output does not live here.** It is appended to [`task_run_attempt_output`](task_run_attempt_output.md) in chunks, one row per stream per poll pass. It used to be two `TEXT NOT NULL` columns on this table, rewritten whole on every pass, which cost the square of the output size — see that reference for why the chunks replaced them and for the 1 MiB per-stream cap.
 
+## Deleted by
+
+`RetentionService`, along with the [`job_run`](job_run.md) each row belongs to — see [job_run.md](job_run.md#deleted-by) for the policy.
+
 ## Read by
 
 `Orchestrator::recover` reads `process_group_id` after a restart — it is the only way to reach a process an earlier run of the program left behind, and the kill is refused unless `started_at` is after the machine last booted, since a group id is a number the kernel hands out again.

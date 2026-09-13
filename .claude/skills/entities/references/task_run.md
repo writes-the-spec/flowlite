@@ -26,6 +26,10 @@ The one deliberate exception in the whole orchestrator is `mem.job.max_parallel_
 - **Inserted** by `CRUD::submit_job` / `rerun_job`, all `Pending`, in the same call as their `job_run`.
 - **Updated** by `TaskRunDispatcher` (`Pending` → `Running`/`Skipped`), `TaskRunMonitor` (`Running` → terminal), and `JobRunDispatcher::settle_as_skipped`, which skips every task run of a stopped, never-started job run in one bulk update.
 
+## Deleted by
+
+`RetentionService`, along with the [`job_run`](job_run.md) each row belongs to — see [job_run.md](job_run.md#deleted-by) for the policy.
+
 ## Read by
 
 `TaskRunDispatcher` (its own rows and its dependencies'), `TaskRunMonitor`, `JobRunMonitor` (all task runs of a job run, to settle it), `TaskRunAttemptDispatcher` (for `command`, `timeout` and `retry_delay` to spawn with, `working_dir` for the child's `current_dir`, and `env`/`secret_env` to pass to `build_task_run_attempt_env`), and the job-run and task-run web routes — the latter renders `env` on the task-run page, deliberately: it is plaintext on disk already, and hiding it would make a wrong `env:` undebuggable from the run.

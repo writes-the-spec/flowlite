@@ -75,6 +75,8 @@ A section with **no** sensible default is `Option<T>` instead, with `#[serde(def
 | `[orchestrator]` | [src/poller.rs](../../../src/poller.rs) and the services — see the [orchestrator skill](../orchestrator/SKILL.md) |
 | `[ui]` | the dashboard's paging and refresh — see the [router skill](../router/SKILL.md) |
 | `[job_defaults]`, `[schedule_defaults]` | `CRUD::init`, filling what a YAML left out |
+| `[job_defaults] keep_runs` | also read directly by `RetentionService` ([src/retention/service.rs](../../../src/retention/service.rs)), as the fallback for a job id with no row in `mem.job` |
+| `[retention]` | `RetentionService` alone — `keep_runs_total`, the ceiling across every job enforced oldest-first after each job's own `keep_runs`, and `max_deletes_per_pass`, bounding how much of one pass it may spend deleting |
 | `[smtp]`, `[slack]` | the channels — see the [notifications skill](../notifications/SKILL.md) |
 | `[secrets]` | a task's `secret_env:`, checked at startup by `CRUD::check_secret_env_is_satisfied` |
 | `[concurrency_limits]` | a task's `limits:`, gated by the attempt dispatcher |

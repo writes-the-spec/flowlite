@@ -1,6 +1,8 @@
 //! Which finished job runs may be deleted — one operation spanning `job_run` and
 //! `job_run_notification`, so it belongs to neither entity file. Every query here is
-//! read-only; `delete_job_runs` is the only place a run's rows actually disappear.
+//! read-only; a run's rows now disappear through seven places — the single-table
+//! `delete_job_runs` in `job_run.rs` and its five sibling entity deletes, plus
+//! `delete_job_runs_with_children`, which calls all six as one cascade.
 //!
 //! None of the three methods decides *how many* to delete, or resolves a job's own
 //! `keep_runs` — that policy belongs to the retention service. They only answer, for a

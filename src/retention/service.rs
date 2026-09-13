@@ -189,7 +189,7 @@ impl Service for RetentionService {
         // the one place that already knows the split, rather than once per `handle`.
         if !per_job_ids.is_empty() || !global_ids.is_empty() {
             println!(
-                "retention deleted {} finished job runs ({} over per-job keep_runs, {} over keep_runs_total)",
+                "retention deleting {} finished job runs ({} over per-job keep_runs, {} over keep_runs_total)",
                 per_job_ids.len() + global_ids.len(),
                 per_job_ids.len(),
                 global_ids.len(),

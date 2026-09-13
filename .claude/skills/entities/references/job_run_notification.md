@@ -33,9 +33,15 @@ The other three are all closed, and only [`NotificationService`](../../notificat
 
 **Nothing in the orchestrator writes this table.** `JobRunMonitor` finishes a run and publishes; it does not know notifications exist.
 
+## Deleted by
+
+`RetentionService`, along with the [`job_run`](job_run.md) each row belongs to — see [job_run.md](job_run.md#deleted-by) for the policy.
+
 ## Read by
 
-`NotificationService` alone, which selects the `pending` rows — the open ones — whatever channel and whatever run they are about, and reads the run's status to decide what each deserves.
+`NotificationService`, which selects the `pending` rows — the open ones — whatever channel and whatever run they are about, and reads the run's status to decide what each deserves.
+
+`RetentionService` reads it too, in `select_deletable_job_runs` ([src/crud/multistatements/retention_candidates.rs](../../../../src/crud/multistatements/retention_candidates.rs)): a run with a `pending` row here is never a deletion candidate, whatever `keep_runs` or `keep_runs_total` would otherwise say. A `sent`, `failed` or `skipped` row owes nothing and does not hold a run back.
 
 ## One attempt, recorded either way
 

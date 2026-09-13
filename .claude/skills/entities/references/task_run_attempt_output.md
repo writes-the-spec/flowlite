@@ -29,7 +29,7 @@ The same reason [`task_run_attempt`](task_run_attempt.md) carries its own: **a l
 
 Each of those is one indexed query for a whole view. Without the columns it is one query per attempt — the N+1 these exist to avoid — or an `IN (...)` list of ids the caller has to collect first, which also has to special-case the empty list, since `IN ()` is a syntax error.
 
-They also make the pruning this table will eventually need a single statement (`DELETE ... WHERE job_run_id = ?`) rather than a correlated subquery.
+They also make the pruning `RetentionService` needs a single statement (`DELETE ... WHERE job_run_id = ?`) rather than a correlated subquery.
 
 ## One row per stream per pass
 
@@ -37,13 +37,17 @@ They also make the pruning this table will eventually need a single statement (`
 
 Output is capped at `MAX_STREAM_BYTES` (1 MiB) per stream, enforced in the reader, which bounds both this table and the memory in flight. Past the cap the reader keeps reading and stops recording, and appends one marker chunk saying so. **A cap that stopped reading would block the child on a full 64 KiB pipe and turn a noisy task into a hung one.**
 
-Nothing prunes this table. The cap bounds one attempt; retention over time is not designed.
+The cap bounds one attempt; pruning over time is `RetentionService`'s job, not this table's own — see **Deleted by** below.
 
 ## Written by
 
 `TaskRunAttemptMonitor` alone ([src/orchestrator/task_run_attempt_monitor.rs](../../../../src/orchestrator/task_run_attempt_monitor.rs)), from the chunks the two reader tasks per attempt deliver — see [src/orchestrator/task_run_attempt_reader.rs](../../../../src/orchestrator/task_run_attempt_reader.rs). Inserted on every pass while the process is alive, and once more after a final drain when it ends.
 
 That final insert happens **before** the terminal status is written, so an attempt that reads as terminal has complete output. The per-pass insert is a data-only write and deliberately publishes no wake-up.
+
+## Deleted by
+
+`RetentionService`, along with the [`job_run`](job_run.md) each row belongs to — see [job_run.md](job_run.md#deleted-by) for the policy.
 
 ## Read by
 

@@ -19,6 +19,14 @@ One execution of a [`job`](job.md). Created `Pending`, driven to a terminal stat
 - **Inserted** by `CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/](../../../../src/crud/multistatements/)), always `Pending`, together with one [`task_run`](task_run.md) per task and one [`job_run_notification`](job_run_notification.md) per channel the job named, in the same call. `rerun_job` reads an existing run and its task runs and reproduces the snapshot rather than re-reading the YAML, so a rerun executes what the original did — including copying `parameters` and `scheduled_at` verbatim, not the job's current defaults or a fresh `NULL`. A rerun of a scheduled run therefore still runs for the day it was originally scheduled for.
 - **Updated** by `JobRunDispatcher` (`Pending` → `Running`/`Skipped`) and `JobRunMonitor` (`Running` → terminal), and by nothing else. No request handler and no CLI command writes a run status.
 
+## Deleted by
+
+`RetentionService` ([src/retention/service.rs](../../../../src/retention/service.rs)), through `CRUD::delete_job_runs_with_children` ([src/crud/multistatements/](../../../../src/crud/multistatements/delete_job_runs_with_children.rs)) — never a run still `Pending` or `Running`, and never one still owing a `Pending` row in [`job_run_notification`](job_run_notification.md). Deleting a run deletes this row and, in the same transaction, every row across the other five tables here that carries its `job_run_id`.
+
+`[job_defaults] keep_runs` (or a job's own `keep_runs` override on [`mem.job`](job.md)) bounds how many of a job's newest finished runs survive; `[retention] keep_runs_total` is the ceiling across every job, oldest first, enforced after each job's own number. See [Retention](../../../../README.md#retention).
+
+Deleting a run also deletes the config snapshot a rerun would replay, so `job-run rerun` on a deleted run fails exactly as it would for an id that never existed — see [Reruns](../../../../README.md#reruns).
+
 ## Read by
 
 Both of those services, `CRUD::is_job_at_max_parallel_runs` (counting this job's `Running` rows), the `job-run` CLI commands, and the home and job-run web routes.

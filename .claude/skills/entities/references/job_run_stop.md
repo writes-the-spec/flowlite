@@ -12,6 +12,10 @@ A stop signal for a [`job_run`](job_run.md). **Insert-only** — there is no sta
 
 The job-run detail web route ([src/router/app/routes/job_runs/job_run_id/route.rs](../../../../src/router/app/routes/job_runs/job_run_id/route.rs)). There is no CLI stop command.
 
+## Deleted by
+
+`RetentionService`, along with the [`job_run`](job_run.md) each row belongs to — see [job_run.md](job_run.md#deleted-by) for the policy.
+
 ## Read by
 
 Four of the six orchestrator services, each on every pass — a signal wake-up or the one-second interval, whichever came first: `JobRunDispatcher`, `TaskRunDispatcher`, `TaskRunAttemptDispatcher` and `TaskRunAttemptMonitor`. Each finishes only what it owns: a row that never started goes `Skipped`, an in-flight process is killed and its attempt goes `Aborted`.

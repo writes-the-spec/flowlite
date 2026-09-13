@@ -730,6 +730,11 @@ run snapshots its own commands, `depends_on` edges, timeouts and retry settings,
 `FLOWLITE_SCHEDULED_AT` it fired for. So an old run reruns its old config for the same
 occurrence, and a run whose job YAML has since been edited or deleted is still rerunnable.
 
+**A run is rerunnable for as long as it is retained, and no longer.** Retention deletes old
+finished runs (see [Retention](#retention)), and deleting a run deletes the config snapshot
+this replays — so `job-run rerun` on a deleted run fails the same way it does for an id that
+never existed.
+
 `secret_env:` is the one exception to "replays exactly that": what is frozen is the
 secret's *name*, not its value. A rerun resolves that name against whatever `[secrets]` or
 `FLOWLITE_SECRETS__*` currently holds, so rotating a credential changes what the next rerun
@@ -742,6 +747,58 @@ To run the job as it is defined now, submit it instead:
 ```bash
 flowlite job submit hello-world
 ```
+
+## Retention
+
+A long-lived data directory accumulates job runs forever unless something prunes them.
+`RetentionService` does, on the same poller every other background service runs on, inside
+`flowlite serve`. A run becomes a candidate for deletion once it is **finished**, and never
+before — never `Pending` or `Running`, and never one that still owes an undelivered
+notification (see [Run notifications](#run-notifications)).
+
+Each job keeps its own newest runs:
+
+```toml
+[job_defaults]
+keep_runs = 100   # 0 keeps every run of that job
+```
+
+A job overrides it in its own YAML:
+
+```yaml
+id: nightly-sync
+name: Nightly Sync
+keep_runs: 20
+tasks:
+  - id: sync
+    command: ./sync.sh
+```
+
+`[retention]` adds a ceiling across every job, and a limit on how much of one pass may go to
+deleting:
+
+```toml
+[retention]
+keep_runs_total = 10000        # the most finished runs kept across every job, 0 for no ceiling
+max_deletes_per_pass = 100     # the most runs one pass deletes, 0 for no cap
+```
+
+`keep_runs_total` is enforced oldest-first across every job, *after* each job's own
+`keep_runs` — the two rules stack rather than compete. `max_deletes_per_pass` exists so the
+first pass after turning this on against an already-large backlog cannot hold the single
+SQLite writer for minutes; a large backlog is worked down one pass at a time instead of all
+at once.
+
+**Deleting rows frees SQLite's pages for reuse but does not shrink `flowlite.db`** — the
+database stops growing rather than gets smaller. Get the space back with the server
+stopped:
+
+```bash
+sqlite3 <data-dir>/flowlite.db 'VACUUM;'
+```
+
+flowlite never runs this itself: `VACUUM` rewrites the whole file under an exclusive lock,
+which is the last thing a sidecar process should do to itself unasked.
 
 ## When flowlite loses track of a run
 
@@ -974,9 +1031,14 @@ timeout_seconds = 3600          # what a task with no timeout: gets
 max_retries = 0
 retry_delay_seconds = 60
 max_parallel_runs = 1           # what a job with no max_parallel_runs: gets
+keep_runs = 100                 # the newest finished runs of one job to keep, 0 keeps every run
 
 [schedule_defaults]
 timezone = "UTC"                # what a schedule with no timezone: reads its cron in
+
+[retention]
+keep_runs_total = 10000         # the most finished runs kept across every job, 0 for no ceiling
+max_deletes_per_pass = 100      # the most runs one pass deletes, 0 for no cap
 ```
 
 `[smtp]` and `[slack]` are the sections with no defaults, because there is no default mail
