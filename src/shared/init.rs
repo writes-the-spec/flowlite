@@ -106,10 +106,16 @@ const CONFIG_TOML: &str = r#"# flowlite configuration. Everything here has a def
 # max_retries = 0
 # retry_delay_seconds = 60
 # max_parallel_runs = 1           # what a job with no max_parallel_runs: gets
-# keep_runs = 100                 # newest runs of one job to keep, 0 for unlimited
+# keep_runs = 100                 # the newest finished runs of one job to keep, 0 keeps every run
 
 # [schedule_defaults]
 # timezone = "UTC"                # what a schedule with no timezone: reads its cron in
+
+# How many finished job runs the retention service keeps, and how much of one pass it
+# may spend deleting them.
+# [retention]
+# keep_runs_total = 10000         # the most finished runs kept across every job, 0 for no ceiling
+# max_deletes_per_pass = 100      # the most runs one pass deletes, 0 for no cap
 
 # Where mail notifications are sent from. No defaults: leave the section out and the email
 # channel is off entirely. The password belongs in the environment on a real box -
@@ -140,12 +146,6 @@ const CONFIG_TOML: &str = r#"# flowlite configuration. Everything here has a def
 # combined cap across every job under it.
 # [concurrency_limits]
 # warehouse = 3                   # 0 for no limit
-
-# How many finished job runs the retention service keeps, and how much of one pass it
-# may spend deleting them.
-# [retention]
-# keep_runs_total = 10000         # oldest-first max across all jobs, 0 for no limit
-# max_deletes_per_pass = 100      # max runs to delete per pass, 0 for no limit
 "#;
 
 

@@ -146,10 +146,8 @@ mod tests {
 
         let padding_job_run = db.insert_job_run(JobRunStatus::Succeeded).await;
 
-        let mut padding_task_run = db.insert_task_run(padding_job_run.id, TaskRunStatus::Succeeded).await;
-        for _ in 0..1 {
-            padding_task_run = db.insert_task_run(padding_job_run.id, TaskRunStatus::Succeeded).await;
-        }
+        db.insert_task_run(padding_job_run.id, TaskRunStatus::Succeeded).await;
+        let padding_task_run = db.insert_task_run(padding_job_run.id, TaskRunStatus::Succeeded).await;
 
         let mut padding_attempt = db.insert_task_run_attempt(&padding_task_run, 1, TaskRunAttemptStatus::Succeeded).await;
         for attempt_number in 2..=3 {

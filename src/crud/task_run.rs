@@ -274,12 +274,12 @@ impl CRUD {
             "DELETE FROM task_run WHERE 1=1"
         );
 
-        if let Some(id) = data.filter.id {
+        if let Some(id) = &data.filter.id {
             query_builder.push(" AND id = ");
             query_builder.push_bind(id);
         }
 
-        if let Some(job_run_id) = data.filter.job_run_id {
+        if let Some(job_run_id) = &data.filter.job_run_id {
             query_builder.push(" AND job_run_id = ");
             query_builder.push_bind(job_run_id);
         }

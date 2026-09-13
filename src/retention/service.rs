@@ -383,7 +383,9 @@ mod tests {
     #[tokio::test]
     async fn handle_removes_all_six_tables_and_leaves_a_neighbour_intact() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+        // `handle` deletes by job run id and never resolves a job's `keep_runs`, so nothing
+        // here reads `mem.job` - a plain `TestDb` is enough.
+        let db = TestDb::new().await;
 
         let deleted = full_job_run(&db).await;
         let kept = full_job_run(&db).await;
@@ -534,9 +536,11 @@ mod tests {
             runs.push(db.insert_job_run(JobRunStatus::Succeeded).await);
         }
 
+        let app_config = db.app_config();
+
         let service = service_with_config(&db, AppConfig {
-            job_defaults: AppConfigJobDefaults { keep_runs: 2, ..db.app_config().job_defaults },
-            ..db.app_config()
+            job_defaults: AppConfigJobDefaults { keep_runs: 2, ..app_config.job_defaults.clone() },
+            ..app_config
         });
 
         let mut ids = service.select().await.unwrap();
