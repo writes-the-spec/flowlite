@@ -455,6 +455,58 @@ mod tests {
         assert_eq!(next_pass, vec![runs[0].id, runs[1].id]);
     }
 
+    /// The same under-delete as its `NewestFirst` sibling above, in the global sweep's own
+    /// shape — `job_id: None`, `sort: OldestFirst`, `offset: None` — because the sweep is
+    /// where a `max_deletes_per_pass` budget actually binds, and the two shapes reach the
+    /// window through different arms of the `sort` match.
+    ///
+    /// Five runs across two jobs with a `Pending` notification on the second-oldest and a
+    /// `limit` of 3: the window is the oldest three, the owing run is dropped from it rather
+    /// than replaced, and two ids come back for a budget of three.
+    ///
+    /// **This is the accepted behaviour, not a bug.** Under-delete is the safe direction
+    /// throughout this design, and the second half of the test shows the cost is only
+    /// latency: once the notification is delivered the next pass takes that run too. The
+    /// test exists so the shortfall stays deliberate rather than becoming a surprise.
+    #[tokio::test]
+    async fn an_excluded_run_under_delivers_the_limit_in_the_global_sweep_too() {
+
+        let db = TestDb::new().await;
+
+        let mut runs = Vec::new();
+        for index in 0..5 {
+            let job_id = if index % 2 == 0 { "job-a" } else { "job-b" };
+            runs.push(insert_finished_run_for(&db, job_id, JobRunStatus::Succeeded).await);
+        }
+
+        let notification = db.insert_job_run_notification(runs[1].id, NotifyOn::Failure, NotificationChannel::Email, &["oncall@example.com"]).await;
+
+        let data = SelectDeletableJobRunsData {
+            filter: SelectDeletableJobRunsDataFilter { job_id: None },
+            sort: Some(SelectDeletableJobRunsDataSort::OldestFirst),
+            limit: Some(3),
+            offset: None,
+        };
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let under_delivered = db.crud.select_deletable_job_runs(&mut conn, &data).await.unwrap();
+
+        assert_eq!(under_delivered, vec![runs[0].id, runs[2].id]);
+
+        db.crud.update_job_run_notifications(&*db.conn_pool, &UpdateJobRunNotificationsData {
+            input: UpdateJobRunNotificationsDataInput {
+                status: Some(JobRunNotificationStatus::Sent),
+                error: None,
+                sent_at: None,
+            },
+            filter: UpdateJobRunNotificationsDataFilter { id: Some(notification.id) },
+        }).await.unwrap();
+
+        let next_pass = db.crud.select_deletable_job_runs(&mut conn, &data).await.unwrap();
+
+        assert_eq!(next_pass, vec![runs[0].id, runs[1].id, runs[2].id]);
+    }
+
     /// Global sweep: `sort: OldestFirst` with `offset: None` and no `job_id` filter crosses
     /// jobs rather than partitioning by one, oldest first, truncated at `limit`.
     #[tokio::test]

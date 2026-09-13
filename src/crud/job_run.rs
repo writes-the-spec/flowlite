@@ -459,7 +459,8 @@ mod tests {
     }
 
     /// A run under a caller-chosen job id — `TestDb::insert_job_run` always writes
-    /// `job_id: "job"`, and every filter here needs at least two job ids to tell apart.
+    /// `job_id: "job"`, and nothing below could tell a `job_id` filter or a distinct
+    /// projection apart with only one of them in the table.
     async fn insert_run_for(db: &crate::test_support::TestDb, job_id: &str, status: JobRunStatus) -> JobRun {
 
         let id = db.crud.insert_job_run(

@@ -79,7 +79,7 @@ Column list is explicit (`SELECT a, b, c FROM ...`), never `SELECT *` — the co
 - **Enum**: bind directly, same as insert (`status: Option<JobRunStatus>`).
 - **Any of several**: `statuses: Option<Vec<JobRunStatus>>` pushes `AND status IN (?, ?, ...)` with `query_builder.separated(", ")`. It sits *beside* the singular `status` rather than replacing it — "exactly this one" and "any of these" are different questions, and every existing caller keeps passing `statuses: None`. Pass a non-empty list: `IN ()` is not valid SQLite.
 
-## Counts and projections
+### Counts and projections
 
 A count (`count_job_runs`) and a distinct projection (`select_job_run_job_ids`) are basic single-statement entity work, and so live in the entity file next to `select_*` — never as a `QueryBuilder` inside a multistatement, and never as a `select_*` whose rows the caller then counts or dedupes in Rust. `count_running_attempts` in [limits.rs](../../../../src/crud/multistatements/limits.rs) is the counter-example that stays as it is: it counts a bounded set (attempts running right now), where materialising the rows costs nothing.
 
