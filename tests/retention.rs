@@ -8,7 +8,7 @@
 //! is also the one feature in this project that destroys data, which is the other reason
 //! not to leave the call site uncovered.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 mod common;
@@ -30,7 +30,7 @@ fn data_dir(label: &str) -> PathBuf {
 
 /// The run ids `job-run list` reports for `hello`, newest first - what a person checking
 /// their history would see.
-fn listed_run_ids(dir: &std::path::Path) -> Vec<i64> {
+fn listed_run_ids(dir: &Path) -> Vec<i64> {
     let out = flowlite(dir, &["job-run", "list", "--job", "hello", "--json"]);
 
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));

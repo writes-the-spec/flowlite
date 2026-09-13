@@ -582,6 +582,25 @@ mod tests {
         assert_eq!(second_pass, vec![runs[2].id, runs[3].id]);
     }
 
+    /// Test 9: the newest finished run of a job is never selected by the per-job rule.
+    #[tokio::test]
+    async fn the_newest_run_of_a_job_is_never_selected() {
+
+        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+        db.insert_job("job", 1).await;
+
+        let mut runs = Vec::new();
+        for _ in 0..4 {
+            runs.push(db.insert_job_run(JobRunStatus::Succeeded).await);
+        }
+
+        let service = service_for(&db);
+        let ids = service.select().await.unwrap();
+
+        assert!(!ids.is_empty());
+        assert!(!ids.contains(&runs[3].id));
+    }
+
     /// Test 10: a per-job pass too small to take every candidate takes the oldest of them.
     ///
     /// Five finished runs, `keep_runs = 3`, a budget of one: the two oldest are deletable
@@ -611,24 +630,5 @@ mod tests {
         service.handle(&runs[0].id).await.unwrap();
 
         assert_eq!(service.select().await.unwrap(), vec![runs[1].id]);
-    }
-
-    /// Test 9: the newest finished run of a job is never selected by the per-job rule.
-    #[tokio::test]
-    async fn the_newest_run_of_a_job_is_never_selected() {
-
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
-        db.insert_job("job", 1).await;
-
-        let mut runs = Vec::new();
-        for _ in 0..4 {
-            runs.push(db.insert_job_run(JobRunStatus::Succeeded).await);
-        }
-
-        let service = service_for(&db);
-        let ids = service.select().await.unwrap();
-
-        assert!(!ids.is_empty());
-        assert!(!ids.contains(&runs[3].id));
     }
 }
