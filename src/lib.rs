@@ -21,6 +21,7 @@ pub(crate) mod scheduler;
 pub(crate) mod signals;
 pub(crate) mod poller;
 pub(crate) mod notifications;
+pub(crate) mod retention;
 pub mod serve_state;
 
 #[cfg(test)]

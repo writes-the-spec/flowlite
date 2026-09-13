@@ -7,6 +7,7 @@ use axum::routing::post;
 use chrono::{DateTime, Utc};
 use crate::app_config::{AppConfig, AppConfigOrchestrator, AppConfigSlack};
 use crate::crud::CRUD;
+use crate::crud::job::{InsertJobData, InsertJobDataInput, Job, SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
 use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotification, JobRunNotificationStatus, NotificationChannel, NotifyOn, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
@@ -113,6 +114,83 @@ impl TestDb {
             signals: Arc::new(Signals::new()),
             children: Arc::new(TaskRunAttemptChildren::new()),
         }
+    }
+
+    /// The same as `new`, but with `mem` migrated under a private name nothing else in the
+    /// process shares — for the retention tests, the first to need a `mem.job` row
+    /// alongside `job_run` rows. `new` leaves `mem` unmigrated on purpose (see this
+    /// struct's own doc comment): a shared, unmigrated `flowlite_mem` is what keeps every
+    /// other TestDb-based test from racing every other one over that one process-wide
+    /// name, and this constructor opts a caller who genuinely needs `mem.job` back into
+    /// paying for a migration, under a name only it holds.
+    ///
+    /// Returns the connection that keeps the private memory database alive — a
+    /// `mode=memory` database is dropped the instant nothing has it open — so the caller
+    /// must hold it for as long as the returned `TestDb` is used.
+    pub async fn new_with_migrated_mem() -> (Self, sqlx::SqliteConnection) {
+
+        let data_dir = std::env::temp_dir().join(format!("flowlite-test-{}", uuid::Uuid::new_v4()));
+
+        let app_config = AppConfig {
+            data_dir: data_dir.to_string_lossy().into_owned(),
+            ..AppConfig::default()
+        };
+
+        let toolkit = Toolkit::new(app_config).with_fresh_mem();
+
+        let mem_conn = toolkit.get_memory_conn().await
+            .expect("failed to migrate the test mem schema");
+
+        let conn_pool = toolkit.get_conn_pool().await
+            .expect("failed to open the test database");
+
+        let test_db = Self {
+            data_dir,
+            crud: Arc::new(CRUD::new(Arc::new(toolkit))),
+            conn_pool: Arc::new(conn_pool),
+            signals: Arc::new(Signals::new()),
+            children: Arc::new(TaskRunAttemptChildren::new()),
+        };
+
+        (test_db, mem_conn)
+    }
+
+    /// A `mem.job` row carrying the given `keep_runs`, for a `TestDb` built with
+    /// `new_with_migrated_mem` — every other field is a value nothing in the retention
+    /// tests reads.
+    pub async fn insert_job(&self, job_id: &str, keep_runs: u32) -> Job {
+
+        static NEXT_ROW_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+        self.crud.insert_job(
+            &*self.conn_pool,
+            &InsertJobData {
+                input: InsertJobDataInput {
+                    row_id: NEXT_ROW_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    job_id: job_id.to_string(),
+                    name: "Job".to_string(),
+                    description: String::new(),
+                    max_parallel_runs: 1,
+                    keep_runs,
+                    parameters: BTreeMap::new(),
+                    env: BTreeMap::new(),
+                    secret_env: BTreeMap::new(),
+                    on_failure_recipients: BTreeMap::new(),
+                    on_success_recipients: BTreeMap::new(),
+                    limits: Vec::new(),
+                },
+            },
+        ).await.unwrap();
+
+        self.crud.select_job(
+            &*self.conn_pool,
+            &SelectJobsData {
+                filter: SelectJobsDataFilter { job_id: Some(job_id.to_string()), name_like: None },
+                sort: None,
+                limit: None,
+                offset: None,
+            },
+        ).await.unwrap().unwrap()
     }
 
     /// The temp directory this test owns, for a command that needs somewhere to write.

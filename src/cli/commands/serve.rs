@@ -11,6 +11,7 @@ use crate::notifications::NotificationService;
 use crate::notifications::channel::NotificationChannels;
 use crate::orchestrator::Orchestrator;
 use crate::poller::Poller;
+use crate::retention::RetentionService;
 use crate::scheduler::Scheduler;
 use crate::signals::Signals;
 use crate::serve_state::{write_state, ServeLock, ServeState};
@@ -118,6 +119,22 @@ impl ServeCmd {
         Poller::new(
             Arc::new(notification_service),
             notification_service_wakeup,
+            app_config.clone(),
+        ).start();
+
+        // Started the same way the scheduler is: nothing publishes to this wake-up,
+        // because a deletion has no urgency for anything else to react to — the poll
+        // interval alone drives it, and registering it with Signals would just wake it on
+        // every unrelated status change for nothing.
+        let retention_service = RetentionService::new(
+            crud.clone(),
+            conn_pool.clone(),
+            app_config.clone(),
+        );
+
+        Poller::new(
+            Arc::new(retention_service),
+            Arc::new(tokio::sync::Notify::new()),
             app_config.clone(),
         ).start();
 
