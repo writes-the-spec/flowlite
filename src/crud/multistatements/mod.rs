@@ -6,6 +6,7 @@
 //! vocabulary `submit_job` and `rerun_job` share.
 
 pub mod ad_hoc_job;
+pub mod delete_job_run;
 pub mod job_run_definition;
 pub mod job_run_reads;
 pub mod limits;
