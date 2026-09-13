@@ -1,4 +1,7 @@
-# flowlite
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/logo-dark.png">
+  <img src="assets/brand/logo-light.png" alt="flowlite" width="260">
+</picture>
 
 flowlite is a job scheduler and orchestrator that ships as a single Rust binary. Point
 it at a directory of YAML and it runs your jobs.

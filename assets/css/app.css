@@ -13,16 +13,26 @@
 }
 
 :root {
-    --ground: #17141c;
-    --surface: #201c28;
-    --surface-2: #262130;
-    --rule: #322c3d;
-    --text: #ece8f1;
-    --text-2: #9c94ab;
+    /* The neutrals are the mark's own: --surface-2 is the icon tile exactly, --text its
+       bone, and the ramp around them keeps that warmth rather than the cool grey a dark
+       UI defaults to. */
+    --ground: #191917;
+    --surface: #212120;
+    --surface-2: #2c2c2a;
+    --rule: #383835;
+    --text: #f1efe8;
+    --text-2: #9a968c;
 
-    --live: #63e6be;
+    /* The mark is four bars and only the leading one is orange, so orange means moving
+       here too: it is the running colour, the focus ring, and nothing else. Buttons and
+       headings stay bone, which is what keeps it worth noticing. */
+    --brand: #ef9f27;
+
     --fail: #ff5d6c;
-    --ok: #8fae8b;
+    /* Olive rather than a fresh green: success is most of the table and the stylesheet
+       already says it stays quiet, so it sits a step off the neutrals and lets the
+       running rows be the ones that carry colour. */
+    --ok: #7f8a6b;
     /* Not red: an invalid row is flowlite losing track of the work, not the command
        failing, and painting it as a failure sends the reader to their own script. */
     --invalid: #b17ae8;
@@ -53,10 +63,10 @@ body {
 
 [x-cloak] { display: none !important; }
 
-::selection { background: var(--live); color: var(--ground); }
+::selection { background: var(--brand); color: var(--ground); }
 
 :focus-visible {
-    outline: 2px solid var(--live);
+    outline: 2px solid var(--brand);
     outline-offset: 2px;
     border-radius: 1px;
 }
@@ -104,13 +114,23 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
     height: 3.5rem;
 }
 
+/* The wordmark itself, rather than the display face standing in for it. Its own bone and
+   orange are the page's --text and --brand, so it sits on the masthead as part of the
+   palette instead of as a pasted-in image. */
 .masthead__brand {
-    font-family: var(--display);
-    font-size: 0.9375rem;
-    font-weight: 600;
-    letter-spacing: -0.04em;
+    display: flex;
+    align-items: center;
+    flex: none;
     text-decoration: none;
 }
+
+.masthead__brand img {
+    display: block;
+    height: 1.375rem;
+    width: auto;
+}
+
+.masthead__brand:hover img { opacity: 0.82; }
 
 .masthead__nav {
     display: flex;
@@ -149,20 +169,20 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
     background: var(--text-2);
 }
 .mark--pending { background: none; box-shadow: inset 0 0 0 1px var(--text-2); }
-.mark--running { background: var(--live); animation: breathe 1.6s ease-in-out infinite; }
+.mark--running { background: var(--brand); animation: breathe 1.6s ease-in-out infinite; }
 .mark--succeeded { background: var(--ok); }
 .mark--failed, .mark--timedout { background: var(--fail); }
 .mark--skipped, .mark--aborted { background: none; box-shadow: inset 0 0 0 1px var(--rule); }
 .mark--invalid { background: var(--invalid); }
 
 @keyframes breathe {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(99, 230, 190, 0.5); }
-    50% { box-shadow: 0 0 0 4px rgba(99, 230, 190, 0); }
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 50%, transparent); }
+    50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 0%, transparent); }
 }
 
 /* Only anomalies get a word and a colour; success stays quiet. */
 .state { font-size: 0.75rem; color: var(--text-2); }
-.state--running { color: var(--live); }
+.state--running { color: var(--brand); }
 .state--failed, .state--timedout { color: var(--fail); }
 .state--invalid { color: var(--invalid); }
 
@@ -350,7 +370,7 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
     width: var(--span, 0%);
     min-width: 2px;
 }
-.bar--running { background: var(--live); }
+.bar--running { background: var(--brand); }
 .bar--failed, .bar--timedout { background: var(--fail); }
 .bar--succeeded { background: var(--ok); }
 .bar--invalid { background: var(--invalid); }
@@ -491,21 +511,26 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
     border-radius: 2px;
     background: var(--text-2);
 }
+/* Both stripes are light: orange against a paler orange reads as a sheen travelling along
+   the bar, where orange alternating with the dark ground underneath it reads as hazard
+   tape. Running is the normal case and should not look like a warning. */
 .lane__span--running {
     background: repeating-linear-gradient(
         115deg,
-        var(--live) 0 6px,
-        rgba(99, 230, 190, 0.45) 6px 12px
+        var(--brand) 0 9px,
+        color-mix(in srgb, var(--brand) 68%, var(--text)) 9px 18px
     );
-    animation: crawl 1s linear infinite;
+    animation: crawl 1.4s linear infinite;
 }
 .lane__span--succeeded { background: var(--ok); }
 .lane__span--failed, .lane__span--timedout { background: var(--fail); }
 .lane__span--pending { background: none; box-shadow: inset 0 0 0 1px var(--rule); }
 .lane__span--invalid { background: var(--invalid); }
 
+/* One full stripe period along x, so the loop has no seam: the 18px period divided by
+   sin(115deg), the stripe angle above. */
 @keyframes crawl {
-    to { background-position: 13.85px 0; }
+    to { background-position: 19.86px 0; }
 }
 
 .lane__idle {
@@ -719,7 +744,7 @@ dialog {
     max-width: 26rem;
     width: calc(100% - 2rem);
 }
-dialog::backdrop { background: rgba(10, 8, 14, 0.7); }
+dialog::backdrop { background: rgba(12, 12, 10, 0.72); }
 
 .dialog__title {
     font-family: var(--display);
@@ -882,6 +907,7 @@ dialog::backdrop { background: rgba(10, 8, 14, 0.7); }
     .timeline { --lane-label: 7rem; --lane-dur: 4rem; }
     .masthead__live { display: none; }
     .masthead__inner { gap: 1.25rem; }
+    .masthead__brand img { height: 1.125rem; }
     .masthead__nav { gap: 1rem; }
     .view-title { font-size: 1.375rem; }
     .runs__state { display: none; }
@@ -894,6 +920,6 @@ dialog::backdrop { background: rgba(10, 8, 14, 0.7); }
         animation-iteration-count: 1 !important;
         transition-duration: 0.001ms !important;
     }
-    .mark--running { box-shadow: 0 0 0 3px rgba(99, 230, 190, 0.25); }
-    .lane__span--running { background: var(--live); }
+    .mark--running { box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 25%, transparent); }
+    .lane__span--running { background: var(--brand); }
 }

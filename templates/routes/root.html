@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}flowlite{% endblock %}</title>
+    <link rel="icon" href="/assets/brand/icon-dark-32.png" sizes="32x32" type="image/png">
+    <link rel="icon" href="/assets/brand/icon-dark-256.png" sizes="256x256" type="image/png">
+    <link rel="apple-touch-icon" href="/assets/brand/icon-dark-512.png">
     <link rel="stylesheet" href="/assets/css/app.css">
     <script src="/assets/vendors/htmx/htmx.min.js"></script>
     <script defer src="/assets/vendors/alpine/alpine.min.js"></script>
@@ -12,7 +15,9 @@
 
     <header class="masthead">
         <div class="shell masthead__inner">
-            <a href="/" class="masthead__brand">flowlite</a>
+            <a href="/" class="masthead__brand">
+                <img src="/assets/brand/logo-dark.png" alt="flowlite" width="1316" height="296">
+            </a>
 
             <nav class="masthead__nav">
                 <a href="/" class="masthead__link" {% if current_route == "home" %}aria-current="page"{% endif %}>Runs</a>
