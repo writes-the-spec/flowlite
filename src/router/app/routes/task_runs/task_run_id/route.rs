@@ -42,6 +42,7 @@ pub struct AttemptDisplay {
 #[template(path = "routes/task_runs/task_run_id/route.html")]
 struct TaskRunIdRouteTemplate {
     current_route: &'static str,
+    theme: &'static str,
     task_run: TaskRunDisplay,
     attempts: Vec<AttemptDisplay>,
     attempt_note: String,
@@ -158,6 +159,7 @@ pub async fn task_run_id_route(
 
     let template = TaskRunIdRouteTemplate {
         current_route: "home",
+        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         job_exists: job.is_some(),
         task_run: TaskRunDisplay {
             id: task_run.id,

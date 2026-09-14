@@ -22,6 +22,7 @@ pub struct ScheduleEntry {
 #[template(path = "routes/schedules/route.html")]
 struct SchedulesRouteTemplate {
     current_route: &'static str,
+    theme: &'static str,
     schedules: Vec<ScheduleEntry>,
     current_name: Option<String>,
     prev_href: Option<String>,
@@ -101,6 +102,7 @@ pub async fn schedules_route(
 
     let template = SchedulesRouteTemplate {
         current_route: "schedules",
+        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         schedules: entries,
         current_name: name_like,
         prev_href,

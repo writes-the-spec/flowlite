@@ -52,6 +52,7 @@ pub struct Tick {
 #[template(path = "routes/job_runs/job_run_id/route.html")]
 struct JobRunIdRouteTemplate {
     current_route: &'static str,
+    theme: &'static str,
     job_run: JobRunDisplay,
     lanes: Vec<Lane>,
     ticks: Vec<Tick>,
@@ -201,6 +202,7 @@ pub async fn job_run_id_route(
 
     let template = JobRunIdRouteTemplate {
         current_route: "home",
+        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         job_exists: job.is_some(),
         job_run: JobRunDisplay {
             id: job_run.id,

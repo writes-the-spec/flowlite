@@ -7,7 +7,7 @@ pub use crate::app_config::retention::AppConfigRetention;
 pub use crate::app_config::schedule_defaults::AppConfigScheduleDefaults;
 pub use crate::app_config::slack::AppConfigSlack;
 pub use crate::app_config::smtp::{AppConfigSmtp, AppConfigSmtpEncryption};
-pub use crate::app_config::ui::AppConfigUi;
+pub use crate::app_config::ui::{AppConfigUi, AppConfigUiTheme};
 
 mod job_defaults;
 mod orchestrator;

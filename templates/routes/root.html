@@ -1,11 +1,28 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="{{ theme }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}flowlite{% endblock %}</title>
-    <link rel="icon" href="/assets/brand/icon-dark-32.png" sizes="32x32" type="image/png">
-    <link rel="icon" href="/assets/brand/icon-dark-256.png" sizes="256x256" type="image/png">
+
+    {# Resolved here rather than in the stylesheet so the light palette can be written
+       once: past this line data-theme is always "dark" or "light", never "auto". First
+       thing in the head, so it runs before the first paint and no page flashes the wrong
+       palette. With scripting off, "auto" stays on the dark palette the stylesheet opens
+       with, which is the one an instance that never configured a theme used to get. #}
+    <script>
+        if (document.documentElement.dataset.theme === "auto") {
+            document.documentElement.dataset.theme =
+                window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        }
+    </script>
+
+    {# The tab strip is the browser's, not the page's, so these follow the OS rather than
+       [ui] theme: a light dashboard in a dark-themed browser still wants the bone icon. #}
+    <link rel="icon" href="/assets/brand/icon-dark-32.png" sizes="32x32" type="image/png" media="(prefers-color-scheme: dark)">
+    <link rel="icon" href="/assets/brand/icon-dark-256.png" sizes="256x256" type="image/png" media="(prefers-color-scheme: dark)">
+    <link rel="icon" href="/assets/brand/icon-light-32.png" sizes="32x32" type="image/png" media="(prefers-color-scheme: light)">
+    <link rel="icon" href="/assets/brand/icon-light-256.png" sizes="256x256" type="image/png" media="(prefers-color-scheme: light)">
     <link rel="apple-touch-icon" href="/assets/brand/icon-dark-512.png">
     <link rel="stylesheet" href="/assets/css/app.css">
     <script src="/assets/vendors/htmx/htmx.min.js"></script>
@@ -16,7 +33,8 @@
     <header class="masthead">
         <div class="shell masthead__inner">
             <a href="/" class="masthead__brand">
-                <img src="/assets/brand/logo-dark.png" alt="flowlite" width="1316" height="296">
+                <img class="brand-mark--dark" src="/assets/brand/logo-dark.png" alt="flowlite" width="1316" height="296">
+                <img class="brand-mark--light" src="/assets/brand/logo-light.png" alt="flowlite" width="1316" height="296">
             </a>
 
             <nav class="masthead__nav">

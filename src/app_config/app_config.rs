@@ -158,6 +158,7 @@ mod tests {
 
     use super::*;
     use crate::app_config::smtp::AppConfigSmtpEncryption;
+    use crate::app_config::ui::AppConfigUiTheme;
 
     fn temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("flowlite-config-{}", uuid::Uuid::new_v4()));
@@ -616,5 +617,73 @@ mod tests {
         assert_eq!(config.retention.keep_runs_total, 250);
         // The rest of [retention] stays at its default.
         assert_eq!(config.retention.max_deletes_per_pass, 100);
+    }
+
+    #[test]
+    fn a_directory_with_no_config_file_leaves_the_theme_to_the_viewer() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+
+        let config = AppConfig::load(Some(dir)).unwrap();
+
+        assert_eq!(config.ui.theme, AppConfigUiTheme::Auto);
+    }
+
+    #[test]
+    fn a_ui_section_may_name_the_light_theme() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+        std::fs::write(dir.join("config.toml"), "[ui]\ntheme = \"light\"\n").unwrap();
+
+        let config = AppConfig::load(Some(dir)).unwrap();
+
+        assert_eq!(config.ui.theme, AppConfigUiTheme::Light);
+        // The rest of [ui] stays at its default.
+        assert_eq!(config.ui.page_size, 25);
+    }
+
+    #[test]
+    fn a_ui_section_may_hand_the_theme_to_the_viewer_with_auto() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+        std::fs::write(dir.join("config.toml"), "[ui]\ntheme = \"auto\"\n").unwrap();
+
+        let config = AppConfig::load(Some(dir)).unwrap();
+
+        assert_eq!(config.ui.theme, AppConfigUiTheme::Auto);
+    }
+
+    /// A misspelled theme should stop the server rather than quietly serve the default -
+    /// the same call `schedule_defaults.timezone` makes for an unknown zone.
+    #[test]
+    fn an_unknown_theme_is_an_error_rather_than_a_silent_fallback() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+        std::fs::write(dir.join("config.toml"), "[ui]\ntheme = \"midnight\"\n").unwrap();
+
+        assert!(AppConfig::load(Some(dir)).is_err());
+    }
+
+    #[test]
+    fn a_theme_set_only_in_the_environment_overrides_the_default() {
+        let _environment = writing_the_environment();
+
+        let dir = temp_dir();
+
+        // SAFETY: the environment is process-wide, and the write guard above is what makes
+        // this the only thread reading it until the variable is gone again.
+        unsafe { std::env::set_var("FLOWLITE_UI__THEME", "light") };
+
+        let config = AppConfig::load(Some(dir));
+
+        unsafe { std::env::remove_var("FLOWLITE_UI__THEME") };
+
+        // Asserted after the removal, so a load that fails cannot leave the variable set
+        // for whatever runs next.
+        assert_eq!(config.unwrap().ui.theme, AppConfigUiTheme::Light);
     }
 }

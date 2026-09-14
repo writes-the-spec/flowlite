@@ -35,6 +35,7 @@ fn the_readme_prints_the_real_defaults() {
         ("ui", "page_size", ui.page_size.to_string()),
         ("ui", "max_page_size", ui.max_page_size.to_string()),
         ("ui", "refresh_interval_seconds", ui.refresh_interval_seconds.to_string()),
+        ("ui", "theme", format!("\"{}\"", ui.theme.as_attribute())),
         ("job_defaults", "timeout_seconds", job.timeout_seconds.to_string()),
         ("job_defaults", "max_retries", job.max_retries.to_string()),
         ("job_defaults", "retry_delay_seconds", job.retry_delay_seconds.to_string()),

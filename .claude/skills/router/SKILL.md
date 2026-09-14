@@ -39,6 +39,7 @@ pub struct WidgetDisplay {
 #[template(path = "routes/widgets/route.html")]
 struct WidgetsRouteTemplate {
     current_route: &'static str,
+    theme: &'static str,
     widgets: Vec<WidgetDisplay>,
 }
 
@@ -63,6 +64,7 @@ pub async fn widgets_route(
 
     let template = WidgetsRouteTemplate {
         current_route: "widgets",
+        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         widgets,
     };
 
@@ -101,6 +103,8 @@ pub async fn widgets_route(
 ```
 
 5. If the page belongs in the masthead, add a link to [templates/routes/root.html](../../../templates/routes/root.html) keyed on `current_route`.
+
+`theme` is the other field every page carries. `root.html` renders it into `<html data-theme="...">`, which is what the stylesheet's light palette is keyed on, so a page struct that omits it does not compile. It comes from `[ui] theme` as `state.toolkit.app_config.ui.theme.as_attribute()` — the same trip `refresh_seconds` makes, and repeated per page for the same reason `current_route` is.
 
 ## htmx partials
 

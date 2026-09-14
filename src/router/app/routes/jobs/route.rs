@@ -20,6 +20,7 @@ pub struct JobEntry {
 #[template(path = "routes/jobs/route.html")]
 struct JobsRouteTemplate {
     current_route: &'static str,
+    theme: &'static str,
     jobs: Vec<JobEntry>,
     current_name: Option<String>,
     prev_href: Option<String>,
@@ -102,6 +103,7 @@ pub async fn jobs_route(
 
     let template = JobsRouteTemplate {
         current_route: "jobs",
+        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         jobs: entries,
         current_name: name_like,
         prev_href,

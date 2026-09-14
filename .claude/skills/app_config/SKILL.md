@@ -73,7 +73,7 @@ A section with **no** sensible default is `Option<T>` instead, with `#[serde(def
 | Section | Read by |
 |---|---|
 | `[orchestrator]` | [src/poller.rs](../../../src/poller.rs) and the services — see the [orchestrator skill](../orchestrator/SKILL.md) |
-| `[ui]` | the dashboard's paging and refresh — see the [router skill](../router/SKILL.md) |
+| `[ui]` | the dashboard's paging, refresh and palette — see the [router skill](../router/SKILL.md) |
 | `[job_defaults]`, `[schedule_defaults]` | `CRUD::init`, filling what a YAML left out |
 | `[job_defaults] keep_runs` | also read directly by `RetentionService` ([src/retention/service.rs](../../../src/retention/service.rs)), as the fallback for a job id with no row in `mem.job` |
 | `[retention]` | `RetentionService` alone — `keep_runs_total`, the ceiling across every job enforced oldest-first after each job's own `keep_runs`, and `max_deletes_per_pass`, bounding how much of one pass it may spend deleting |

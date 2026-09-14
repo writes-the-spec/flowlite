@@ -890,6 +890,11 @@ The dashboard is served out of the binary. `flowlite serve` binds `127.0.0.1:800
 `--address` and `--port` say otherwise; visit it for the job list, the run history, a
 job's dependency graph and the output of any task.
 
+It has a dark palette and a light one, and by default follows whichever the viewer's own
+OS asks for — so a shared instance leaves the choice to whoever opens it. `[ui] theme` takes
+`dark` or `light` to overrule that and look the same everywhere. The palette is the whole of
+it: one stylesheet, both themes, no build step.
+
 It offers three writes, each the browser equivalent of a command: **Stop** and **Rerun** on a
 run's page, and **Submit run** on a job's page — `job-run stop`, `job-run rerun` and
 `job submit`. Every one asks for confirmation first, and there is still no build step and
@@ -1028,6 +1033,7 @@ max_running_attempts = 32       # running task attempts across every job, 0 for 
 page_size = 25                  # rows per page on the run, job and schedule lists
 max_page_size = 100             # the largest ?page_size= the run list accepts
 refresh_interval_seconds = 3    # how often a page showing a live run refreshes
+theme = "auto"                  # dashboard palette: auto follows the viewer's OS, or dark, or light
 
 [job_defaults]
 timeout_seconds = 3600          # what a task with no timeout: gets

@@ -28,6 +28,7 @@ pub struct TaskDisplay {
 #[template(path = "routes/jobs/job_id/task_id/route.html")]
 struct TaskIdRouteTemplate {
     current_route: &'static str,
+    theme: &'static str,
     job_name: String,
     task: TaskDisplay,
 }
@@ -72,6 +73,7 @@ pub async fn task_id_route(
 
     let template = TaskIdRouteTemplate {
         current_route: "jobs",
+        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         job_name: job.name,
         task: TaskDisplay {
             task_id: task.task_id,

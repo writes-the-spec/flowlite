@@ -89,6 +89,7 @@ pub struct StatusChip {
 #[template(path = "routes/home/route.html")]
 struct HomeRouteTemplate {
     current_route: &'static str,
+    theme: &'static str,
     page_size: usize,
     refresh_seconds: u32,
     table_href: String,
@@ -144,6 +145,7 @@ pub async fn home_route(
 
     let template = HomeRouteTemplate {
         current_route: "home",
+        theme: app_config.ui.theme.as_attribute(),
         page_size,
         refresh_seconds: app_config.ui.refresh_interval_seconds,
         table_href,

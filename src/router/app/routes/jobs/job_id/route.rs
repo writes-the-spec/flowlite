@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 #[template(path = "routes/jobs/job_id/missing.html")]
 struct JobMissingTemplate {
     current_route: &'static str,
+    theme: &'static str,
     job_id: String,
 }
 
@@ -24,6 +25,7 @@ struct JobMissingTemplate {
 #[template(path = "routes/jobs/job_id/route.html")]
 struct JobIdRouteTemplate {
     current_route: &'static str,
+    theme: &'static str,
     job: Job,
     tasks: Vec<Task>,
     dag: Dag,
@@ -52,6 +54,7 @@ pub async fn job_id_route(
         None => {
             let template = JobMissingTemplate {
                 current_route: "jobs",
+                theme: state.toolkit.app_config.ui.theme.as_attribute(),
                 job_id,
             };
 
@@ -79,6 +82,7 @@ pub async fn job_id_route(
 
     let template = JobIdRouteTemplate {
         current_route: "jobs",
+        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         job,
         tasks,
         // A graph of unconnected boxes says nothing the task table doesn't already say.

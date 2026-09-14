@@ -22,11 +22,18 @@
     --rule: #383835;
     --text: #f1efe8;
     --text-2: #9a968c;
+    /* The one step past --text, for the element that is already wearing it and still has
+       to answer a hover. */
+    --text-hi: #ffffff;
 
     /* The mark is four bars and only the leading one is orange, so orange means moving
        here too: it is the running colour, the focus ring, and nothing else. Buttons and
        headings stay bone, which is what keeps it worth noticing. */
     --brand: #ef9f27;
+    /* The running lane's second stripe: --brand carried most of the way to --text. Spelled
+       out rather than mixed, because the two palettes reach their paler orange from
+       opposite directions and a single mix cannot say both. */
+    --brand-2: #f0b965;
 
     --fail: #ff5d6c;
     /* Olive rather than a fresh green: success is most of the table and the stylesheet
@@ -37,6 +44,12 @@
        failing, and painting it as a failure sends the reader to their own script. */
     --invalid: #b17ae8;
 
+    /* Darker than --ground in both palettes: a scrim is the room's lights going down, so
+       it stays a shadow over a light page rather than inverting into a haze. */
+    --scrim: rgba(12, 12, 10, 0.72);
+
+    --scheme: dark;
+
     --sans: "Archivo", system-ui, sans-serif;
     --display: "Martian Mono", ui-monospace, monospace;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
@@ -45,9 +58,41 @@
     --shell: 90rem;
 }
 
+/* The light palette, and the only block that restates a colour. `[ui] theme = "auto"`
+   never reaches this selector: root.html resolves it to "light" or "dark" before the first
+   paint, so the OS preference and a configured theme arrive here as the same attribute and
+   this palette can be written once.
+
+   Not an inversion of the dark one. The neutrals mirror, warmth and all - --surface is the
+   bone that is --text above - but the four accents darken instead of holding still: each
+   is text at five sites as well as a fill at fifteen, and #ef9f27 on a near-white ground
+   is about 2:1. Darkening satisfies both uses at once, so each accent stays one token. */
+:root[data-theme="light"] {
+    --ground: #faf9f5;
+    --surface: #f1efe8;
+    --surface-2: #e5e2d8;
+    --rule: #d5d1c4;
+    /* The ink of logo-light.png, so the wordmark sits in the palette here too. */
+    --text: #2e2e2c;
+    --text-2: #6b675e;
+    --text-hi: #0f0f0e;
+
+    /* Deep amber: still the only colour that means moving, and 4.5:1 as a word. */
+    --brand: #a3640b;
+    --brand-2: #d7a55a;
+
+    --fail: #c22c3a;
+    --ok: #5e6a4a;
+    --invalid: #7b4fc4;
+
+    --scrim: rgba(30, 29, 26, 0.45);
+
+    --scheme: light;
+}
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html { color-scheme: dark; }
+html { color-scheme: var(--scheme); }
 
 body {
     background: var(--ground);
@@ -124,11 +169,18 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
     text-decoration: none;
 }
 
+/* Both marks are in the page and the palette hides one. A <picture> would be the obvious
+   way to carry two, but its media queries see only prefers-color-scheme and would ignore a
+   configured theme. */
 .masthead__brand img {
     display: block;
     height: 1.375rem;
     width: auto;
 }
+
+.masthead__brand .brand-mark--light { display: none; }
+:root[data-theme="light"] .masthead__brand .brand-mark--dark { display: none; }
+:root[data-theme="light"] .masthead__brand .brand-mark--light { display: block; }
 
 .masthead__brand:hover img { opacity: 0.82; }
 
@@ -263,7 +315,7 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
 .btn { cursor: pointer; }
 .btn:hover { border-color: var(--text-2); }
 .btn--primary { background: var(--text); color: var(--ground); border-color: var(--text); font-weight: 600; }
-.btn--primary:hover { background: #fff; border-color: #fff; }
+.btn--primary:hover { background: var(--text-hi); border-color: var(--text-hi); }
 .btn--danger { color: var(--fail); border-color: var(--fail); background: none; }
 .btn--danger:hover { background: var(--fail); color: var(--ground); }
 .btn--quiet { background: none; color: var(--text-2); }
@@ -518,7 +570,7 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
     background: repeating-linear-gradient(
         115deg,
         var(--brand) 0 9px,
-        color-mix(in srgb, var(--brand) 68%, var(--text)) 9px 18px
+        var(--brand-2) 9px 18px
     );
     animation: crawl 1.4s linear infinite;
 }
@@ -744,7 +796,7 @@ dialog {
     max-width: 26rem;
     width: calc(100% - 2rem);
 }
-dialog::backdrop { background: rgba(12, 12, 10, 0.72); }
+dialog::backdrop { background: var(--scrim); }
 
 .dialog__title {
     font-family: var(--display);

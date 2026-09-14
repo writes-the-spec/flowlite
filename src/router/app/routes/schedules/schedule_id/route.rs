@@ -25,6 +25,7 @@ pub struct ScheduleDisplay {
 #[template(path = "routes/schedules/schedule_id/route.html")]
 struct ScheduleIdRouteTemplate {
     current_route: &'static str,
+    theme: &'static str,
     schedule: ScheduleDisplay,
     schedule_jobs: Vec<ScheduleJob>,
     refresh_seconds: u32,
@@ -65,6 +66,7 @@ pub async fn schedule_id_route(
 
     let template = ScheduleIdRouteTemplate {
         current_route: "schedules",
+        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         schedule: ScheduleDisplay {
             schedule_id: schedule.schedule_id,
             name: schedule.name,
