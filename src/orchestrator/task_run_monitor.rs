@@ -62,7 +62,7 @@ impl TaskRunMonitor {
             Some(TaskRunOutcome::Aborted) => self.set_to_aborted(task_run).await,
             Some(TaskRunOutcome::Retry) => self.set_to_retry(task_run, &last_task_run_attempt).await,
             Some(TaskRunOutcome::Running) => Ok(()),
-            None => self.settle_unclaimed(task_run).await,
+            None => self.set_to_invalid(task_run).await,
         }
     }
 
@@ -115,19 +115,10 @@ impl TaskRunMonitor {
         None
     }
 
-    /// Unreachable while `derive_next_status` claims every attempt status. See
-    /// `JobRunDispatcher::settle_unclaimed` for why it settles rather than raises.
-    async fn settle_unclaimed(&self, task_run: &TaskRun) -> anyhow::Result<()> {
-
-        eprintln!(
-            "Task run {} was claimed by no outcome: nothing on the ladder knew the status \
-             of its last attempt. Settling it invalid. This is a bug.",
-            task_run.id,
-        );
-
-        self.update_task_run_status(task_run, TaskRunStatus::Invalid).await
-    }
-
+    /// Settles the task run invalid: either its last attempt reported Invalid, or
+    /// `derive_next_status` claimed it with no outcome at all — unreachable while it
+    /// covers every attempt status. See `JobRunDispatcher::settle_unclaimed` for why the
+    /// latter settles rather than raises.
     async fn set_to_invalid(&self, task_run: &TaskRun) -> anyhow::Result<()> {
         self.update_task_run_status(task_run, TaskRunStatus::Invalid).await
     }
@@ -454,7 +445,7 @@ mod tests {
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
 
-        db.task_run_monitor().settle_unclaimed(&task_run).await.unwrap();
+        db.task_run_monitor().set_to_invalid(&task_run).await.unwrap();
 
         assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Invalid);
     }
