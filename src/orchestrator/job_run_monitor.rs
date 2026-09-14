@@ -30,8 +30,8 @@ impl JobRunMonitor {
         }
     }
 
-    /// Dispatches the write for whatever `derive_next_status` decides. Deciding only reads.
-    /// Nothing here writes Skipped: a Running job run has started, so a stop aborts it.
+    /// Dispatches the write `derive_next_status` decides; nothing here writes Skipped,
+    /// since a Running job run has started.
     async fn handle_running_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         let task_runs = self.get_task_runs(job_run).await?;
@@ -46,11 +46,8 @@ impl JobRunMonitor {
         }
     }
 
-    /// Derives the job run's next status from its task runs' statuses alone. Order decides
-    /// precedence: an unknown outranks every named verdict, and a real failure outranks a
-    /// stop, so Aborted is asked last of the finished outcomes; `all_finished` is computed
-    /// once and reused rather than each outcome re-asking it. Errs, unreachable, if no rung
-    /// claims the combination.
+    /// Derives the next status from the task runs' statuses; order ranks an unknown above
+    /// every verdict and a real failure above a stop. Errs, unreachable, if none claim it.
     fn derive_next_status(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<JobRunStatus> {
 
         let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());
