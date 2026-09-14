@@ -16,6 +16,7 @@ pub struct InsertScheduleDataInput {
     pub start_date: Option<NaiveDate>,
     pub end_date: Option<NaiveDate>,
     pub disabled: bool,
+    pub submit_ahead: u32,
     pub next_run: Option<DateTime<Utc>>,
 }
 
@@ -72,6 +73,7 @@ pub struct Schedule {
     pub start_date: Option<NaiveDate>,
     pub end_date: Option<NaiveDate>,
     pub disabled: bool,
+    pub submit_ahead: u32,
     pub next_run: Option<DateTime<Utc>>,
 }
 
@@ -82,7 +84,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         sqlx::query(
-            "INSERT INTO mem.schedule (row_id, schedule_id, name, description, cron, timezone, start_date, end_date, disabled, next_run) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO mem.schedule (row_id, schedule_id, name, description, cron, timezone, start_date, end_date, disabled, submit_ahead, next_run) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(data.input.row_id as i64)
         .bind(&data.input.schedule_id)
@@ -93,6 +95,7 @@ impl CRUD {
         .bind(&data.input.start_date)
         .bind(&data.input.end_date)
         .bind(if data.input.disabled { 1 } else { 0 })
+        .bind(data.input.submit_ahead as i64)
         .bind(&data.input.next_run)
         .execute(executor)
         .await?;
@@ -104,7 +107,7 @@ impl CRUD {
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
-        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT schedule_id, name, description, cron, timezone, start_date, end_date, disabled, next_run FROM mem.schedule WHERE 1=1");
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT schedule_id, name, description, cron, timezone, start_date, end_date, disabled, submit_ahead, next_run FROM mem.schedule WHERE 1=1");
 
         if let Some(schedule_id) = &data.filter.schedule_id {
             query_builder.push(" AND schedule_id = ");

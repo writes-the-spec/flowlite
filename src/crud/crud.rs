@@ -114,6 +114,7 @@ impl CRUD {
                             start_date: schedule_yaml.start_date,
                             end_date: schedule_yaml.end_date,
                             disabled: schedule_yaml.disabled,
+                            submit_ahead: schedule_yaml.submit_ahead,
                             next_run,
                         }
                     })

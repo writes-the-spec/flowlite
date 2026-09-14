@@ -11,6 +11,7 @@ One row per schedule YAML file under `<data_dir>/schedules/*.yml`. The [Schedule
 | `timezone` | IANA name. A schedule that declares none takes `[schedule_defaults]` from the data dir's config.toml, which itself defaults to UTC. |
 | `start_date`, `end_date` | Nullable `DATE`. An open-ended schedule genuinely has no bound. |
 | `disabled` | `INTEGER NOT NULL` — a boolean has no third state. |
+| `submit_ahead` | `INTEGER NOT NULL`. How many occurrences to keep submitted ahead of their time; defaults to `1` in the YAML, refused at `0` because that state already has a clearer spelling: `disabled: true`. |
 | `next_run` | Nullable `TIMESTAMP`. Unset until computed; `NULL` past `end_date`. |
 
 ## Written by

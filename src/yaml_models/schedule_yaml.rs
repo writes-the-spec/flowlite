@@ -23,8 +23,21 @@ pub struct ScheduleYaml {
     pub end_date: Option<chrono::NaiveDate>,
     #[serde(default)]
     pub disabled: bool,
+    /// How many occurrences to keep submitted ahead of their time. One means the next run
+    /// is always written and visible before it is due; larger values show more of the
+    /// future at the cost of that many standing rows per schedule.
+    #[serde(default = "default_submit_ahead")]
+    #[validate(range(min = 1, message = "submit_ahead must be at least 1; use `disabled: true` for a schedule that should not run"))]
+    pub submit_ahead: u32,
     #[serde(default)]
     pub jobs: Vec<ScheduleYamlJob>
+}
+
+/// The default lives here rather than in `[schedule_defaults]` in config.toml: a timezone
+/// is a deployment-wide fact, but how much of the future to materialise is a property of
+/// the individual schedule.
+fn default_submit_ahead() -> u32 {
+    1
 }
 
 impl ScheduleYaml {
@@ -35,7 +48,11 @@ impl ScheduleYaml {
         let schedule: ScheduleYaml = serde_yaml::from_str(&content)
             .with_context(|| format!("Failed to parse Schedule YAML from {}", path.display()))?;
 
-        schedule.validate().with_context(|| format!("Invalid Schedule YAML at {}", path.display()))?;
+        // The field error (e.g. "submit_ahead must be at least 1") is folded into this
+        // message rather than left for `anyhow`'s cause chain, so a caller that only prints
+        // `to_string()` still sees which field and why - not just which file.
+        schedule.validate()
+            .map_err(|e| anyhow::anyhow!("Invalid Schedule YAML at {}: {e}", path.display()))?;
 
         Ok(schedule)
     }
@@ -139,5 +156,30 @@ mod tests {
         let error = parse("id: nightly\nname: Nightly\n").unwrap_err();
 
         assert!(format!("{error:#}").contains("Failed to parse Schedule YAML"), "{error:#}");
+    }
+
+    /// One occurrence ahead is the useful default: the next run of every schedule is visible
+    /// before it happens, and a schedule with a frequent cron does not fill the run table.
+    #[test]
+    fn a_schedule_that_does_not_say_keeps_one_run_ahead() {
+        let schedule = parse(&nightly("0 30 3 * * *", "")).unwrap();
+
+        assert_eq!(schedule.submit_ahead, 1);
+    }
+
+    #[test]
+    fn a_schedule_can_ask_for_more_than_one_run_ahead() {
+        let schedule = parse(&format!("{}submit_ahead: 7\n", nightly("0 30 3 * * *", ""))).unwrap();
+
+        assert_eq!(schedule.submit_ahead, 7);
+    }
+
+    /// Zero would describe a schedule that never runs, which `disabled: true` already says and
+    /// says more clearly. Refused at parse time so the file names its own mistake.
+    #[test]
+    fn a_schedule_cannot_ask_for_zero_runs_ahead() {
+        let error = parse(&format!("{}submit_ahead: 0\n", nightly("0 30 3 * * *", ""))).unwrap_err();
+
+        assert!(error.to_string().contains("submit_ahead"), "got: {error:?}");
     }
 }
