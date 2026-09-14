@@ -130,6 +130,7 @@ timezone: Europe/Paris
 start_date: 2026-01-01    # nothing fires before this date; omit for "from now on"
 end_date: 2026-12-31      # nothing fires after it; omit for "forever"
 disabled: false           # true keeps the file and stops the firing
+submit_ahead: 1           # how many occurrences to write in advance; at least 1
 jobs:
   - id: daily-etl
     # Overrides what the job declares, for every run this schedule submits.
@@ -138,8 +139,22 @@ jobs:
 ```
 
 One schedule may fire several jobs; each entry names a job id and may override that job's
-parameters. `timezone` left out falls back to `[schedule_defaults]`, and a disabled
-schedule is skipped rather than fired and discarded.
+parameters, and a job id may appear only once. `timezone` left out falls back to
+`[schedule_defaults]`, and a disabled schedule is skipped rather than fired and discarded.
+
+`submit_ahead` is how many upcoming occurrences are written as runs before they are due —
+one by default, so the next run of every schedule is visible in `job-run list` and on the
+dashboard ahead of time. A larger number shows more of the future, at the cost of that many
+standing rows per schedule. Runs written ahead sit in the `submitted` status and start
+running at their own instant; taking a schedule's YAML away, disabling it or editing its
+cron takes the outstanding ones back.
+
+A run **snapshots the job as it stands when the run is written**, not as it stands when it
+starts. With `submit_ahead: 1` and a 03:00 cron, tonight's run was written just after 03:00
+yesterday, so editing that job's YAML this morning does not change it — the edit reaches
+the occurrence submitted after it, which with `submit_ahead: 7` is a week out. To make an
+edit apply to the next occurrence, delete that schedule's outstanding run and let the next
+pass write it again from the current file.
 
 ## Command inputs
 
@@ -615,6 +630,21 @@ the one running `flowlite serve` — and is refused outright when nothing is ser
 data directory, because the row it would poll has no writer and the command would
 otherwise block for ever. Only the wait is refused: submitting into a directory whose
 server is down still queues the run for whenever it comes up.
+
+`--schedule-at` dates a run rather than submitting it for now. It takes an RFC3339 instant
+with an explicit offset — `2026-09-15T09:00:00Z` or `2026-09-15T09:00:00+02:00` — and a
+bare `2026-09-15 09:00` is refused rather than guessed at, since an instant with no offset
+means different things to different readers:
+
+```bash
+flowlite job submit nightly --schedule-at 2026-09-15T09:00:00+02:00
+```
+
+The run is written straight away and sits in the `submitted` status until its instant
+arrives, which is also what a schedule's own runs do. An instant in the past is due
+immediately, so it may be combined with `--wait`; one in the future may not, and is refused
+rather than accepted — both waits poll for a finished status, and a run that is not due yet
+could only burn the whole timeout and then report a perfectly healthy run.
 
 The run history is readable without opening the dashboard:
 
