@@ -24,6 +24,26 @@
     <link rel="icon" href="/assets/brand/icon-light-32.png" sizes="32x32" type="image/png" media="(prefers-color-scheme: light)">
     <link rel="icon" href="/assets/brand/icon-light-256.png" sizes="256x256" type="image/png" media="(prefers-color-scheme: light)">
     <link rel="apple-touch-icon" href="/assets/brand/icon-dark-512.png">
+    {# A `details` that remembers whether the reader left it open, keyed by its id. The
+       state is the reader's rather than the instance's, so it lives in their browser and
+       not in config.toml: two people watching the same dashboard disagree about which
+       panels they want, and neither should move the other's.
+
+       Defined here and called from one line beside each panel, so it runs before that
+       panel's first paint and a remembered-open one is never drawn closed and then
+       reopened under the content below it. `ontoggle` rather than an added listener
+       because htmx re-runs the call whenever it swaps a panel back in, and an assignment
+       replaces where a listener would stack up. With scripting off nothing runs and every
+       panel stays closed, which is the default the markup already renders. #}
+    <script>
+        function rememberPanel(id) {
+            const panel = document.getElementById(id);
+
+            panel.open = localStorage.getItem("panel-open:" + id) === "true";
+            panel.ontoggle = () => localStorage.setItem("panel-open:" + id, panel.open);
+        }
+    </script>
+
     <link rel="stylesheet" href="/assets/css/app.css">
     <script src="/assets/vendors/htmx/htmx.min.js"></script>
     <script defer src="/assets/vendors/alpine/alpine.min.js"></script>

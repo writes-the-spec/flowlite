@@ -16,6 +16,9 @@ pub struct TaskRunDisplay {
     pub job_run_id: i64,
     pub job_id: String,
     pub task_id: String,
+    /// The command as this run was submitted with, which is not necessarily the one the
+    /// task's YAML now declares.
+    pub command: String,
     pub status: TaskRunStatus,
     pub status_word: &'static str,
     pub started_at: Option<String>,
@@ -166,6 +169,7 @@ pub async fn task_run_id_route(
             job_run_id: task_run.job_run_id,
             job_id: task_run.job_id,
             task_id: task_run.task_id,
+            command: task_run.command,
             status: task_run.status,
             status_word: format::task_run_word(task_run.status),
             started_at: task_run.started_at.map(format::timestamp),

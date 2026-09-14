@@ -71,12 +71,16 @@
         </div>
     </div>
 
+    {# Closed until asked for, like the limits panel on the home page: this page is opened
+       to see how a run went, and the variables it was submitted with are what a reader
+       turns to only once the output has not explained it. The restore runs again after
+       each poll, which swaps this whole region out and back. #}
     {% if !task_run.env.is_empty() %}
-    <div class="section">
-        <div class="section__head">
-            <h2 class="section__title">Environment</h2>
+    <details id="task-run-env" class="section collapse">
+        <summary class="section__head">
+            <h2 class="section__title collapse__title"><span class="collapse__caret"></span>Environment</h2>
             <span class="section__note">the environment this task run was submitted with, over the environment flowlite inherited</span>
-        </div>
+        </summary>
 
         <div class="meta">
             {% for (name, value) in task_run.env %}
@@ -86,15 +90,16 @@
             </div>
             {% endfor %}
         </div>
-    </div>
+    </details>
+    <script>rememberPanel("task-run-env")</script>
     {% endif %}
 
     {% if !task_run.secret_env.is_empty() %}
-    <div class="section">
-        <div class="section__head">
-            <h2 class="section__title">Secret environment</h2>
+    <details id="task-run-secret-env" class="section collapse">
+        <summary class="section__head">
+            <h2 class="section__title collapse__title"><span class="collapse__caret"></span>Secret environment</h2>
             <span class="section__note">the secret this run will resolve into each variable when the command runs; the value is never stored, only the reference is</span>
-        </div>
+        </summary>
 
         <div class="meta">
             {% for (name, secret) in task_run.secret_env %}
@@ -104,8 +109,20 @@
             </div>
             {% endfor %}
         </div>
-    </div>
+    </details>
+    <script>rememberPanel("task-run-secret-env")</script>
     {% endif %}
+
+    {# The command as it was submitted, not as the task's YAML now reads: a run carries its
+       own copy, and an edit since is exactly what a reader is here to notice. #}
+    <div class="section">
+        <div class="section__head">
+            <h2 class="section__title">Command</h2>
+            <span class="section__note">run as <code>sh -c</code>, so shell syntax works</span>
+        </div>
+
+        <code class="cmd">{{ task_run.command }}</code>
+    </div>
 
     <div class="section">
         <div class="section__head">

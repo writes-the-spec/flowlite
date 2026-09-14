@@ -59,11 +59,13 @@
     </div>
 </div>
 
-<div class="section">
-    <div class="section__head">
-        <h2 class="section__title">Environment</h2>
+{# Closed until asked for, like the limits panel on the home page: a task is read for
+   what it runs and what it waits on, and the variables are a detail underneath that. #}
+<details id="task-env" class="section collapse">
+    <summary class="section__head">
+        <h2 class="section__title collapse__title"><span class="collapse__caret"></span>Environment</h2>
         <span class="section__note">declared on this task, over the job's <code>env:</code> and the environment flowlite inherited</span>
-    </div>
+    </summary>
 
     {% if task.env.is_empty() %}
     <div class="empty">
@@ -80,13 +82,14 @@
         {% endfor %}
     </div>
     {% endif %}
-</div>
+</details>
+<script>rememberPanel("task-env")</script>
 
-<div class="section">
-    <div class="section__head">
-        <h2 class="section__title">Secret environment</h2>
+<details id="task-secret-env" class="section collapse">
+    <summary class="section__head">
+        <h2 class="section__title collapse__title"><span class="collapse__caret"></span>Secret environment</h2>
         <span class="section__note">declared on this task, over the job's <code>secret_env:</code>; the secret's value is resolved only when the command runs, and is never stored</span>
-    </div>
+    </summary>
 
     {% if task.secret_env.is_empty() %}
     <div class="empty">
@@ -103,7 +106,8 @@
         {% endfor %}
     </div>
     {% endif %}
-</div>
+</details>
+<script>rememberPanel("task-secret-env")</script>
 
 <div class="section">
     <div class="section__head">

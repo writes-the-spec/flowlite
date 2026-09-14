@@ -91,22 +91,6 @@
     </div>
 </details>
 
-{# Whether the reader left it open, remembered per browser. Inline and directly after the
-   element rather than in a deferred script, for the reason the theme resolver sits in the
-   head: it runs before the first paint, so a remembered-open panel is never drawn closed
-   and then reopened under the run table.
-
-   The state is the reader's, not the instance's, so it lives in their browser rather than
-   in config.toml - two people watching the same dashboard disagree about this, and
-   neither should move the other's panel. With scripting off nothing runs and the panel
-   stays closed, which is the default this markup already renders. #}
-<script>
-    const limitsSection = document.getElementById("limits-section");
-
-    limitsSection.open = localStorage.getItem("limits-section-open") === "true";
-    limitsSection.addEventListener("toggle", () => {
-        localStorage.setItem("limits-section-open", limitsSection.open);
-    });
-</script>
+<script>rememberPanel("limits-section")</script>
 
 {% endblock %}
