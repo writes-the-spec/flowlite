@@ -5,7 +5,7 @@ description: The Service trait and the Poller that drives it (src/poller.rs) - t
 
 # Poller and Service (src/poller.rs)
 
-One loop, written once, driving nine services. A `Service` holds nothing but its own logic; the `Poller` owns the loop, the wake-ups and the error handling.
+One loop, written once, driving ten services. A `Service` holds nothing but its own logic; the `Poller` owns the loop, the wake-ups and the error handling.
 
 ```rust
 pub trait Service: Send + Sync + 'static {
@@ -43,12 +43,12 @@ The `Poller` takes the whole `AppConfig` and reads both through `app_config.orch
 
 | Service | Owned by |
 |---|---|
-| `JobRunDispatcher`, `JobRunMonitor`, `TaskRunDispatcher`, `TaskRunMonitor`, `TaskRunAttemptDispatcher`, `TaskRunAttemptMonitor` | [orchestrator skill](../orchestrator/SKILL.md) |
+| `JobRunReleaser`, `JobRunDispatcher`, `JobRunMonitor`, `TaskRunDispatcher`, `TaskRunMonitor`, `TaskRunAttemptDispatcher`, `TaskRunAttemptMonitor` | [orchestrator skill](../orchestrator/SKILL.md) |
 | `Scheduler` | [scheduler skill](../scheduler/SKILL.md) |
 | `NotificationService` | [notifications skill](../notifications/SKILL.md) |
 | `RetentionService` | [src/retention/service.rs](../../../src/retention/service.rs) — deletes finished job runs past `[job_defaults] keep_runs` and `[retention] keep_runs_total`, alongside the [entities skill](../entities/SKILL.md)'s six disk tables |
 
-A service is started where its owner is: the six by `Orchestrator::start`, the other three directly by [serve.rs](../../../src/cli/commands/serve.rs).
+A service is started where its owner is: the seven by `Orchestrator::start`, the other three directly by [serve.rs](../../../src/cli/commands/serve.rs).
 
 ## Rules
 
