@@ -63,7 +63,7 @@
    not starting, not something to watch, and the runs above are what the page is for. A
    native `details` rather than a scripted panel so it still opens with scripting off, and
    so the keyboard and the screen reader get the disclosure for free. #}
-<details class="section section--cap collapse">
+<details id="limits-section" class="section section--cap collapse">
     <summary class="section__head">
         <h2 class="section__title collapse__title"><span class="collapse__caret"></span>Concurrency limits</h2>
         <span class="section__note">From [concurrency_limits] and orchestrator.max_running_attempts in config.toml — updates every {{ refresh_seconds }} seconds</span>
@@ -90,5 +90,23 @@
         </div>
     </div>
 </details>
+
+{# Whether the reader left it open, remembered per browser. Inline and directly after the
+   element rather than in a deferred script, for the reason the theme resolver sits in the
+   head: it runs before the first paint, so a remembered-open panel is never drawn closed
+   and then reopened under the run table.
+
+   The state is the reader's, not the instance's, so it lives in their browser rather than
+   in config.toml - two people watching the same dashboard disagree about this, and
+   neither should move the other's panel. With scripting off nothing runs and the panel
+   stays closed, which is the default this markup already renders. #}
+<script>
+    const limitsSection = document.getElementById("limits-section");
+
+    limitsSection.open = localStorage.getItem("limits-section-open") === "true";
+    limitsSection.addEventListener("toggle", () => {
+        localStorage.setItem("limits-section-open", limitsSection.open);
+    });
+</script>
 
 {% endblock %}
