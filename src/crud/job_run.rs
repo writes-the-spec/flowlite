@@ -7,6 +7,9 @@ use crate::crud::CRUD;
 #[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum JobRunStatus {
+    /// Written, but not yet due. `JobRunReleaser` is the only thing that moves a run out
+    /// of this status, and it only ever moves it to Pending.
+    Submitted,
     Pending,
     Running,
     Succeeded,
@@ -24,7 +27,8 @@ impl JobRunStatus {
     /// It lives beside the enum so the surfaces that need to enumerate statuses - the
     /// filter chips and the CLI's `--status` parser - read one list rather than each
     /// keeping its own copy to forget to update.
-    pub const ALL: [JobRunStatus; 8] = [
+    pub const ALL: [JobRunStatus; 9] = [
+        JobRunStatus::Submitted,
         JobRunStatus::Pending,
         JobRunStatus::Running,
         JobRunStatus::Succeeded,
@@ -40,7 +44,8 @@ impl JobRunStatus {
     /// compiling.
     pub fn is_finished(&self) -> bool {
         match self {
-            JobRunStatus::Pending
+            JobRunStatus::Submitted
+            | JobRunStatus::Pending
             | JobRunStatus::Running => false,
             JobRunStatus::Succeeded
             | JobRunStatus::Failed
@@ -56,6 +61,7 @@ impl JobRunStatus {
 impl std::fmt::Display for JobRunStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            JobRunStatus::Submitted => write!(f, "submitted"),
             JobRunStatus::Pending => write!(f, "pending"),
             JobRunStatus::Running => write!(f, "running"),
             JobRunStatus::Succeeded => write!(f, "succeeded"),
@@ -423,6 +429,26 @@ mod tests {
     #[test]
     fn an_invalid_run_is_finished() {
         assert!(JobRunStatus::Invalid.is_finished());
+    }
+
+    /// Nothing has started, and something still will: a submitted run is the one status
+    /// that is waiting on the clock rather than on a slot or on a process.
+    #[test]
+    fn a_submitted_run_is_not_finished() {
+        assert!(!JobRunStatus::Submitted.is_finished());
+    }
+
+    /// The dashboard's filter chips, the CLI's `--status` parser and the MCP tool all read
+    /// `ALL` rather than each keeping a list, so a status missing from it is a status one
+    /// surface can name and another cannot.
+    #[test]
+    fn submitted_is_one_of_the_statuses_a_caller_can_name() {
+        assert!(JobRunStatus::ALL.contains(&JobRunStatus::Submitted));
+    }
+
+    #[test]
+    fn a_submitted_run_is_spelled_the_way_it_is_stored() {
+        assert_eq!(JobRunStatus::Submitted.to_string(), "submitted");
     }
 
     async fn select(db: &crate::test_support::TestDb, filter: SelectJobRunsDataFilter) -> Vec<JobRun> {

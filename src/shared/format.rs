@@ -35,6 +35,7 @@ pub fn duration(seconds: i64) -> String {
 
 pub fn job_run_word(status: JobRunStatus) -> &'static str {
     match status {
+        JobRunStatus::Submitted => "scheduled",
         JobRunStatus::Pending => "queued",
         JobRunStatus::Running => "running",
         JobRunStatus::Succeeded => "succeeded",

@@ -224,12 +224,13 @@ pub(crate) fn describe_unserved_data_dir(err: anyhow::Error) -> anyhow::Error {
 /// so the process exits 0, and a message otherwise, which main prints before exiting 1.
 ///
 /// Matched exhaustively so a new status has to say which side of that line it falls on.
-/// Only a finished run reaches this, so the two unfinished statuses cannot arrive here -
-/// they are grouped with the failures because a run that somehow did is not a success.
+/// Only a finished run reaches this, so the unfinished statuses cannot arrive here - they
+/// are grouped with the failures because a run that somehow did is not a success.
 fn run_outcome_error(job_run_id: i64, status: JobRunStatus) -> Option<String> {
     match status {
         JobRunStatus::Succeeded => None,
-        JobRunStatus::Pending
+        JobRunStatus::Submitted
+        | JobRunStatus::Pending
         | JobRunStatus::Running
         | JobRunStatus::Failed
         | JobRunStatus::Skipped

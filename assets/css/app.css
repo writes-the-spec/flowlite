@@ -219,6 +219,7 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
     background: var(--text-2);
 }
 .mark--pending { background: none; box-shadow: inset 0 0 0 1px var(--text-2); }
+.mark--submitted { background: none; box-shadow: inset 0 0 0 1px var(--text-2); opacity: .55; }
 .mark--running { background: var(--brand); animation: breathe 1.6s ease-in-out infinite; }
 .mark--succeeded { background: var(--ok); }
 .mark--failed, .mark--timedout { background: var(--fail); }
@@ -424,6 +425,7 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
 .bar--failed, .bar--timedout { background: var(--fail); }
 .bar--succeeded { background: var(--ok); }
 .bar--invalid { background: var(--invalid); }
+.bar--submitted { background: none; box-shadow: inset 0 0 0 1px var(--rule); }
 
 /* ---------- Table footer / pagination ---------- */
 
@@ -608,6 +610,7 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
 .lane__span--succeeded { background: var(--ok); }
 .lane__span--failed, .lane__span--timedout { background: var(--fail); }
 .lane__span--pending { background: none; box-shadow: inset 0 0 0 1px var(--rule); }
+.lane__span--submitted { background: none; box-shadow: inset 0 0 0 1px var(--rule); opacity: .55; }
 .lane__span--invalid { background: var(--invalid); }
 
 /* One full stripe period along x, so the loop has no seam: the 18px period divided by
