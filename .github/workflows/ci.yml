@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo build --all-targets --all-features
+
+      # The suite spawns real processes and waits on real timeouts, so it is slower
+      # than the unit count suggests. Nothing here needs a database URL: this crate
+      # uses sqlx's runtime query API, not the compile-time macros.
+      - run: cargo test --all-features
+
+      # Reported, not enforced. The tree is clippy-clean of errors but carries
+      # warnings; turn this into `-- -D warnings` once those are worked through.
+      - run: cargo clippy --all-targets --all-features
