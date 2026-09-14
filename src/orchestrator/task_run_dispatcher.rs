@@ -34,40 +34,47 @@ impl TaskRunDispatcher {
         }
     }
 
-    /// Settles a waiting task run as exactly one outcome, bailing past the last rather than
-    /// returning quietly: a row nobody handled looks like one legitimately waiting.
-    ///
-    /// Each outcome loads the dependencies itself, so one failing mid-pass can leave a set
-    /// that is neither all-succeeded nor still-running and reach that bail on an ordinary
-    /// state. The next pass settles it.
+    /// Dispatches the write for whatever `derive_next_status` decides. Deciding only reads.
     async fn handle_waiting_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
-        if self.settle_as_skipped(task_run).await? {
-            return Ok(());
+        match self.derive_next_status(task_run).await {
+            Ok(Some(TaskRunStatus::Skipped)) => self.set_to_skipped(task_run).await,
+            Ok(Some(TaskRunStatus::Waiting)) => Ok(()),
+            Ok(Some(TaskRunStatus::Running)) => self.set_to_running(task_run).await,
+            Ok(_) | Err(_) => self.set_to_invalid(task_run).await,
         }
-
-        if self.settle_as_waiting(task_run).await? {
-            return Ok(());
-        }
-
-        if self.settle_as_running(task_run).await? {
-            return Ok(());
-        }
-
-        anyhow::bail!(
-            "Task run {} settled as nothing: its job run was not stopped, no task run it \
-             depends on failed, none of them is still running, and they have not all \
-             succeeded",
-            task_run.id,
-        )
     }
 
-    /// Skips the task run if its job run was stopped or a dependency did not succeed,
-    /// either of which means it can never run.
+    /// Derives a waiting run's next status: skipped if stopped or a dependency did not
+    /// succeed, running once every dependency has, else still waiting on one unfinished.
     ///
-    /// `Invalid` counts as not succeeding: left out, its dependents are neither held nor
-    /// started, and one unreadable row becomes an unreadable subtree.
-    async fn settle_as_skipped(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
+    /// Each check reloads the dependencies fresh rather than sharing one snapshot, so a
+    /// dependency that moves between checks is read at its later status. A dependency set
+    /// none of the three matches reaches `None`, settled invalid like any other undecided
+    /// or unreadable case.
+    async fn derive_next_status(&self, task_run: &TaskRun) -> anyhow::Result<Option<TaskRunStatus>> {
+
+        if self.should_skip(task_run).await? {
+            return Ok(Some(TaskRunStatus::Skipped));
+        }
+
+        if self.is_still_waiting(task_run).await? {
+            return Ok(Some(TaskRunStatus::Waiting));
+        }
+
+        if self.all_dependencies_succeeded(task_run).await? {
+            return Ok(Some(TaskRunStatus::Running));
+        }
+
+        Ok(None)
+    }
+
+    /// True if the job run was stopped or a dependency did not succeed, either of which
+    /// means this run can never start.
+    ///
+    /// `Invalid` counts as not succeeding: left out, one unreadable row becomes an
+    /// unreadable subtree.
+    async fn should_skip(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
 
         let must_skip = self.is_job_run_stopped(task_run).await?
             || self.get_dependent_task_runs(task_run).await?
@@ -81,9 +88,60 @@ impl TaskRunDispatcher {
                         | TaskRunStatus::Invalid
                 ));
 
-        if !must_skip {
-            return Ok(false);
-        }
+        Ok(must_skip)
+    }
+
+    /// True while a dependency has yet to finish. `should_skip` already ruled out every one
+    /// that finished without succeeding.
+    async fn is_still_waiting(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
+
+        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
+
+        Ok(dependent_task_runs.iter().any(|tr| !tr.status.is_finished()))
+    }
+
+    /// True once every dependency has succeeded. Asked rather than starting whatever
+    /// `is_still_waiting` turned down, so one that failed since stops the run here.
+    async fn all_dependencies_succeeded(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
+
+        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
+
+        Ok(dependent_task_runs.iter().all(|tr| tr.status == TaskRunStatus::Succeeded))
+    }
+
+    /// Settles a run `derive_next_status` could not decide or read. See
+    /// `JobRunMonitor::settle_unclaimed` for why it settles rather than raises.
+    async fn set_to_invalid(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+
+        eprintln!(
+            "Task run {} was waiting but its next status could not be derived. Settling it \
+             invalid. This is a bug.",
+            task_run.id,
+        );
+
+        self.crud.update_task_runs(
+            &*self.conn_pool,
+            &UpdateTaskRunsData {
+                filter: UpdateTaskRunsDataFilter {
+                    id: Some(task_run.id),
+                    job_run_id: None,
+                    status: None,
+                },
+                input: UpdateTaskRunsDataInput {
+                    status: Some(TaskRunStatus::Invalid),
+                    started_at: None,
+                    finished_at: Some(Some(Utc::now())),
+                },
+            }
+        ).await?;
+
+        self.signals.publish();
+
+        Ok(())
+    }
+
+    /// Skips the task run, none of whose dependencies can still let it run.
+    async fn set_to_skipped(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         self.crud.update_task_runs(
             &*self.conn_pool,
@@ -103,38 +161,13 @@ impl TaskRunDispatcher {
 
         self.signals.publish();
 
-        Ok(true)
+        Ok(())
     }
 
-    /// Leaves the task run waiting, writing nothing, while a task run it depends on has yet
-    /// to finish. `settle_as_skipped` has already ruled out every dependency that finished
-    /// without succeeding, so an unfinished one here is still one this run is waiting for.
-    async fn settle_as_waiting(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
-
-        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
-
-        let any_unfinished = dependent_task_runs.iter().any(|tr| !tr.status.is_finished());
-
-        Ok(any_unfinished)
-    }
-
-    /// Sets the task run to running, which is what makes TaskRunMonitor pick it up, once
-    /// every task run it depends on has succeeded.
-    ///
-    /// Asking whether they all succeeded, rather than starting whatever `settle_as_waiting`
-    /// turned down, is what stops a dependency that failed since that guard ran.
-    ///
-    /// It writes one status and nothing else — attempts are TaskRunMonitor's — so no crash
-    /// can strand a half-started row here.
-    async fn settle_as_running(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
-
-        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
-
-        let all_succeeded = dependent_task_runs.iter().all(|tr| tr.status == TaskRunStatus::Succeeded);
-
-        if !all_succeeded {
-            return Ok(false);
-        }
+    /// Sets the task run running, which is what makes TaskRunMonitor pick it up. It writes
+    /// one status and nothing else — attempts are TaskRunMonitor's — so no crash can strand
+    /// a half-started row here.
+    async fn set_to_running(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         self.crud.update_task_runs(
             &*self.conn_pool,
@@ -154,7 +187,7 @@ impl TaskRunDispatcher {
 
         self.signals.publish();
 
-        Ok(true)
+        Ok(())
     }
 
     async fn get_waiting_task_runs(&self) -> anyhow::Result<Vec<TaskRun>> {
@@ -259,9 +292,24 @@ mod tests {
     use crate::crud::job_run::JobRunStatus;
     use crate::test_support::TestDb;
 
-    /// Without Invalid in the skip list a dependent is neither skipped, nor waiting (Invalid
-    /// is finished), nor started (nothing succeeded) — so it hits the bail on every pass and
-    /// one stranded row becomes a stranded subtree.
+    /// Unreachable through `handle` while the three checks cover every status a dependency
+    /// can hold, so called directly. See `JobRunMonitor::settle_unclaimed` for why it is
+    /// settled at all.
+    #[tokio::test]
+    async fn an_unclaimed_task_run_is_settled_invalid() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Waiting).await;
+
+        db.task_run_dispatcher().set_to_invalid(&task_run).await.unwrap();
+
+        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Invalid);
+    }
+
+    /// Without Invalid in the skip list a dependent is neither skipped, waiting, nor started
+    /// — settled invalid instead — and one stranded row becomes a stranded subtree.
     #[tokio::test]
     async fn a_dependent_of_an_invalid_task_run_is_skipped() {
 
@@ -347,7 +395,7 @@ mod tests {
     }
 
     /// A dependency its job run has yet to release is unfinished, so the dependent holds
-    /// rather than reaching the bail below every outcome.
+    /// rather than being settled invalid.
     #[tokio::test]
     async fn a_dependent_of_a_planned_task_run_keeps_waiting() {
 
