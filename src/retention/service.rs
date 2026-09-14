@@ -351,10 +351,10 @@ mod tests {
         assert!(!ids.contains(&f3.id));
     }
 
-    /// Test 3: a finished run with a Queued notification survives; once the row is Sent
+    /// Test 3: a finished run with a Pending notification survives; once the row is Sent
     /// it is selected on a later pass.
     #[tokio::test]
-    async fn a_queued_notification_survives_until_sent() {
+    async fn a_pending_notification_survives_until_sent() {
 
         let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
         db.insert_job("job", 1).await;
