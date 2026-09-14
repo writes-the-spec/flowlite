@@ -6,6 +6,17 @@ edition = "2024"
 # the one place a machine reads it.
 license = "0BSD"
 
+description = "A job scheduler and orchestrator that ships as a single binary. Point it at a directory of YAML and it runs your jobs."
+repository = "https://github.com/writes-the-spec/flowlite"
+readme = "README.md"
+
+# Five is the cap crates.io enforces, so these are the five words someone would actually
+# type into its search box - not the five that describe the crate most completely.
+keywords = ["scheduler", "cron", "orchestration", "workflow", "jobs"]
+# Slugs from crates.io's fixed list, not free text: a category it does not know is a
+# publish error, not a warning.
+categories = ["command-line-utilities", "development-tools", "asynchronous"]
+
 [dependencies]
 anyhow = "1.0.102"
 askama = "0.16.0"
