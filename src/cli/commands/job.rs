@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
@@ -8,6 +9,7 @@ use crate::crud::multistatements::ad_hoc_job::JobIdAlreadyInstalled;
 use crate::shared::format;
 use crate::shared::job::installed_job_id;
 use crate::shared::job_run::select_job_run;
+use crate::shared::schedule_at::refuse_waiting_for_a_future_run;
 use crate::shared::wait::{ensure_data_dir_is_served, wait_for_job_run, DataDirNotServed};
 use crate::yaml_models::job_yaml::JobYaml;
 
@@ -34,7 +36,7 @@ pub struct JobListCmd {
 
 /// Submit a run of a job: one installed in the data directory, by id, or a definition read
 /// from a file that is never installed there at all.
-#[derive(Args)]
+#[derive(Args, Debug)]
 #[command(group(
     clap::ArgGroup::new("definition").required(true).args(["job_name", "file"]),
 ))]
@@ -49,6 +51,12 @@ pub struct JobSubmitCmd {
     /// A parameter for this run, as name=value. Repeat for more than one.
     #[arg(long = "param", value_name = "NAME=VALUE", value_parser = parse_param)]
     pub params: Vec<(String, String)>,
+
+    /// When this run is due, as an RFC3339 instant such as 2026-09-15T09:00:00Z. Defaults
+    /// to now. A run dated in the future waits until then, and cannot be combined with
+    /// --wait.
+    #[arg(long = "schedule-at", value_name = "RFC3339", value_parser = crate::shared::schedule_at::parse_schedule_at)]
+    pub schedule_at: Option<DateTime<Utc>>,
 
     /// Wait for the run to finish, and exit non-zero unless it succeeded.
     #[arg(long)]
@@ -109,12 +117,15 @@ impl JobSubmitCmd {
     pub async fn run(&self, toolkit: Toolkit, json: bool) -> anyhow::Result<()> {
 
         let poll_interval = toolkit.app_config.orchestrator.poll_interval();
+        let scheduled_at = self.schedule_at.unwrap_or_else(Utc::now);
 
-        // Before the run is written, so a wait that cannot be serviced leaves no submitted
+        // Before the run is written, so a wait that cannot be serviced leaves no queued
         // run behind for a server that is not there to run it.
         if self.wait {
             ensure_data_dir_is_served(&toolkit.app_config.data_dir)
                 .map_err(describe_unserved_data_dir)?;
+
+            refuse_waiting_for_a_future_run(scheduled_at, Utc::now())?;
         }
 
         let mut conn = toolkit.get_conn().await?;
@@ -136,7 +147,7 @@ impl JobSubmitCmd {
             &mut conn,
             &job_id,
             &overrides,
-            chrono::Utc::now(),
+            scheduled_at,
             None,
         ).await?;
 
@@ -407,5 +418,29 @@ mod tests {
 
         assert_eq!(cmd.params, vec![("region".to_string(), "eu".to_string())]);
         assert!(cmd.wait);
+    }
+
+    #[test]
+    fn a_schedule_at_instant_parses_into_the_command() {
+
+        let cmd = submit_from(&["flowlite", "job", "submit", "etl", "--schedule-at", "2026-09-15T09:00:00Z"]).unwrap();
+
+        assert_eq!(cmd.schedule_at.unwrap().to_rfc3339(), "2026-09-15T09:00:00+00:00");
+    }
+
+    #[test]
+    fn submitting_without_schedule_at_leaves_it_unset_so_the_command_can_default_it() {
+
+        let cmd = submit_from(&["flowlite", "job", "submit", "etl"]).unwrap();
+
+        assert_eq!(cmd.schedule_at, None);
+    }
+
+    #[test]
+    fn a_schedule_at_that_is_not_an_instant_is_refused_by_the_parser() {
+
+        let error = submit_from(&["flowlite", "job", "submit", "etl", "--schedule-at", "tomorrow"]).unwrap_err();
+
+        assert!(error.to_string().contains("RFC3339"), "got: {error}");
     }
 }

@@ -11,12 +11,15 @@ use rmcp::schemars::{self, JsonSchema};
 use rmcp::{tool, tool_router};
 use serde::Deserialize;
 
+use chrono::Utc;
+
 use crate::crud::job_run::JobRun;
 use crate::crud::multistatements::ad_hoc_job::JobIdAlreadyInstalled;
 use crate::crud::CRUD;
 use crate::mcp::wait::{clamp_wait_seconds, wait_for_settled_job_run};
 use crate::mcp::McpServer;
 use crate::shared::job::installed_job_id;
+use crate::shared::schedule_at::{parse_schedule_at, refuse_waiting_for_a_future_run};
 use crate::shared::wait::ensure_data_dir_is_served;
 use crate::toolkit::Toolkit;
 use crate::yaml_models::job_yaml::JobYaml;
@@ -47,6 +50,10 @@ pub struct SubmitJob {
     /// Values for the job's declared parameters, by name. A name the job does not declare
     /// is refused.
     pub params: Option<BTreeMap<String, String>>,
+    /// When this run is due, as an RFC3339 instant such as 2026-09-15T09:00:00Z. Absent
+    /// means now. A run dated in the future is returned still submitted, and cannot be
+    /// combined with wait_seconds.
+    pub schedule_at: Option<String>,
     /// Wait up to this many seconds for the run to finish before returning it. Absent or 0
     /// returns the submitted run at once. A value above 300 waits 300. If the wait runs out
     /// the run comes back unfinished rather than as an error.
@@ -130,6 +137,18 @@ async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(J
     let overrides = args.params.unwrap_or_default();
     let wait_seconds = clamp_wait_seconds(args.wait_seconds);
 
+    let scheduled_at = match &args.schedule_at {
+        Some(raw) => parse_schedule_at(raw).map_err(|e| anyhow::anyhow!(e))?,
+        None => Utc::now(),
+    };
+
+    // Checked ahead of whether anything is serving the directory: a run dated in the future
+    // will time out a wait regardless of who would have run it, so this is the more specific
+    // - and cheaper - of the two facts to report first.
+    if wait_seconds > 0 {
+        refuse_waiting_for_a_future_run(scheduled_at, Utc::now())?;
+    }
+
     // Before the run is written, so a wait that cannot be serviced leaves no submitted run
     // behind for a server that is not there to run it - the same ordering `job submit
     // --wait` keeps.
@@ -164,7 +183,7 @@ async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(J
         }
     };
 
-    let job_run_id = crud.submit_job(&mut conn, &job_id, &overrides, chrono::Utc::now(), None).await?;
+    let job_run_id = crud.submit_job(&mut conn, &job_id, &overrides, scheduled_at, None).await?;
     let job_run = wait_for_settled_job_run(&crud, &mut conn, job_run_id, wait_seconds).await?;
 
     // A lookup failure here is not a failure to submit - the run is already written by
@@ -204,7 +223,9 @@ mod tests {
         });
 
         let yaml = "id: probe\nname: Probe\ntasks:\n  - id: say\n    command: \"true\"\n".to_string();
-        let args = || SubmitJob { job: None, file: None, yaml: Some(yaml.clone()), params: None, wait_seconds: None };
+        let args = || SubmitJob {
+            job: None, file: None, yaml: Some(yaml.clone()), params: None, schedule_at: None, wait_seconds: None,
+        };
 
         let (first, second) = tokio::join!(
             submit_job_run(&toolkit, args()),
@@ -227,6 +248,7 @@ mod tests {
             file: file.map(str::to_string),
             yaml: yaml.map(str::to_string),
             params: None,
+            schedule_at: None,
             wait_seconds: None,
         }
     }

@@ -472,6 +472,46 @@ fn submitting_an_inline_yaml_definition_succeeds() {
     assert_eq!(job_run["status"], json!("submitted"), "{job_run}");
 }
 
+/// The tool's half of --schedule-at: the run comes back written but not started, which is
+/// the whole difference between "queued" and "not due".
+#[test]
+fn submitting_with_a_future_schedule_at_returns_a_submitted_run() {
+    let dir = data_dir("submit-schedule-at");
+    install_job(&dir, "hello.yaml", HELLO);
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("submit_job", json!({
+        "job": "hello",
+        "schedule_at": "2099-01-01T00:00:00Z",
+    }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    assert_eq!(job_run["status"], json!("submitted"), "{job_run}");
+    assert_eq!(job_run["started_at"], Value::Null, "{job_run}");
+}
+
+/// Both waits poll for a finished status, so this combination could only spend its whole
+/// timeout and then report a run that was never unhealthy.
+#[test]
+fn submitting_refuses_to_wait_for_a_run_that_is_not_due() {
+    let dir = data_dir("submit-schedule-at-wait");
+    install_job(&dir, "hello.yaml", HELLO);
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("submit_job", json!({
+        "job": "hello",
+        "schedule_at": "2099-01-01T00:00:00Z",
+        "wait_seconds": 5,
+    }));
+
+    assert!(tool_text(&result).contains("not due"), "{result}");
+}
+
 /// The regression test for the whole fresh-mem mechanism this cut exists for: two calls
 /// seeding the same inline id must not collide, because each seeds a `mem` nothing else has
 /// the name of.

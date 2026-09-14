@@ -13,5 +13,6 @@ pub mod init;
 pub mod job;
 pub mod job_run;
 pub mod limits;
+pub mod schedule_at;
 pub mod serve_status;
 pub mod wait;
