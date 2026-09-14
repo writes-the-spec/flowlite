@@ -22,12 +22,12 @@ pub struct GetServeStatus {
 #[tool_router(router = get_serve_status_router, vis = "pub(super)")]
 impl McpServer {
 
-    // The description names `queued` because that is the symptom a caller arrives with:
+    // The description names `submitted` because that is the symptom a caller arrives with:
     // `submit_job` warns once, at the moment it writes, and this is how the agent checks
     // for itself any time after.
     /// Whether a flowlite server is running against this data directory, and on what
     /// address, port and pid. Nothing moves a run along without one, so a run stuck at
-    /// queued is what this answers for.
+    /// submitted is what this answers for.
     #[tool]
     async fn get_serve_status(&self, Parameters(_args): Parameters<GetServeStatus>) -> CallToolResult {
         match status(std::path::Path::new(&self.toolkit.app_config.data_dir)) {

@@ -175,7 +175,7 @@ pub(super) fn job_run_notification_definitions(
 
 impl CRUD {
 
-    /// Inserts a queued job run, one queued task run per task, and one open notification
+    /// Inserts a submitted job run, one queued task run per task, and one open notification
     /// per channel each of the job's notify blocks named. This is the only place a run's
     /// config is written.
     pub(super) async fn insert_job_run_definition(
@@ -194,7 +194,10 @@ impl CRUD {
                     parameters: definition.parameters.clone(),
                     scheduled_at: definition.scheduled_at,
                     schedule_id: definition.schedule_id.clone(),
-                    status: JobRunStatus::Queued,
+                    // Submitted, not Queued: JobRunReleaser is what decides the run's
+                    // time has come, and it is the only thing that writes Queued. A run
+                    // due now spends one poll pass here and no longer.
+                    status: JobRunStatus::Submitted,
                 }
             }
         ).await?;

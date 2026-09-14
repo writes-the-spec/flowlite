@@ -171,8 +171,39 @@ impl CRUD {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::map;
+    use crate::test_support::{map, TestDb};
 
+
+    /// Every run now starts life waiting for its due time, including one due immediately —
+    /// which is what makes a scheduled run and a --schedule-at run the same object, and gives
+    /// the pipeline exactly one door into queued.
+    #[tokio::test]
+    async fn a_submitted_run_starts_as_submitted_and_keeps_its_due_time() {
+
+        // `new_with_migrated_mem`, not `new`: `submit_job` reads the job's config out of
+        // `mem.job`, and `mem` is one shared-cache name for the whole test binary - seeding
+        // it under the plain `new` would race every other test's pooled connection over its
+        // schema lock.
+        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+        db.insert_job("hello", 0).await;
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+
+        let due = chrono::Utc::now() + chrono::TimeDelta::hours(3);
+
+        let job_run_id = db.crud.submit_job(
+            &mut conn,
+            "hello",
+            &map(&[]),
+            due,
+            None,
+        ).await.unwrap();
+
+        let job_run = db.job_run(job_run_id).await;
+
+        assert_eq!(job_run.status, crate::crud::job_run::JobRunStatus::Submitted);
+        assert_eq!(job_run.scheduled_at.timestamp(), due.timestamp());
+        assert_eq!(job_run.schedule_id, None);
+    }
 
     #[test]
     fn a_declared_default_is_carried_when_nothing_overrides_it() {

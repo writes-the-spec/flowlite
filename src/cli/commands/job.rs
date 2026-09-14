@@ -110,7 +110,7 @@ impl JobSubmitCmd {
 
         let poll_interval = toolkit.app_config.orchestrator.poll_interval();
 
-        // Before the run is written, so a wait that cannot be serviced leaves no queued
+        // Before the run is written, so a wait that cannot be serviced leaves no submitted
         // run behind for a server that is not there to run it.
         if self.wait {
             ensure_data_dir_is_served(&toolkit.app_config.data_dir)
@@ -148,7 +148,7 @@ impl JobSubmitCmd {
         };
 
         // Only a run that was waited for has an outcome worth an exit code: without --wait
-        // it is queued by construction, which is not a failure.
+        // it is freshly submitted by construction, which is not a failure.
         let outcome_error = match self.wait {
             true => run_outcome_error(job_run.id, job_run.status),
             false => None,

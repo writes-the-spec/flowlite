@@ -436,9 +436,9 @@ const HELLO: &str = "id: hello\nname: Hello\ntasks:\n  - id: say\n    command: \
 const SLEEPER: &str = "id: sleeper\nname: Sleeper\ntasks:\n  - id: say\n    command: \"sleep 30\"\n";
 
 /// The `job` argument: an installed job submits without touching the filesystem, and the
-/// result is the queued run `job submit --json` would have printed for it.
+/// result is the submitted run `job submit --json` would have printed for it.
 #[test]
-fn submitting_an_installed_job_returns_its_queued_run() {
+fn submitting_an_installed_job_returns_its_submitted_run() {
     let dir = data_dir("submit-installed");
     install_job(&dir, "hello.yaml", HELLO);
 
@@ -450,7 +450,7 @@ fn submitting_an_installed_job_returns_its_queued_run() {
 
     let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
     assert!(job_run["id"].as_i64().unwrap() > 0, "{job_run}");
-    assert_eq!(job_run["status"], json!("queued"), "{job_run}");
+    assert_eq!(job_run["status"], json!("submitted"), "{job_run}");
 }
 
 /// `yaml` is the natural agent action: nothing is written to disk, and the run's config
@@ -469,7 +469,7 @@ fn submitting_an_inline_yaml_definition_succeeds() {
 
     let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
     assert_eq!(job_run["job_id"], json!("probe"), "{job_run}");
-    assert_eq!(job_run["status"], json!("queued"), "{job_run}");
+    assert_eq!(job_run["status"], json!("submitted"), "{job_run}");
 }
 
 /// The regression test for the whole fresh-mem mechanism this cut exists for: two calls
@@ -594,12 +594,12 @@ fn a_param_the_job_does_not_declare_is_refused() {
     assert!(tool_text(&result).contains("region"), "{}", tool_text(&result));
 }
 
-/// Queuing work for a server that is not up yet is legitimate, but an agent that got back
-/// `queued` with no warning would poll a run that cannot start - so the JSON is followed
+/// Submitting work for a server that is not up yet is legitimate, but an agent that got back
+/// `submitted` with no warning would poll a run that cannot start - so the JSON is followed
 /// by a second content block naming the directory, and only while nothing is serving it.
 ///
 /// A warned result carries no `structuredContent` at all: a client that surfaces that field
-/// to the model instead of the text would otherwise hand it `{"status": "queued"}` with
+/// to the model instead of the text would otherwise hand it `{"status": "submitted"}` with
 /// nothing saying the status will never move, which is the exact failure the warning exists
 /// to prevent. Content[0] is still the run, as JSON, either way.
 #[test]
@@ -621,7 +621,7 @@ fn the_warning_block_appears_only_while_the_directory_is_unserved() {
     assert!(unserved["structuredContent"].is_null(), "{unserved}");
 
     let warned_run: Value = serde_json::from_str(tool_text(&unserved)).unwrap();
-    assert_eq!(warned_run["status"], json!("queued"), "{warned_run}");
+    assert_eq!(warned_run["status"], json!("submitted"), "{warned_run}");
 
     let mut server = ServerGuard::new(serve(&dir, 18232), libc::SIGTERM);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
@@ -689,7 +689,7 @@ fn a_wait_that_expires_returns_the_run_still_running() {
 
     let status = job_run["status"].as_str().unwrap();
     assert!(
-        status == "queued" || status == "running",
+        status == "submitted" || status == "queued" || status == "running",
         "expected an unfinished status, got {status}: {job_run}",
     );
 
@@ -750,7 +750,7 @@ fn stop_job_run_with_wait_seconds_settles_a_running_run() {
     let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
     let status = job_run["status"].as_str().unwrap();
     assert!(
-        status != "queued" && status != "running",
+        status != "submitted" && status != "queued" && status != "running",
         "expected a settled status, got {status}: {job_run}",
     );
 
@@ -891,9 +891,10 @@ fn stop_job_run_with_wait_seconds_on_an_unserved_directory_writes_no_stop() {
 }
 
 /// `stop_job_run` warns for the same reason `submit_job` does: without a wait the run comes
-/// back `queued` or `running`, and against a directory nothing is serving that status will
-/// never change, because only the serve process reads the stop row. `.status` is what this
-/// tool points a caller at, so silence here was a misleading answer, not a missing one.
+/// back `submitted`, `queued` or `running`, and against a directory nothing is serving that
+/// status will never change, because only the serve process reads the stop row. `.status` is
+/// what this tool points a caller at, so silence here was a misleading answer, not a missing
+/// one.
 #[test]
 fn stop_job_run_warns_when_nothing_is_serving_the_directory() {
     let dir = data_dir("stop-unserved-warning");
@@ -1011,7 +1012,7 @@ fn init_data_dir_refuses_an_argument_naming_another_directory() {
     assert_eq!(result["isError"], json!(true), "{result}");
 }
 
-/// The question an agent has to be able to ask after a submit comes back `queued`: is
+/// The question an agent has to be able to ask after a submit comes back `submitted`: is
 /// anything actually going to run this? `submit_job`'s warning says so once, at the moment
 /// of writing; this is how the agent checks for itself afterwards.
 #[test]

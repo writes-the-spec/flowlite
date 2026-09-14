@@ -45,12 +45,12 @@ pub(super) fn error_result(err: &anyhow::Error) -> CallToolResult {
 /// The result `submit_job` and `stop_job_run` both return: the same JSON `--json` prints,
 /// as the first content block so a client reading only that one still gets valid JSON, with
 /// a second block appended only when nothing is serving the directory the run is in - an
-/// agent that got back `queued` with no warning would poll a status that cannot change.
+/// agent that got back `submitted` with no warning would poll a status that cannot change.
 ///
 /// A warned result carries no `structured_content` at all. The alternative was to add the
 /// warning beside the run in the structured value, and that is worse: a client that reads
 /// `structured_content` and ignores the text would otherwise be handed `{"status":
-/// "queued"}` with nothing saying it will never move, which is the exact failure the
+/// "submitted"}` with nothing saying it will never move, which is the exact failure the
 /// warning exists to prevent, and giving that field one shape when warned and another when
 /// not is a trap of its own. Dropping it leaves such a client with the text blocks, which
 /// carry both facts - the shape every MCP client is required to read.
@@ -68,13 +68,13 @@ pub(super) fn job_run_result(job_run: JobRun, warning: Option<String>) -> CallTo
 /// `Some` naming the directory only when nothing at all is serving it - `Starting` counts
 /// as served, the same way `ensure_data_dir_is_served` treats it, since that server has the
 /// lock and will reach the row. Writing to a directory whose server is not up yet is
-/// legitimate; an agent that got back `queued` with no warning would poll a status that
+/// legitimate; an agent that got back `submitted` with no warning would poll a status that
 /// cannot change until something else does.
 ///
-/// One sentence for both writing tools: the serve process is what would start the run
-/// `submit_job` queued and what would act on the stop row `stop_job_run` wrote, so "the
-/// status will not change" is the one fact either caller needs, and neither has a remedy
-/// the other does not.
+/// One sentence for both writing tools: the serve process is what would release and then
+/// start the run `submit_job` wrote and what would act on the stop row `stop_job_run` wrote,
+/// so "the status will not change" is the one fact either caller needs, and neither has a
+/// remedy the other does not.
 ///
 /// Never propagates: both callers read it after their own row is already written, so a
 /// failed lookup here is a fact about the warning, not about the write. `status` can fail

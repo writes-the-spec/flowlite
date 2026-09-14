@@ -48,7 +48,7 @@ pub struct SubmitJob {
     /// is refused.
     pub params: Option<BTreeMap<String, String>>,
     /// Wait up to this many seconds for the run to finish before returning it. Absent or 0
-    /// returns the queued run at once. A value above 300 waits 300. If the wait runs out
+    /// returns the submitted run at once. A value above 300 waits 300. If the wait runs out
     /// the run comes back unfinished rather than as an error.
     pub wait_seconds: Option<u64>,
 }
@@ -62,7 +62,7 @@ impl McpServer {
     // there is sent to the model on every turn, and none of this helps it choose the tool
     // or fill an argument.
     /// Submit a run of a job: one installed in the data directory, a file that is never
-    /// installed there, or a definition given inline. Returns the job run, still queued
+    /// installed there, or a definition given inline. Returns the job run, still submitted
     /// unless `wait_seconds` was long enough for it to finish.
     #[tool]
     async fn submit_job(&self, Parameters(args): Parameters<SubmitJob>) -> CallToolResult {
@@ -130,7 +130,7 @@ async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(J
     let overrides = args.params.unwrap_or_default();
     let wait_seconds = clamp_wait_seconds(args.wait_seconds);
 
-    // Before the run is written, so a wait that cannot be serviced leaves no queued run
+    // Before the run is written, so a wait that cannot be serviced leaves no submitted run
     // behind for a server that is not there to run it - the same ordering `job submit
     // --wait` keeps.
     if wait_seconds > 0 {

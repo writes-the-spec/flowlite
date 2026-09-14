@@ -56,10 +56,10 @@ impl McpServer {
 /// gets the stop queued.
 ///
 /// Carries the same warning `submit_job_run` does, for the same reason: without a wait the
-/// run comes back `queued` or `running`, and against an unserved directory that status will
-/// never change, because only the serve process reads the stop row. `.status` is what this
-/// tool's own contract points a caller at, so the silence was a misleading answer rather
-/// than merely a missing one.
+/// run comes back `submitted`, `queued` or `running`, and against an unserved directory that
+/// status will never change, because only the serve process reads the stop row. `.status` is
+/// what this tool's own contract points a caller at, so the silence was a misleading answer
+/// rather than merely a missing one.
 async fn stop_job_run_and_wait(
     toolkit: &Toolkit,
     args: StopJobRun,
