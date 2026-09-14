@@ -53,8 +53,8 @@ pub struct JobSubmitCmd {
     pub params: Vec<(String, String)>,
 
     /// When this run is due, as an RFC3339 instant such as 2026-09-15T09:00:00Z. Defaults
-    /// to now. A run dated in the future waits until then, and cannot be combined with
-    /// --wait.
+    /// to now. A run dated in the past is due immediately and may be combined with --wait;
+    /// one dated in the future waits until then, and so cannot be.
     #[arg(long = "schedule-at", value_name = "RFC3339", value_parser = crate::shared::schedule_at::parse_schedule_at)]
     pub schedule_at: Option<DateTime<Utc>>,
 

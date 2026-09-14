@@ -107,9 +107,6 @@ pub struct SelectJobRunsDataFilter {
     /// ask different questions, and both apply when both are set. Pass a non-empty list:
     /// `IN ()` is not valid SQLite.
     pub statuses: Option<Vec<JobRunStatus>>,
-    /// Due at or before this instant. "Has this run's time come?", which is the only
-    /// question `JobRunReleaser` asks.
-    pub scheduled_at_lte: Option<DateTime<Utc>>,
     /// Produced by this schedule. A run nobody scheduled has `schedule_id` NULL and is
     /// matched by no value of this filter.
     pub schedule_id: Option<String>,
@@ -428,11 +425,6 @@ fn push_job_run_filter(query_builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, fil
         query_builder.push_bind(id);
     }
 
-    if let Some(scheduled_at_lte) = &filter.scheduled_at_lte {
-        query_builder.push(" AND scheduled_at <= ");
-        query_builder.push_bind(scheduled_at_lte);
-    }
-
     if let Some(schedule_id) = &filter.schedule_id {
         query_builder.push(" AND schedule_id = ");
         query_builder.push_bind(schedule_id);
@@ -495,7 +487,7 @@ mod tests {
     }
 
     fn empty_filter() -> SelectJobRunsDataFilter {
-        SelectJobRunsDataFilter { id: None, job_id: None, status: None, statuses: None, scheduled_at_lte: None, schedule_id: None }
+        SelectJobRunsDataFilter { id: None, job_id: None, status: None, statuses: None, schedule_id: None }
     }
 
     fn ids(runs: &[JobRun]) -> Vec<i64> {
@@ -756,34 +748,6 @@ mod tests {
 
     use crate::test_support::TestDb;
 
-    /// The releaser asks this question every pass: which submitted runs have arrived?
-    #[tokio::test]
-    async fn a_due_filter_matches_only_runs_at_or_before_the_instant_given() {
-
-        let db = TestDb::new().await;
-
-        let now = chrono::Utc::now();
-        let due = db.insert_job_run_at(JobRunStatus::Submitted, now - chrono::TimeDelta::minutes(1), None).await;
-        let _later = db.insert_job_run_at(JobRunStatus::Submitted, now + chrono::TimeDelta::hours(1), None).await;
-
-        let runs = db.crud.select_job_runs(&*db.conn_pool, &SelectJobRunsData {
-            filter: SelectJobRunsDataFilter {
-                id: None,
-                job_id: None,
-                status: Some(JobRunStatus::Submitted),
-                statuses: None,
-                scheduled_at_lte: Some(now),
-                schedule_id: None,
-            },
-            sort: None,
-            limit: None,
-            offset: None,
-        }).await.unwrap();
-
-        assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].id, due.id);
-    }
-
     /// The Scheduler asks this one: what have I already submitted for this schedule?
     #[tokio::test]
     async fn a_schedule_filter_matches_only_that_schedules_runs() {
@@ -801,7 +765,6 @@ mod tests {
                 job_id: None,
                 status: None,
                 statuses: None,
-                scheduled_at_lte: None,
                 schedule_id: Some("nightly".to_string()),
             },
             sort: None,
@@ -841,7 +804,6 @@ mod tests {
                 job_id: None,
                 status: None,
                 statuses: None,
-                scheduled_at_lte: None,
                 schedule_id: None,
             },
             sort: None,

@@ -45,7 +45,6 @@ impl CRUD {
                 job_id: Some(job_id.to_string()),
                 status: Some(JobRunStatus::Running),
                 statuses: None,
-                scheduled_at_lte: None,
                 schedule_id: None,
             },
             sort: None,

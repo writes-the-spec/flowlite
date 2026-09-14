@@ -198,7 +198,6 @@ fn finished_job_runs_filter(job_id: Option<String>) -> SelectJobRunsDataFilter {
         job_id,
         status: None,
         statuses: Some(finished),
-        scheduled_at_lte: None,
         schedule_id: None,
     }
 }

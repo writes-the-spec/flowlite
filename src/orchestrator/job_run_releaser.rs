@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use chrono::{DateTime, Utc};
 
 use crate::crud::CRUD;
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort, UpdateJobRunsData, UpdateJobRunsDataFilter, UpdateJobRunsDataInput};
@@ -84,7 +83,6 @@ impl JobRunReleaser {
                     job_id: None,
                     status: Some(JobRunStatus::Submitted),
                     statuses: None,
-                    scheduled_at_lte: None,
                     schedule_id: None,
                 },
                 sort: Some(SelectJobRunsDataSort::Id),
@@ -139,6 +137,7 @@ impl Service for JobRunReleaser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
     use crate::test_support::TestDb;
 
     async fn released_status(scheduled_at: DateTime<Utc>) -> JobRunStatus {

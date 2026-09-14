@@ -32,9 +32,13 @@ impl ServeCmd {
 
         // Taken before the pool is opened, so a second serve on this directory stops here
         // rather than racing this one through sqlx::migrate! - and, more importantly, so
-        // two Schedulers cannot both advance one schedule's next_run and fire every cron
-        // twice. Bound to a name so it lives as long as the server: `let _` would release
-        // it here.
+        // two Schedulers cannot both reconcile the same schedule. The reconcile decides what
+        // to submit by comparing the schedule's desired occurrences against the runs it can
+        // see outstanding, and that comparison is only sound if nothing else is writing
+        // those runs: two of them reading before either has written would each find the same
+        // occurrence missing and each submit it, so every occurrence of every schedule would
+        // run twice. Bound to a name so it lives as long as the server: `let _` would
+        // release it here.
         let _serve_lock = ServeLock::acquire(&data_dir)?;
 
         let toolkit = Arc::new(toolkit);

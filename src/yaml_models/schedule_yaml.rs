@@ -9,6 +9,7 @@ use std::path::Path;
 use anyhow::Context;
 
 #[derive(Deserialize, Validate, Debug)]
+#[validate(schema(function = "no_duplicate_job_ids"))]
 pub struct ScheduleYaml {
     pub id: String,
     pub name: String,
@@ -31,6 +32,33 @@ pub struct ScheduleYaml {
     pub submit_ahead: u32,
     #[serde(default)]
     pub jobs: Vec<ScheduleYamlJob>
+}
+
+/// A job id may appear once. The reconcile keys a run on the job and the occurrence, so a
+/// second entry for the same id produces no second run - it would silently do nothing,
+/// including the parameters somebody wrote on it.
+///
+/// Written against the whole schedule rather than the `jobs` field alone, because a
+/// field-level custom validator reports the value it rejected and would make this model
+/// serializable purely to say so.
+fn no_duplicate_job_ids(schedule: &ScheduleYaml) -> Result<(), validator::ValidationError> {
+
+    let mut seen = std::collections::BTreeSet::new();
+
+    for job in &schedule.jobs {
+        if !seen.insert(job.id.as_str()) {
+            return Err(
+                validator::ValidationError::new("duplicate_job_id")
+                    .with_message(format!(
+                        "jobs lists '{}' more than once; a job may appear once per schedule, \
+                         and the second entry would submit no extra run",
+                        job.id,
+                    ).into())
+            );
+        }
+    }
+
+    Ok(())
 }
 
 /// The default lives here rather than in `[schedule_defaults]` in config.toml: a timezone
@@ -168,6 +196,35 @@ mod tests {
         let schedule = parse(&format!("{}submit_ahead: 7\n", nightly("0 30 3 * * *", ""))).unwrap();
 
         assert_eq!(schedule.submit_ahead, 7);
+    }
+
+    /// Listing a job twice reads as "run it twice", and it does not: the reconcile writes one
+    /// run per job and occurrence, so the second entry is silently worth nothing - including
+    /// whatever parameters were written on it. Refused at parse time rather than left to be
+    /// discovered by a run that never appears.
+    #[test]
+    fn a_schedule_naming_the_same_job_twice_is_refused() {
+
+        let error = parse(&format!(
+            "{}jobs:\n  - id: daily-etl\n  - id: daily-etl\n",
+            nightly("0 30 3 * * *", ""),
+        )).unwrap_err();
+
+        let message = format!("{error:#}");
+        assert!(message.contains("Invalid Schedule YAML"), "{message}");
+        assert!(message.contains("more than once"), "{message}");
+    }
+
+    /// The same two entries under different ids are the ordinary case a schedule exists for.
+    #[test]
+    fn a_schedule_may_name_several_different_jobs() {
+
+        let schedule = parse(&format!(
+            "{}jobs:\n  - id: daily-etl\n  - id: daily-report\n",
+            nightly("0 30 3 * * *", ""),
+        )).unwrap();
+
+        assert_eq!(schedule.jobs.len(), 2);
     }
 
     /// Zero would describe a schedule that never runs, which `disabled: true` already says and

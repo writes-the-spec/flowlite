@@ -35,7 +35,6 @@ pub enum SelectSchedulesDataSort {
 pub struct SelectSchedulesDataFilter {
     pub schedule_id: Option<String>,
     pub name_like: Option<String>,
-    pub next_run_lt: Option<DateTime<Utc>>,
     pub disabled: Option<bool>,
 }
 
@@ -117,11 +116,6 @@ impl CRUD {
         if let Some(name) = &data.filter.name_like {
             query_builder.push(" AND name LIKE ");
             query_builder.push_bind(format!("%{}%", name));
-        }
-
-        if let Some(next_run_lt) = &data.filter.next_run_lt {
-            query_builder.push(" AND next_run < ");
-            query_builder.push_bind(next_run_lt);
         }
 
         if let Some(disabled) = data.filter.disabled {

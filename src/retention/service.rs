@@ -400,7 +400,7 @@ mod tests {
         let deleted_job_run = db.crud.select_job_run(
             &*db.conn_pool,
             &crate::crud::job_run::SelectJobRunsData {
-                filter: crate::crud::job_run::SelectJobRunsDataFilter { id: Some(deleted.id), job_id: None, status: None, statuses: None, scheduled_at_lte: None, schedule_id: None },
+                filter: crate::crud::job_run::SelectJobRunsDataFilter { id: Some(deleted.id), job_id: None, status: None, statuses: None, schedule_id: None },
                 sort: None,
                 limit: Some(1),
                 offset: None,
@@ -452,7 +452,7 @@ mod tests {
         let kept_job_run = db.crud.select_job_run(
             &*db.conn_pool,
             &crate::crud::job_run::SelectJobRunsData {
-                filter: crate::crud::job_run::SelectJobRunsDataFilter { id: Some(kept.id), job_id: None, status: None, statuses: None, scheduled_at_lte: None, schedule_id: None },
+                filter: crate::crud::job_run::SelectJobRunsDataFilter { id: Some(kept.id), job_id: None, status: None, statuses: None, schedule_id: None },
                 sort: None,
                 limit: Some(1),
                 offset: None,
