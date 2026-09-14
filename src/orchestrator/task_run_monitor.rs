@@ -38,12 +38,12 @@ impl TaskRunMonitor {
 
         let last_task_run_attempt = self.get_or_start_task_run_attempt(task_run).await?;
 
-        match self.derive_next_status(task_run, &last_task_run_attempt) {
+        match self.derive_next_status(task_run, &last_task_run_attempt).await {
             Ok(TaskRunStatus::Succeeded) => self.set_to_succeeded(task_run).await,
             Ok(TaskRunStatus::Failed) => self.set_to_failed(task_run).await,
             Ok(TaskRunStatus::TimedOut) => self.set_to_timed_out(task_run).await,
             Ok(TaskRunStatus::Aborted) => self.set_to_aborted(task_run).await,
-            Ok(TaskRunStatus::Running) => self.set_to_running(task_run, &last_task_run_attempt).await,
+            Ok(TaskRunStatus::Running) => Ok(()),
             Ok(_) | Err(_) => self.set_to_invalid(task_run).await,
         }
     }
@@ -52,11 +52,12 @@ impl TaskRunMonitor {
     /// are exclusive — the last attempt has one status — so the order carries nothing and
     /// follows the other two monitors only so all three read alike.
     ///
-    /// `Running` covers both an attempt still in flight and a failed one with retries
-    /// left — `set_to_running` is what tells those apart, since starting the next attempt
-    /// is not a task run status. An attempt none of these claims errs, unreachable while
-    /// this covers every attempt status.
-    fn derive_next_status(
+    /// A failed attempt with retries left inserts its next attempt here rather than
+    /// reporting a status the caller would have to insert it for: starting the next
+    /// attempt is not a task run status, so `Running` alone would lose the distinction
+    /// from an attempt already in flight. An attempt none of these claims errs, unreachable
+    /// while this covers every attempt status.
+    async fn derive_next_status(
         &self,
         task_run: &TaskRun,
         last_task_run_attempt: &TaskRunAttempt,
@@ -79,11 +80,11 @@ impl TaskRunMonitor {
 
         if last_task_run_attempt.status == TaskRunAttemptStatus::Failed {
             // Attempts count from 1, so the task run gets max_retries + 1 of them.
-            return Ok(if last_task_run_attempt.attempt < task_run.max_retries + 1 {
-                TaskRunStatus::Running
-            } else {
-                TaskRunStatus::Failed
-            });
+            if last_task_run_attempt.attempt < task_run.max_retries + 1 {
+                self.insert_next_attempt(task_run, last_task_run_attempt).await?;
+                return Ok(TaskRunStatus::Running);
+            }
+            return Ok(TaskRunStatus::Failed);
         }
 
         if last_task_run_attempt.status == TaskRunAttemptStatus::TimedOut {
@@ -102,6 +103,34 @@ impl TaskRunMonitor {
             task_run.id,
             last_task_run_attempt.status,
         ))
+    }
+
+    /// Starts the next attempt for a failed task run that still has retries left. Writes no
+    /// task run status — it stays Running for the whole retry loop — and the row goes in
+    /// immediately for `TaskRunAttemptDispatcher` to hold until `retry_delay` passes.
+    async fn insert_next_attempt(
+        &self,
+        task_run: &TaskRun,
+        last_task_run_attempt: &TaskRunAttempt,
+    ) -> anyhow::Result<()> {
+
+        self.crud.insert_task_run_attempt(
+            &*self.conn_pool,
+            &InsertTaskRunAttemptData {
+                input: InsertTaskRunAttemptDataInput {
+                    task_run_id: task_run.id,
+                    job_run_id: task_run.job_run_id,
+                    job_id: task_run.job_id.clone(),
+                    task_id: task_run.task_id.clone(),
+                    attempt: last_task_run_attempt.attempt + 1,
+                    status: TaskRunAttemptStatus::Queued,
+                },
+            },
+        ).await?;
+
+        self.signals.publish();
+
+        Ok(())
     }
 
     /// Settles the task run invalid: either its last attempt reported Invalid, or
@@ -127,39 +156,6 @@ impl TaskRunMonitor {
 
     async fn set_to_aborted(&self, task_run: &TaskRun) -> anyhow::Result<()> {
         self.update_task_run_status(task_run, TaskRunStatus::Aborted).await
-    }
-
-    /// Keeps the task run running: waits while the attempt is still in flight, or inserts
-    /// the next one when it failed with retries left — the only two ways
-    /// `derive_next_status` reaches `Running`. Writes no status itself, and the retry row
-    /// goes in immediately for `TaskRunAttemptDispatcher` to hold until `retry_delay` passes.
-    async fn set_to_running(
-        &self,
-        task_run: &TaskRun,
-        last_task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<()> {
-
-        if last_task_run_attempt.status != TaskRunAttemptStatus::Failed {
-            return Ok(());
-        }
-
-        self.crud.insert_task_run_attempt(
-            &*self.conn_pool,
-            &InsertTaskRunAttemptData {
-                input: InsertTaskRunAttemptDataInput {
-                    task_run_id: task_run.id,
-                    job_run_id: task_run.job_run_id,
-                    job_id: task_run.job_id.clone(),
-                    task_id: task_run.task_id.clone(),
-                    attempt: last_task_run_attempt.attempt + 1,
-                    status: TaskRunAttemptStatus::Queued,
-                },
-            },
-        ).await?;
-
-        self.signals.publish();
-
-        Ok(())
     }
 
     async fn get_running_task_runs(&self) -> anyhow::Result<Vec<TaskRun>> {
