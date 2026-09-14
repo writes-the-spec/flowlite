@@ -2,6 +2,7 @@ mod orchestrator;
 
 pub use crate::orchestrator::orchestrator::Orchestrator;
 pub mod job_run_dispatcher;
+pub mod job_run_releaser;
 pub mod recovery;
 pub mod job_run_monitor;
 pub mod task_run_dispatcher;
