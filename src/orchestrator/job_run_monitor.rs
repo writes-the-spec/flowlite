@@ -207,6 +207,8 @@ impl JobRunMonitor {
                     job_id: None,
                     status: Some(JobRunStatus::Running),
                     statuses: None,
+                    scheduled_at_lte: None,
+                    schedule_id: None,
                 },
                 sort: None,
                 limit: None,

@@ -107,6 +107,12 @@ pub struct SelectJobRunsDataFilter {
     /// ask different questions, and both apply when both are set. Pass a non-empty list:
     /// `IN ()` is not valid SQLite.
     pub statuses: Option<Vec<JobRunStatus>>,
+    /// Due at or before this instant. "Has this run's time come?", which is the only
+    /// question `JobRunReleaser` asks.
+    pub scheduled_at_lte: Option<DateTime<Utc>>,
+    /// Produced by this schedule. A run nobody scheduled has `schedule_id` NULL and is
+    /// matched by no value of this filter.
+    pub schedule_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -137,6 +143,11 @@ pub struct DeleteJobRunsDataFilter {
     pub id: Option<i64>,
     pub job_id: Option<String>,
     pub status: Option<JobRunStatus>,
+    pub schedule_id: Option<String>,
+    /// Due strictly after this instant. Together with `status`, this is what stops the
+    /// Scheduler's reconcile from deleting a run that has already arrived — that row
+    /// belongs to `JobRunReleaser`, and the two would otherwise contend for it every pass.
+    pub scheduled_at_gt: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -323,6 +334,16 @@ impl CRUD {
             query_builder.push_bind(id);
         }
 
+        if let Some(schedule_id) = &data.filter.schedule_id {
+            query_builder.push(" AND schedule_id = ");
+            query_builder.push_bind(schedule_id);
+        }
+
+        if let Some(scheduled_at_gt) = &data.filter.scheduled_at_gt {
+            query_builder.push(" AND scheduled_at > ");
+            query_builder.push_bind(scheduled_at_gt);
+        }
+
         query_builder.build().execute(executor).await?;
 
         Ok(())
@@ -406,6 +427,16 @@ fn push_job_run_filter(query_builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, fil
         query_builder.push(" AND id = ");
         query_builder.push_bind(id);
     }
+
+    if let Some(scheduled_at_lte) = &filter.scheduled_at_lte {
+        query_builder.push(" AND scheduled_at <= ");
+        query_builder.push_bind(scheduled_at_lte);
+    }
+
+    if let Some(schedule_id) = &filter.schedule_id {
+        query_builder.push(" AND schedule_id = ");
+        query_builder.push_bind(schedule_id);
+    }
 }
 
 /// Pushes `AND status IN (?, ?, ...)`, one bind per status. It stays its own function
@@ -464,7 +495,7 @@ mod tests {
     }
 
     fn empty_filter() -> SelectJobRunsDataFilter {
-        SelectJobRunsDataFilter { id: None, job_id: None, status: None, statuses: None }
+        SelectJobRunsDataFilter { id: None, job_id: None, status: None, statuses: None, scheduled_at_lte: None, schedule_id: None }
     }
 
     fn ids(runs: &[JobRun]) -> Vec<i64> {
@@ -678,7 +709,7 @@ mod tests {
         let succeeded = db.insert_job_run(JobRunStatus::Succeeded).await;
 
         db.crud.delete_job_runs(&*db.conn_pool, &DeleteJobRunsData {
-            filter: DeleteJobRunsDataFilter { id: None, job_id: None, status: Some(JobRunStatus::Failed) },
+            filter: DeleteJobRunsDataFilter { id: None, job_id: None, status: Some(JobRunStatus::Failed), schedule_id: None, scheduled_at_gt: None },
         }).await.unwrap();
 
         assert!(select(&db, SelectJobRunsDataFilter { id: Some(failed.id), ..empty_filter() }).await.is_empty());
@@ -696,7 +727,7 @@ mod tests {
         db.insert_job_run(JobRunStatus::Succeeded).await;
 
         db.crud.delete_job_runs(&*db.conn_pool, &DeleteJobRunsData {
-            filter: DeleteJobRunsDataFilter { id: None, job_id: None, status: None },
+            filter: DeleteJobRunsDataFilter { id: None, job_id: None, status: None, schedule_id: None, scheduled_at_gt: None },
         }).await.unwrap();
 
         assert!(select(&db, empty_filter()).await.is_empty());
@@ -721,5 +752,103 @@ mod tests {
         let read_back = db.job_run(written.id).await;
 
         assert_eq!(read_back.schedule_id.as_deref(), Some("nightly"));
+    }
+
+    use crate::test_support::TestDb;
+
+    /// The releaser asks this question every pass: which submitted runs have arrived?
+    #[tokio::test]
+    async fn a_due_filter_matches_only_runs_at_or_before_the_instant_given() {
+
+        let db = TestDb::new().await;
+
+        let now = chrono::Utc::now();
+        let due = db.insert_job_run_at(JobRunStatus::Submitted, now - chrono::TimeDelta::minutes(1), None).await;
+        let _later = db.insert_job_run_at(JobRunStatus::Submitted, now + chrono::TimeDelta::hours(1), None).await;
+
+        let runs = db.crud.select_job_runs(&*db.conn_pool, &SelectJobRunsData {
+            filter: SelectJobRunsDataFilter {
+                id: None,
+                job_id: None,
+                status: Some(JobRunStatus::Submitted),
+                statuses: None,
+                scheduled_at_lte: Some(now),
+                schedule_id: None,
+            },
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap();
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, due.id);
+    }
+
+    /// The Scheduler asks this one: what have I already submitted for this schedule?
+    #[tokio::test]
+    async fn a_schedule_filter_matches_only_that_schedules_runs() {
+
+        let db = TestDb::new().await;
+
+        let now = chrono::Utc::now();
+        let nightly = db.insert_job_run_at(JobRunStatus::Submitted, now, Some("nightly")).await;
+        let _hourly = db.insert_job_run_at(JobRunStatus::Submitted, now, Some("hourly")).await;
+        let _manual = db.insert_job_run_at(JobRunStatus::Submitted, now, None).await;
+
+        let runs = db.crud.select_job_runs(&*db.conn_pool, &SelectJobRunsData {
+            filter: SelectJobRunsDataFilter {
+                id: None,
+                job_id: None,
+                status: None,
+                statuses: None,
+                scheduled_at_lte: None,
+                schedule_id: Some("nightly".to_string()),
+            },
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap();
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, nightly.id);
+    }
+
+    /// The guard that keeps the Scheduler's reconcile from ever deleting something that ran.
+    /// It is asserted in SQL rather than in the caller because the caller's view of the row
+    /// can be one poll pass out of date: JobRunReleaser may have promoted it in between.
+    #[tokio::test]
+    async fn a_guarded_delete_cannot_reach_a_run_that_is_no_longer_submitted() {
+
+        let db = TestDb::new().await;
+
+        let now = chrono::Utc::now();
+        let released = db.insert_job_run_at(JobRunStatus::Pending, now + chrono::TimeDelta::hours(1), Some("nightly")).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        db.crud.delete_job_runs_with_children(&mut conn, &DeleteJobRunsData {
+            filter: DeleteJobRunsDataFilter {
+                id: Some(released.id),
+                job_id: None,
+                status: Some(JobRunStatus::Submitted),
+                schedule_id: Some("nightly".to_string()),
+                scheduled_at_gt: Some(now),
+            },
+        }).await.unwrap();
+
+        let still_there = db.crud.select_job_run(&*db.conn_pool, &SelectJobRunsData {
+            filter: SelectJobRunsDataFilter {
+                id: Some(released.id),
+                job_id: None,
+                status: None,
+                statuses: None,
+                scheduled_at_lte: None,
+                schedule_id: None,
+            },
+            sort: None,
+            limit: Some(1),
+            offset: None,
+        }).await.unwrap();
+
+        assert!(still_there.is_some(), "a run that is no longer submitted must survive the reconcile's delete");
     }
 }

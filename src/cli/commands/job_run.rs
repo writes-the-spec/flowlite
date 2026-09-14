@@ -103,6 +103,8 @@ impl JobRunListCmd {
                 job_id: self.job.clone(),
                 status: self.status,
                 statuses: None,
+                scheduled_at_lte: None,
+                schedule_id: None,
             },
             sort: Some(SelectJobRunsDataSort::IdDesc),
             limit: Some(self.limit),

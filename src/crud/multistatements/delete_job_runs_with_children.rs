@@ -40,18 +40,27 @@ impl CRUD {
     /// module doc for why that is not guarded against here.
     pub async fn delete_job_runs_with_children(&self, conn: &mut SqliteConnection, data: &DeleteJobRunsData) -> anyhow::Result<()> {
 
+        // `scheduled_at_gt` has no counterpart on `SelectJobRunsDataFilter` - see the module
+        // doc for why the two filter types must otherwise stay in lockstep - so it is applied
+        // below, in Rust, over the rows this select resolves.
         let ids = self.select_job_runs(&mut *conn, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
                 id: data.filter.id,
                 job_id: data.filter.job_id.clone(),
                 status: data.filter.status,
                 statuses: None,
+                scheduled_at_lte: None,
+                schedule_id: data.filter.schedule_id.clone(),
             },
             sort: None,
             limit: None,
             offset: None,
         }).await?
             .into_iter()
+            .filter(|job_run| match data.filter.scheduled_at_gt {
+                Some(after) => job_run.scheduled_at > after,
+                None => true,
+            })
             .map(|job_run| job_run.id)
             .collect::<Vec<_>>();
 
@@ -112,6 +121,8 @@ impl CRUD {
                     id: Some(id),
                     job_id: None,
                     status: None,
+                    schedule_id: None,
+                    scheduled_at_gt: None,
                 },
             }).await?;
         }
@@ -194,6 +205,8 @@ mod tests {
                 id: Some(job_run_id),
                 job_id: None,
                 status: None,
+                schedule_id: None,
+                scheduled_at_gt: None,
             },
         }
     }
@@ -293,6 +306,8 @@ mod tests {
                 job_id: None,
                 status: None,
                 statuses: None,
+                scheduled_at_lte: None,
+                schedule_id: None,
             },
             sort: None,
             limit: Some(1),
@@ -381,6 +396,8 @@ mod tests {
                 id: None,
                 job_id: None,
                 status: None,
+                schedule_id: None,
+                scheduled_at_gt: None,
             },
         }).await.unwrap();
 
