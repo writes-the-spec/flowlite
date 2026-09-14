@@ -32,6 +32,15 @@ impl CRUD {
     /// tables that carries its `job_run_id`, child-first, in one transaction - so no other
     /// reader ever sees a run whose tasks are half gone.
     ///
+    /// The filter is resolved to ids *inside* that transaction, so the guard a caller
+    /// expresses in the filter and the delete it authorises are one atomic step. The
+    /// Scheduler's reconcile is the caller that needs it: it deletes only runs that are
+    /// still `Submitted` and still in the future, and `JobRunReleaser` may promote such a
+    /// row at any moment. Resolving the ids on the plain connection first would leave a
+    /// window in which the releaser promotes a run between the check and the delete, and
+    /// the reconcile would then cancel a run at the exact instant it came due, along with
+    /// its task runs.
+    ///
     /// Child-first is enforced by the database, not just convention: sqlx's
     /// `SqliteConnectOptions` turns `PRAGMA foreign_keys` on by default, so deleting a
     /// `job_run` before its children fails loudly with `FOREIGN KEY constraint failed`
@@ -40,10 +49,12 @@ impl CRUD {
     /// module doc for why that is not guarded against here.
     pub async fn delete_job_runs_with_children(&self, conn: &mut SqliteConnection, data: &DeleteJobRunsData) -> anyhow::Result<()> {
 
+        let mut tx = conn.begin().await?;
+
         // `scheduled_at_gt` has no counterpart on `SelectJobRunsDataFilter` - see the module
         // doc for why the two filter types must otherwise stay in lockstep - so it is applied
         // below, in Rust, over the rows this select resolves.
-        let ids = self.select_job_runs(&mut *conn, &SelectJobRunsData {
+        let ids = self.select_job_runs(&mut *tx, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
                 id: data.filter.id,
                 job_id: data.filter.job_id.clone(),
@@ -63,8 +74,6 @@ impl CRUD {
             })
             .map(|job_run| job_run.id)
             .collect::<Vec<_>>();
-
-        let mut tx = conn.begin().await?;
 
         for id in ids {
 

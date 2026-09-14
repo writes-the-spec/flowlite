@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGua
 use axum::Json;
 use axum::extract::State;
 use axum::routing::post;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use crate::app_config::{AppConfig, AppConfigOrchestrator, AppConfigSlack};
 use crate::crud::CRUD;
 use crate::crud::job::{InsertJobData, InsertJobDataInput, Job, SelectJobsData, SelectJobsDataFilter};
@@ -26,8 +26,12 @@ use crate::orchestrator::task_run_attempt_monitor::TaskRunAttemptMonitor;
 use crate::orchestrator::task_run_dispatcher::TaskRunDispatcher;
 use crate::orchestrator::task_run_monitor::TaskRunMonitor;
 use crate::poller::Service;
+use crate::scheduler::Scheduler;
 use crate::signals::Signals;
 use crate::toolkit::Toolkit;
+use crate::cron_trigger::CronTrigger;
+use crate::crud::schedule::{InsertScheduleData, InsertScheduleDataInput, Schedule, SelectSchedulesData, SelectSchedulesDataFilter};
+use crate::crud::schedule_job::{InsertScheduleJobData, InsertScheduleJobDataInput};
 
 
 /// The process environment, which no test owns alone.
@@ -194,9 +198,132 @@ impl TestDb {
         ).await.unwrap().unwrap()
     }
 
+    /// A schedule in `mem`, with one job attached, as `CRUD::init` would have seeded it
+    /// from a YAML file. Needs a `TestDb` built with `new_with_migrated_mem`, since `mem`
+    /// is left unmigrated under the plain `new` — see this struct's own doc comment.
+    pub async fn seed_schedule(&self, schedule_id: &str, cron: &str, submit_ahead: u32) -> Schedule {
+        self.seed_schedule_with(schedule_id, cron, submit_ahead, false, None).await
+    }
+
+    pub async fn seed_disabled_schedule(&self, schedule_id: &str, cron: &str, submit_ahead: u32) -> Schedule {
+        self.seed_schedule_with(schedule_id, cron, submit_ahead, true, None).await
+    }
+
+    /// The same schedule, retired on the given day — for the case where `get_next_run`
+    /// runs out of occurrences and there is nothing left to keep submitted.
+    pub async fn seed_schedule_ending(&self, schedule_id: &str, cron: &str, submit_ahead: u32, end_date: NaiveDate) -> Schedule {
+        self.seed_schedule_with(schedule_id, cron, submit_ahead, false, Some(end_date)).await
+    }
+
+    /// Re-seeding the same id replaces the row rather than colliding on its primary key,
+    /// because that is what a restart does: `CRUD::init` rebuilds `mem` from the YAML, and
+    /// the reconcile's restart case is exactly "the same schedule, seeded again, with
+    /// next_run recomputed from now".
+    ///
+    /// The delete is raw SQL rather than a CRUD method because nothing in the program
+    /// deletes a schedule — `mem` is dropped wholesale at shutdown instead.
+    async fn seed_schedule_with(
+        &self,
+        schedule_id: &str,
+        cron: &str,
+        submit_ahead: u32,
+        disabled: bool,
+        end_date: Option<NaiveDate>,
+    ) -> Schedule {
+
+        // `insert_job` is unconditional and `mem.job` is keyed on `job_id`, so a second
+        // seeding of the same schedule would fail on the primary key rather than on the
+        // behaviour under test — and re-seeding is the whole point of this helper.
+        let existing = self.crud.select_job(
+            &*self.conn_pool,
+            &SelectJobsData {
+                filter: SelectJobsDataFilter { job_id: Some("job".to_string()), name_like: None },
+                sort: None,
+                limit: Some(1),
+                offset: None,
+            },
+        ).await.unwrap();
+
+        if existing.is_none() {
+            self.insert_job("job", 0).await;
+        }
+
+        sqlx::query("DELETE FROM mem.schedule_job WHERE schedule_id = ?")
+            .bind(schedule_id)
+            .execute(&*self.conn_pool)
+            .await
+            .unwrap();
+
+        sqlx::query("DELETE FROM mem.schedule WHERE schedule_id = ?")
+            .bind(schedule_id)
+            .execute(&*self.conn_pool)
+            .await
+            .unwrap();
+
+        let cron_schedule = <cron::Schedule as std::str::FromStr>::from_str(cron).unwrap();
+
+        // Built the same way CRUD::init builds it: the trigger that computes next_run and
+        // the row it is stored on have to read the cron in the same zone.
+        let cron_trigger = CronTrigger::new(cron_schedule.clone(), chrono_tz::Tz::UTC, None, end_date);
+
+        // row_id is unique per row across the seeded mem schema. Same static-counter shape
+        // insert_job uses, offset well past its range so the two cannot collide, and taking
+        // two ids per call - one for the schedule, one for its schedule_job.
+        static NEXT_SCHEDULE_ROW_ID: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(9_000);
+
+        let row_id = NEXT_SCHEDULE_ROW_ID.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+
+        self.crud.insert_schedule(&*self.conn_pool, &InsertScheduleData {
+            input: InsertScheduleDataInput {
+                row_id,
+                schedule_id: schedule_id.to_string(),
+                name: schedule_id.to_string(),
+                description: String::new(),
+                cron: cron_schedule,
+                timezone: chrono_tz::Tz::UTC,
+                start_date: None,
+                end_date,
+                disabled,
+                submit_ahead,
+                next_run: cron_trigger.get_next_run(None),
+            },
+        }).await.unwrap();
+
+        self.crud.insert_schedule_job(&*self.conn_pool, &InsertScheduleJobData {
+            input: InsertScheduleJobDataInput {
+                row_id: row_id + 1,
+                schedule_id: schedule_id.to_string(),
+                job_id: "job".to_string(),
+                parameters: BTreeMap::new(),
+            },
+        }).await.unwrap();
+
+        self.crud.select_schedule(&*self.conn_pool, &SelectSchedulesData {
+            filter: SelectSchedulesDataFilter {
+                schedule_id: Some(schedule_id.to_string()),
+                name_like: None,
+                next_run_lt: None,
+                disabled: None,
+            },
+            sort: None,
+            limit: Some(1),
+            offset: None,
+        }).await.unwrap().unwrap()
+    }
+
     /// The temp directory this test owns, for a command that needs somewhere to write.
     pub fn data_dir(&self) -> &std::path::Path {
         &self.data_dir
+    }
+
+    pub fn scheduler(&self) -> Scheduler {
+        Scheduler::new(
+            self.crud.toolkit.clone(),
+            self.crud.clone(),
+            self.conn_pool.clone(),
+            self.signals.clone(),
+        )
     }
 
     pub fn job_run_dispatcher(&self) -> JobRunDispatcher {
