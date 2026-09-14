@@ -7,13 +7,12 @@ use crate::poller::Service;
 use crate::signals::Signals;
 
 
-/// Moves a job run from Submitted to Queued once its time has come, and skips it instead
-/// if somebody stopped it first. Submitted to Queued is the only place in the program that
-/// writes that transition — which is what makes "a run is not due yet" a fact you can read
-/// off the table rather than infer from a service's control flow.
+/// Moves a job run from Submitted to Queued once its time has come, skipping it instead if
+/// it was stopped first. The only place that writes that transition, so "not due yet" is a
+/// fact readable off the table rather than inferred from control flow.
 ///
-/// It is the one service that genuinely depends on the poll interval. Nothing publishes a
-/// signal when a future instant arrives, so the timer is what notices.
+/// The one service that depends on the poll interval: nothing signals when a future instant
+/// arrives, so the timer is what notices.
 pub struct JobRunReleaser {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
@@ -35,43 +34,40 @@ impl JobRunReleaser {
         }
     }
 
-    /// Settles a submitted run as exactly one outcome: skipped because somebody stopped it,
-    /// queued because its instant has arrived, or left submitted because neither is true.
-    ///
-    /// Naming the outcome that writes nothing is what separates a run legitimately waiting
-    /// for its time from one no rung claimed — the same reason every other chain names it.
-    /// Unlike five of them this one ends there rather than in a `settle_unclaimed` that
-    /// settles the row Invalid: a run that is simply not due yet is this service's common
-    /// case, not the symptom of a missing rung.
+    /// Settles a submitted run as whatever `derive_next_status` decides. Decision and write
+    /// are split on purpose: deriving only reads, and each `set_to_*` just trusts the result
+    /// rather than re-deriving any part of it.
     async fn handle_submitted_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
-        if self.settle_as_skipped(job_run).await? {
-            return Ok(());
+        match self.derive_next_status(job_run).await {
+            Ok(JobRunStatus::Skipped) => self.set_to_skipped(job_run).await,
+            Ok(JobRunStatus::Queued) => self.set_to_queued(job_run).await,
+            Ok(JobRunStatus::Submitted) => self.set_to_submitted(),
+            Ok(_) | Err(_) => self.set_to_invalid(job_run).await,
         }
-
-        if self.settle_as_queued(job_run).await? {
-            return Ok(());
-        }
-
-        self.settle_as_submitted()
     }
 
-    /// Skips the run, and with it every task run it owns, because somebody stopped it
-    /// before it was ever released — a stop must not have to wait for a run's time to take
-    /// effect, and a run that will now never run must not pass through Queued, which says
-    /// its moment has come, on its way to being skipped.
-    ///
-    /// Asked before `settle_as_queued` so that a run stopped in the same pass it came due
-    /// is skipped rather than handed to JobRunDispatcher to start.
-    ///
-    /// JobRunDispatcher writes the same pair for a Queued run, through this same call. The
-    /// two cannot meet: they select on disjoint statuses, and this one is the only path
-    /// out of Submitted that does not go through Queued.
-    async fn settle_as_skipped(&self, job_run: &JobRun) -> anyhow::Result<bool> {
+    /// Derives a submitted run's next status without writing anything: skipped if stopped,
+    /// queued if due, else left submitted.
+    async fn derive_next_status(&self, job_run: &JobRun) -> anyhow::Result<JobRunStatus> {
 
-        if !self.is_job_run_stopped(job_run).await? {
-            return Ok(false);
-        }
+        let is_stopped = self.is_job_run_stopped(job_run).await?;
+        let is_due = job_run.scheduled_at <= self.crud.toolkit.get_current_ts();
+
+        Ok(match (is_stopped, is_due) {
+            (true, _) => JobRunStatus::Skipped,
+            (false, true) => JobRunStatus::Queued,
+            (false, false) => JobRunStatus::Submitted,
+        })
+    }
+
+    /// Skips the run, and with it every task run it owns — a stop must not wait for the
+    /// run's time to take effect, and a run that will never run must not pass through
+    /// Queued on its way to Skipped.
+    ///
+    /// JobRunDispatcher writes the same pair for a Queued run, through this same call. They
+    /// select on disjoint statuses, so the two can't collide.
+    async fn set_to_skipped(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         let mut conn = self.conn_pool.acquire().await?;
 
@@ -79,17 +75,12 @@ impl JobRunReleaser {
 
         self.signals.publish();
 
-        Ok(true)
+        Ok(())
     }
 
-    /// Sets the run queued once its instant has arrived, which is what makes
-    /// JobRunDispatcher pick it up. `started_at` is deliberately untouched: nothing has
-    /// started, and the dispatcher sets it when something does.
-    async fn settle_as_queued(&self, job_run: &JobRun) -> anyhow::Result<bool> {
-
-        if job_run.scheduled_at > self.crud.toolkit.get_current_ts() {
-            return Ok(false);
-        }
+    /// Queues the run, which is what makes JobRunDispatcher pick it up. `started_at` stays
+    /// untouched — nothing has started, and the dispatcher sets it when something does.
+    async fn set_to_queued(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         self.crud.update_job_runs(
             &*self.conn_pool,
@@ -105,17 +96,37 @@ impl JobRunReleaser {
 
         self.signals.publish();
 
-        Ok(true)
-    }
-
-    /// Leaves the run submitted, writing nothing: nobody has stopped it and its instant
-    /// has not come. The only one of the three outcomes that is not a write.
-    fn settle_as_submitted(&self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    /// Every submitted run, not only the due ones: `handle` needs to see a stopped run
-    /// whose time has not come, and that is not a question the due filter can ask.
+    /// Leaves the run submitted, writing nothing.
+    fn set_to_submitted(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Settles a run `derive_next_status` failed to decide, invalidating its task runs too.
+    /// Unreachable — `is_stopped`/`is_due` cover every case above. See
+    /// `JobRunMonitor::settle_unclaimed` for why it settles rather than raises.
+    async fn set_to_invalid(&self, job_run: &JobRun) -> anyhow::Result<()> {
+
+        eprintln!(
+            "Job run {} was submitted but its next status could not be derived, or was \
+             derived as something the submitted-run dispatch does not handle. Settling it \
+             invalid. This is a bug.",
+            job_run.id,
+        );
+
+        let mut conn = self.conn_pool.acquire().await?;
+
+        self.crud.invalidate_job_run(&mut conn, job_run.id).await?;
+
+        self.signals.publish();
+
+        Ok(())
+    }
+
+    /// Every submitted run, not only the due ones — a stopped run whose time has not come
+    /// still needs settling.
     async fn get_submitted_job_runs(&self) -> anyhow::Result<Vec<JobRun>> {
 
         self.crud.select_job_runs(
@@ -209,9 +220,7 @@ mod tests {
         assert_eq!(status, JobRunStatus::Submitted);
     }
 
-    /// Stopping a run that has not come due yet is a thing a person can do, and it must
-    /// not have to wait until the run's time to take effect. Nothing is queued on the way:
-    /// Queued says a run is due, and this one never was.
+    /// A stop must not have to wait until the run's time to take effect.
     #[tokio::test]
     async fn a_stopped_run_that_is_not_due_yet_is_skipped() {
 
@@ -233,8 +242,8 @@ mod tests {
         assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Skipped);
     }
 
-    /// The skip outcome is asked before the due one, so a run stopped in the moment it
-    /// came due is skipped rather than released for JobRunDispatcher to start.
+    /// `is_stopped` outranks `is_due`, so a run stopped the moment it comes due is skipped
+    /// rather than released.
     #[tokio::test]
     async fn a_stopped_run_that_is_due_is_skipped_rather_than_released() {
 
@@ -253,8 +262,8 @@ mod tests {
         assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Skipped);
     }
 
-    /// The select is the other half of the contract: a run already released must not come
-    /// back round, or the releaser would fight the dispatcher for it.
+    /// A run already released must not come back round, or the releaser would fight the
+    /// dispatcher for it.
     #[tokio::test]
     async fn only_submitted_runs_are_selected() {
 
@@ -268,5 +277,21 @@ mod tests {
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].id, submitted.id);
+    }
+
+    /// Unreachable through `handle`, so called directly. See `JobRunMonitor`'s equivalent
+    /// for why it is settled at all.
+    #[tokio::test]
+    async fn an_unclaimed_submitted_job_run_is_settled_invalid() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run_at(JobRunStatus::Submitted, Utc::now(), None).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
+
+        db.job_run_releaser().set_to_invalid(&job_run).await.unwrap();
+
+        assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Invalid);
+        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Invalid);
     }
 }

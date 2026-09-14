@@ -86,7 +86,7 @@ impl JobRunDispatcher {
 
     /// Skips the job run, and with it all of its task runs, none of which ever started.
     ///
-    /// `JobRunReleaser::settle_as_skipped` is the same outcome one status earlier, for a
+    /// `JobRunReleaser::set_to_skipped` is the same outcome one status earlier, for a
     /// run stopped before it was ever released, and both go through `skip_job_run` so that
     /// neither can write half the pair. They select on disjoint statuses, so a run is only
     /// ever skipped by one of them.
