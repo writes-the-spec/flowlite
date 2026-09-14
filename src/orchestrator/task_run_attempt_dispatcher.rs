@@ -47,35 +47,45 @@ impl TaskRunAttemptDispatcher {
         }
     }
 
-    /// Settles a queued attempt as exactly one outcome. `settle_as_queued` has to precede
-    /// `settle_as_running`, which spawns unconditionally and would start a retry the moment
-    /// it was inserted.
+    /// Dispatches the write for whatever `derive_next_status` decides. Deciding only reads.
     async fn handle_queued_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
-        if self.settle_as_invalid(task_run_attempt).await? {
-            return Ok(());
+        match self.derive_next_status(task_run_attempt).await {
+            Ok(TaskRunAttemptStatus::Invalid) => self.set_to_invalid_already_spawned(task_run_attempt).await,
+            Ok(TaskRunAttemptStatus::Skipped) => self.set_to_skipped(task_run_attempt).await,
+            Ok(TaskRunAttemptStatus::Queued) => Ok(()),
+            Ok(TaskRunAttemptStatus::Running) => self.set_to_running(task_run_attempt).await,
+            Ok(_) | Err(_) => self.set_to_invalid(task_run_attempt).await,
         }
-
-        if self.settle_as_skipped(task_run_attempt).await? {
-            return Ok(());
-        }
-
-        if self.settle_as_queued(task_run_attempt).await? {
-            return Ok(());
-        }
-
-        if self.settle_as_running(task_run_attempt).await? {
-            return Ok(());
-        }
-
-        self.settle_unclaimed(task_run_attempt).await
     }
 
-    /// Settles a row no outcome claimed. Unreachable while `settle_as_running` claims
-    /// unconditionally; see `JobRunDispatcher::settle_unclaimed` for why it settles rather
-    /// than raises. Nothing has been spawned by the time the chain falls this far, so there
-    /// is no process to account for.
-    async fn settle_unclaimed(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
+    /// Derives a queued attempt's next status: invalid if already spawned for, skipped if
+    /// stopped, queued behind a retry delay/cap/claimed limit, else running.
+    ///
+    /// Already-spawned is checked first so a stop can't mask a command that may already be
+    /// running; stopped precedes the queued checks so a still-active retry delay can't hold
+    /// a stop open.
+    async fn derive_next_status(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<TaskRunAttemptStatus> {
+
+        if task_run_attempt.started_at.is_some() {
+            return Ok(TaskRunAttemptStatus::Invalid);
+        }
+
+        if self.is_job_run_stopped(task_run_attempt).await? {
+            return Ok(TaskRunAttemptStatus::Skipped);
+        }
+
+        if self.should_stay_queued(task_run_attempt).await? {
+            return Ok(TaskRunAttemptStatus::Queued);
+        }
+
+        Ok(TaskRunAttemptStatus::Running)
+    }
+
+    /// Settles a row `derive_next_status` couldn't decide. Unreachable while its checks
+    /// cover every case; see `JobRunDispatcher::set_to_invalid` for why it settles rather
+    /// than raises.
+    async fn set_to_invalid(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         eprintln!(
             "Task run attempt {} was claimed by no outcome: its job run was not stopped and \
@@ -107,13 +117,7 @@ impl TaskRunAttemptDispatcher {
     /// Settles a queued attempt a spawn was already begun for, which only a crash between
     /// the spawn and the Running write leaves behind. Its command may be running, so
     /// starting it again would run the command twice — worse than an unknown outcome.
-    ///
-    /// Asked first: a stop would otherwise skip it, claiming nothing ran.
-    async fn settle_as_invalid(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
-
-        if task_run_attempt.started_at.is_none() {
-            return Ok(false);
-        }
+    async fn set_to_invalid_already_spawned(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         eprintln!(
             "Task run attempt {} was already spawned for but never recorded as running, so \
@@ -140,17 +144,11 @@ impl TaskRunAttemptDispatcher {
 
         self.signals.publish();
 
-        Ok(true)
+        Ok(())
     }
 
-    /// Skips the attempt if its job run was stopped, so its command never started.
-    async fn settle_as_skipped(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
-
-        let job_run_stopped = self.is_job_run_stopped(task_run_attempt).await?;
-
-        if !job_run_stopped {
-            return Ok(false);
-        }
+    /// Skips the attempt whose job run was stopped, so its command never started.
+    async fn set_to_skipped(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         self.crud.update_task_run_attempts(
             &*self.conn_pool,
@@ -170,20 +168,20 @@ impl TaskRunAttemptDispatcher {
 
         self.signals.publish();
 
-        Ok(true)
+        Ok(())
     }
 
-    /// Leaves the attempt queued for any of three reasons: its retry_delay has yet to
-    /// pass since it was created — which is when TaskRunMonitor decided to retry — the
-    /// global cap on running attempts is already full, or a named limit its task run
-    /// claims is already full.
+    /// True while the attempt should stay queued, for any of three reasons: its
+    /// retry_delay has yet to pass since it was created — which is when TaskRunMonitor
+    /// decided to retry — the global cap on running attempts is already full, or a named
+    /// limit its task run claims is already full.
     ///
     /// The delay is checked first: only a retry waits on it (attempt 1 has nothing to wait
     /// for, so it never reaches the task run query below), and it costs no query at all
     /// for the common case of a first attempt. The cap, once reached, applies to every
     /// attempt regardless of retry state. The named-limit check runs last, in
     /// `a_claimed_limit_is_full`.
-    async fn settle_as_queued(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
+    async fn should_stay_queued(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
 
         if task_run_attempt.attempt > 1 {
             let task_run = self.get_task_run(task_run_attempt).await?;
@@ -208,7 +206,7 @@ impl TaskRunAttemptDispatcher {
         self.a_claimed_limit_is_full(task_run_attempt).await
     }
 
-    /// The third and last reason `settle_as_queued` leaves a row queued: one of the
+    /// The third and last reason `should_stay_queued` leaves a row queued: one of the
     /// named limits its task run claims (`task_run.limits`, the job+task union `submit_job`
     /// snapshotted) is already at its configured maximum.
     ///
@@ -274,7 +272,7 @@ impl TaskRunAttemptDispatcher {
     ///
     /// The child has to be in TaskRunAttemptChildren before the status is written, or the
     /// monitor sees a running attempt with no process and settles it Invalid.
-    async fn settle_as_running(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
+    async fn set_to_running(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         let task_run = self.get_task_run(task_run_attempt).await?;
         let job_run = self.get_job_run(task_run_attempt).await?;
@@ -332,8 +330,8 @@ impl TaskRunAttemptDispatcher {
         let started_at = Utc::now();
 
         // Recorded before the spawn, not after: a crash between the two leaves a queued
-        // attempt whose command is running, and `settle_as_invalid` reads this to refuse to
-        // start it again.
+        // attempt whose command is running, and `derive_next_status` reads this to refuse
+        // to start it again.
         self.crud.update_task_run_attempts(
             &*self.conn_pool,
             &UpdateTaskRunAttemptsData {
@@ -441,7 +439,7 @@ impl TaskRunAttemptDispatcher {
 
         self.signals.publish();
 
-        Ok(true)
+        Ok(())
     }
 
     async fn get_queued_task_run_attempts(&self) -> anyhow::Result<Vec<TaskRunAttempt>> {
@@ -564,8 +562,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::os::unix::ffi::OsStringExt;
 
-    /// Calls `settle_as_queued` rather than the whole chain on purpose: falling through it
-    /// spawns a real process, which is what these tests are about avoiding.
+    /// Calls `should_stay_queued` rather than the whole chain on purpose: falling through
+    /// it spawns a real process, which is what these tests are about avoiding.
     async fn is_waiting_to_retry(attempt: u32, retry_delay: u32, created_ago: i64) -> bool {
 
         let db = TestDb::new().await;
@@ -587,7 +585,7 @@ mod tests {
         let task_run_attempt = db.task_run_attempts(task_run.id).await.pop().unwrap();
 
         db.task_run_attempt_dispatcher()
-            .settle_as_queued(&task_run_attempt)
+            .should_stay_queued(&task_run_attempt)
             .await
             .unwrap()
     }
@@ -616,7 +614,7 @@ mod tests {
 
     /// Runs the whole chain over a queued attempt and reports what it settled it as.
     ///
-    /// Unlike `is_waiting_to_retry` this lets `settle_as_running` spawn, which is the
+    /// Unlike `is_waiting_to_retry` this lets `set_to_running` spawn, which is the
     /// point: the order of the chain is only observable when the outcome that starts a
     /// process is actually reachable.
     async fn settled_attempt_status(
@@ -647,8 +645,8 @@ mod tests {
         db.task_run_attempt(task_run_attempt.id).await.status
     }
 
-    /// Pins `settle_as_queued` ahead of `settle_as_running`. Swap them and the retry is
-    /// spawned the moment TaskRunMonitor inserts it, and the retry_delay never applies.
+    /// Pins the queued check ahead of running. Swap them and a retry is spawned the moment
+    /// TaskRunMonitor inserts it, ignoring retry_delay entirely.
     #[tokio::test]
     async fn a_retry_inside_its_delay_is_left_queued_rather_than_started() {
         let status = settled_attempt_status(2, 60, false).await;
@@ -656,8 +654,8 @@ mod tests {
         assert_eq!(status, TaskRunAttemptStatus::Queued);
     }
 
-    /// Pins `settle_as_skipped` ahead of `settle_as_running`. Swap them and a stopped job
-    /// run still spawns the command it was stopped to prevent.
+    /// Pins the stopped check ahead of running. Swap them and a stopped job run still
+    /// spawns the command it was stopped to prevent.
     #[tokio::test]
     async fn a_stopped_job_run_skips_the_attempt_rather_than_starting_it() {
         let status = settled_attempt_status(1, 0, true).await;
@@ -665,9 +663,8 @@ mod tests {
         assert_eq!(status, TaskRunAttemptStatus::Skipped);
     }
 
-    /// Pins `settle_as_skipped` ahead of `settle_as_queued`. Swap them and a retry still
-    /// inside its delay is held queued by a job run that was stopped, instead of skipped,
-    /// so the stop does not take effect until the delay expires.
+    /// Pins the stopped check ahead of the queued check. Swap them and a retry still inside
+    /// its delay stays queued instead of skipped, delaying the stop until it expires.
     #[tokio::test]
     async fn a_stopped_job_run_skips_a_retry_that_is_still_inside_its_delay() {
         let status = settled_attempt_status(2, 60, true).await;
@@ -1241,9 +1238,9 @@ mod tests {
         assert!(error.contains("/nope/does/not/exist"), "{error}");
     }
 
-    /// Unreachable while `settle_as_running` claims unconditionally, so it is called
-    /// directly. Nothing has been spawned by the time the chain falls this far, so there is
-    /// no process to account for.
+    /// Unreachable while `derive_next_status` covers every case, so it is called directly.
+    /// Nothing has been spawned by the time the chain falls this far, so there is no
+    /// process to account for.
     #[tokio::test]
     async fn an_unclaimed_attempt_is_settled_invalid() {
 
@@ -1255,7 +1252,7 @@ mod tests {
         let task_run = db.insert_task_run(job_run.id, crate::crud::task_run::TaskRunStatus::Running).await;
         let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
 
-        db.task_run_attempt_dispatcher().settle_unclaimed(&task_run_attempt).await.unwrap();
+        db.task_run_attempt_dispatcher().set_to_invalid(&task_run_attempt).await.unwrap();
 
         assert_eq!(
             db.task_run_attempt(task_run_attempt.id).await.status,
