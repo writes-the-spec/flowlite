@@ -1,18 +1,24 @@
 # Job run
 
-`JobRunStatus` lives in [src/crud/job_run.rs](../../../../src/crud/job_run.rs). A `job_run` row is created `Queued` by `CRUD::submit_job`, together with one `Queued` task run per task of the job.
+`JobRunStatus` lives in [src/crud/job_run.rs](../../../../src/crud/job_run.rs). A `job_run` row is created `Submitted` by `CRUD::submit_job` or `CRUD::rerun_job`, together with one `Queued` task run per task of the job — a task run has no `Submitted` status of its own.
 
 | Status | Meaning |
 |---|---|
-| `Queued` | Submitted, waiting. Nothing has run; `started_at` is NULL. |
+| `Submitted` | Written, but not yet due. `JobRunReleaser` is the only thing that moves a run out of this status, and it only ever moves it to `Queued`. |
+| `Queued` | Released, waiting. Nothing has run; `started_at` is NULL. |
 | `Running` | Started. Its task runs are being dispatched, executed and retried. |
 | `Succeeded` | Every task run succeeded — also the status of a job with no tasks. |
 | `Failed` | A task run failed with retries exhausted. |
 | `TimedOut` | A task run exceeded `task_run.timeout` with retries exhausted. |
 | `Aborted` | Stopped after it started, however far it had got — a task run killed mid-flight, or one skipped before its command began. |
 | `Skipped` | Stopped before it ever started. Nothing of it ran. |
+| `Invalid` | flowlite cannot account for the row — see [Rows flowlite cannot read](../SKILL.md#rows-flowlite-cannot-read) in the parent skill. |
 
 `Aborted` vs `Skipped` is the "stopped" pair, and **the row's own lifecycle decides which**, not what its task runs report: a job run with `started_at` set is `Aborted`, one that never started is `Skipped`. So `JobRunDispatcher` writes `Skipped` and never `Aborted`, `JobRunMonitor` writes `Aborted` and never `Skipped`. There is deliberately no `Cancelled`.
+
+## Releaser: Submitted → Queued
+
+`JobRunReleaser` ([src/orchestrator/job_run_releaser.rs](../../../../src/orchestrator/job_run_releaser.rs)) polls every `Submitted` job run and moves one to `Queued` the moment either of two things is true: `scheduled_at` has arrived, or a `job_run_stop` row already exists for it. The stop half exists so that stopping a run does not have to wait for its due time — `JobRunReleaser` hands a stopped-but-not-yet-due run to `JobRunDispatcher`, which is what actually skips it (and its task runs) via `settle_as_skipped`. It is the one service that genuinely depends on the poll interval rather than a signal wake-up: nothing publishes when a future instant simply arrives, so the timer is what notices. This is also the reason the [Scheduler](../../scheduler/SKILL.md) is a separate service from the orchestrator's dispatchers and monitors — it decides *which* runs ought to exist, `JobRunReleaser` decides *when* one of them is due.
 
 ## Dispatcher: Queued → Running / Skipped
 
@@ -22,15 +28,14 @@
 2. `settle_as_queued` — **is its job at `max_parallel_runs`?** (`CRUD::is_job_at_max_parallel_runs`, counting that job's `Running` job runs) → the row stays `Queued`, to be reconsidered next pass. **It writes nothing, and exists to say so.**
 3. `settle_as_running` — otherwise → `status = Running`, `started_at = now`.
 4. Past all three → `settle_unclaimed` → `Invalid`. Unreachable while step 3 claims unconditionally; see [SKILL.md](../SKILL.md#the-settle-chain-and-why-its-order-matters).
-4. Past all three → `anyhow::bail!`.
 
-Step 4 is the point of step 2. A queued job run left alone on purpose and one left alone because nobody handled it look identical from the outside — the row just sits there, indistinguishable from a job legitimately queued behind its limit. Naming the deliberate case makes the accidental one an error the `Poller` logs with the row id, instead of a run that never moves and never explains why. It is unreachable today: step 3 starts whatever step 2 declined, unconditionally. Give it a guard of its own without adding an outcome and the bail is what tells you.
+Step 4 is the point of step 2. A queued job run left alone on purpose and one left alone because nobody handled it look identical from the outside — the row just sits there, indistinguishable from a job legitimately queued behind its limit. Naming the deliberate case makes the accidental one an error the `Poller` logs with the row id, instead of a run that never moves and never explains why. It is unreachable today: step 3 starts whatever step 2 declined, unconditionally. Give it a guard of its own without adding an outcome and step 4 settling the row `Invalid` is what tells you.
 
 **Step 2 has to come before step 3 for that reason**, and it is why the limit is asked once per row rather than twice: the earlier order asked step 3 first, so step 2 had to re-count the job's running runs to claim the rows it turned down. All three dispatchers read skipped, queued, running.
 
 They are named `settle_as_*` rather than `transition_to_*` because one of them deliberately writes no status, and calling a no-op a transition would be a lie. Every one of the six services now settles a row this way; the dispatchers use `settle_as_*` and the monitors `settle_for_*`.
 
-**`settle_as_queued` is the only place `max_parallel_runs` is enforced.** Nothing rejects a submission for being over the limit — not `job submit`, not a rerun, not the [scheduler](../../scheduler/SKILL.md) — so an over-limit run is created `Queued` like any other and queues here until a slot frees. Two things follow: the oldest-first sort is what makes the queue fair, and a job that takes longer than its schedule interval accumulates queued runs rather than losing them.
+**`settle_as_queued` is the only place `max_parallel_runs` is enforced.** Nothing rejects a submission for being over the limit — not `job submit`, not a rerun, not the [scheduler](../../scheduler/SKILL.md) — so an over-limit run is released to `Queued` like any other, once it is due, and queues here until a slot frees. Two things follow: the oldest-first sort is what makes the queue fair, and a job that takes longer than its schedule interval accumulates queued runs rather than losing them.
 
 Only `Running` runs count against the limit. Counting `Queued` ones too would deadlock the gate, since the row being considered is itself `Queued`.
 
@@ -46,7 +51,7 @@ Only `Running` runs count against the limit. Counting `Queued` ones too would de
 4. `settle_for_timed_out` — any `TimedOut`
 5. `settle_for_aborted` — any task run `is_stopped`, meaning `Aborted` or `Skipped`, the two ways task runs report a stop
 6. `settle_for_running` — any task run not finished → writes nothing
-6. Past all five → `anyhow::bail!`
+7. Past all six → `settle_unclaimed` → `Invalid`. Unreachable while step 6 claims unconditionally.
 
 **Steps 2–4 each ask for every task run having finished** as well as for their own status, so none of them can finish a job run whose work is still going. With step 5 asked last, that guard is the only thing holding such a job run open — and finishing is irreversible, since this monitor only ever visits `Running` rows.
 
@@ -56,7 +61,7 @@ Step 1 comes first because an unknown outranks every named verdict: naming the f
 
 Step 4 folds both stop signals into one outcome, and does not require *all* task runs to be skipped. A skip means a stop or a dependency that didn't succeed, and in the second case that dependency is itself `Failed`/`TimedOut`/`Aborted` or skipped — so once steps 2–3 have not matched, a skip can only mean the run was stopped. Its `Aborted` half needs no such argument: a task run is only aborted by a stop.
 
-The narrow case step 4 exists for is a job run stopped when **nothing was executing** — between two tasks, or before the first one starts. Its task runs end up `Succeeded` + `Skipped`, with nothing failed and nothing aborted, so every other outcome declines. Without this step that job run reaches the bail and never finishes.
+The narrow case step 4 exists for is a job run stopped when **nothing was executing** — between two tasks, or before the first one starts. Its task runs end up `Succeeded` + `Skipped`, with nothing failed and nothing aborted, so every other outcome declines. Without this step that job run reaches `settle_unclaimed` and settles `Invalid` instead of `Aborted`.
 
 The status comes **entirely from the task runs** — the monitor never reads a stop signal. A stop reaches the job run only as the task run statuses it produced, through step 4.
 

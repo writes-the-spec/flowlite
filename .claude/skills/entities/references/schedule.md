@@ -1,6 +1,6 @@
 # `schedule` (mem)
 
-One row per schedule YAML file under `<data_dir>/schedules/*.yml`. The [Scheduler](../../scheduler/SKILL.md) polls this table once a second and submits the jobs of every due schedule.
+One row per schedule YAML file under `<data_dir>/schedules/*.yml`. The [Scheduler](../../scheduler/SKILL.md) reconciles every row once a second, keeping its `submit_ahead` next occurrences submitted as [`job_run`](job_run.md) rows — it does not decide when a run becomes due, only which runs ought to exist.
 
 | Column | Meaning |
 |---|---|
@@ -11,17 +11,15 @@ One row per schedule YAML file under `<data_dir>/schedules/*.yml`. The [Schedule
 | `timezone` | IANA name. A schedule that declares none takes `[schedule_defaults]` from the data dir's config.toml, which itself defaults to UTC. |
 | `start_date`, `end_date` | Nullable `DATE`. An open-ended schedule genuinely has no bound. |
 | `disabled` | `INTEGER NOT NULL` — a boolean has no third state. |
-| `submit_ahead` | `INTEGER NOT NULL`. How many occurrences to keep submitted ahead of their time; defaults to `1` in the YAML, refused at `0` because that state already has a clearer spelling: `disabled: true`. |
-| `next_run` | Nullable `TIMESTAMP`. Unset until computed; `NULL` past `end_date`. |
+| `submit_ahead` | `INTEGER NOT NULL`. How many occurrences the reconcile keeps submitted ahead of their time; defaults to `1` in the YAML, refused at `0` because that state already has a clearer spelling: `disabled: true`. |
+| `next_run` | Nullable `TIMESTAMP`. **Display only — not a cursor.** The earliest of the occurrences the last reconcile pass computed as desired; `NULL` when there is nothing left to submit (past `end_date`, or `disabled`). |
 
 ## Written by
 
-`CRUD::init` inserts the row and computes the first `next_run` immediately with `CronTrigger::get_next_run(None)`.
+`CRUD::init` inserts the row and computes the first `next_run` immediately with `CronTrigger::get_next_run(None)`, purely so the dashboard has something to show before the scheduler's first pass.
 
-**`Scheduler` then updates `next_run` on every fire** — this is the one `mem` column that carries live state rather than config, and the one exception to "config tables are insert-only". It is still in-memory, so it is recomputed from scratch at every startup: there is no catch-up for runs whose time passed while the process was down, and `next_run` is not a record of anything. The `job_run` rows are the history.
+**`Scheduler` then rewrites `next_run` on every pass, unconditionally** — this is the one `mem` column that carries live state rather than config, and the one exception to "config tables are insert-only". Nothing advances it and nothing reads it back to decide anything: it is not a cursor the reconcile steps forward, just the first of the occurrences that pass's own cron math produced, written for a reader rather than for the code. It is still in-memory, so it is recomputed from scratch at every startup, from `CronTrigger::get_next_run(None)` on the same schedule row — never from an old `next_run` value, which no longer exists at that point anyway.
 
 ## Read by
 
-`Scheduler::select` (`next_run < now AND disabled = false`, ordered by `row_id`) and the schedules web routes.
-
-**A `NULL` `next_run` retires the schedule for the rest of the process's life** — SQL comparisons against NULL are never true, so it drops out of that filter. That is how an expired schedule stops firing, and also what a bug that nulls `next_run` looks like.
+`Scheduler::select`, which now reads every row — enabled or not, due or not, ordered by `row_id` — because "is anything due?" is a question the reconcile puts to the [`job_run`](job_run.md) rows it already holds, not to this table. And the schedules web routes, which still just display `next_run`.

@@ -11,6 +11,7 @@ timezone: Europe/Vienna
 start_date: 2026-01-01
 end_date: 2026-12-31
 disabled: false
+submit_ahead: 1
 jobs:
   - id: my-job
 ```
@@ -26,7 +27,8 @@ jobs:
 | `timezone` | no | `[schedule_defaults]`, `UTC` | A `chrono_tz::Tz` name, e.g. `Europe/Vienna`. The cron expression is evaluated in it. `Option` on the model: `CRUD::init` resolves a `None` against config.toml. |
 | `start_date` | no | `None` | Date only. Occurrences before it are pulled forward to it. |
 | `end_date` | no | `None` | Date only, inclusive to `23:59:59`. Past it the schedule stops firing for good. |
-| `disabled` | no | `false` | A disabled schedule is filtered out of the scheduler's poll. |
+| `disabled` | no | `false` | A disabled schedule desires zero occurrences, so the reconcile takes back whatever it had outstanding rather than submitting more. |
+| `submit_ahead` | no | `1` | How many occurrences to keep submitted ahead of their time. Refused at `0` — that state already has a clearer spelling, `disabled: true`. |
 | `jobs` | no | `[]` | The jobs submitted on each occurrence. |
 
 `start_date` and `end_date` are `Option`, so omitting them is fine even without `#[serde(default)]`.
@@ -41,9 +43,9 @@ jobs:
 ## Gotchas
 
 - **`cron` takes six fields, seconds first** (`sec min hour dom month dow`), the `cron` crate's dialect. A five-field crontab expression means something else here — `"*/15 * * * * *"` is every 15 *seconds*.
-- **`parameters` is no longer inert, but an unknown name is caught at submit time, not at startup like the job-id foreign key below.** `Scheduler::handle_due_schedule` passes it straight to `CRUD::submit_job`, which raises if a name here isn't declared on the job; the scheduler `eprintln!`s the error and moves on to the schedule's next job rather than crashing, so a typo here fails that job on every occurrence of the schedule until the file is fixed, rather than stopping the server from starting. `.config/schedules/example_schedule.yml` uses a `variables:` key that isn't even a field — unknown keys are dropped silently.
+- **`parameters` is no longer inert, but an unknown name is caught at submit time, not at startup like the job-id foreign key below.** `Scheduler::submit_missing_runs` passes it straight to `CRUD::submit_job`, which raises if a name here isn't declared on the job; the scheduler `eprintln!`s the error and moves on to the schedule's next job rather than crashing, so a typo here fails that job on every occurrence of the schedule until the file is fixed, rather than stopping the server from starting. `.config/schedules/example_schedule.yml` uses a `variables:` key that isn't even a field — unknown keys are dropped silently.
 - **An unknown job id stops the server from starting.** `mem.schedule_job.job_id` is a foreign key to `mem.job` and `PRAGMA foreign_keys` is on (sqlx enables it by default), so `CRUD::init` — which inserts every job before any `schedule_job` — aborts the config transaction with `(code: 787) FOREIGN KEY constraint failed` and the process exits. There is no half-loaded config and no stuck job run: a typo in one schedule file stops `serve`, `job list` and `job submit` until it is fixed.
 
 ## What the scheduler does with it
 
-`CRUD::init` computes the first `next_run` at load (`CronTrigger::get_next_run(None)` — the next occurrence after *now*, so restarts never backfill). From there `Scheduler` polls schedules with `next_run < now` and `disabled = false`, submits their jobs, and advances `next_run` from the schedule's own previous value. Past `end_date` that write is `NULL`, which retires the schedule for the rest of the process's life. See the [scheduler skill](../../scheduler/SKILL.md).
+`CRUD::init` computes a first `next_run` at load (`CronTrigger::get_next_run(None)` — the next occurrence after *now*), purely so the dashboard has something to show before the scheduler's first pass. From there `Scheduler` reconciles every row once a second, `disabled` or not: it computes this schedule's next `submit_ahead` occurrences and makes its outstanding `Submitted` job runs equal that set, submitting whatever is missing and deleting whatever is surplus, then rewrites `next_run` as a display value from the earliest of them. Past `end_date`, or while `disabled`, the desired set is empty, so the reconcile takes back whatever was outstanding and `next_run` goes `NULL`. The reconcile never decides a run is *due* — [`JobRunReleaser`](../../orchestrator/SKILL.md) does that, once a submitted run's `scheduled_at` arrives. See the [scheduler skill](../../scheduler/SKILL.md).

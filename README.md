@@ -963,10 +963,12 @@ way means an agent reads `.status` off the result instead of branching on which 
 sent — the same reason `job submit --json` reads the run back and prints it with and without
 `--wait`.
 
-`get_serve_status` and `list_limits` are the pair an agent reaches for when a submitted run
-sits at `queued`: the first says whether anything is serving the directory at all, the
-second what the run is waiting behind. `submit_job` warns about an unserved directory once,
-at the moment it writes; these are how the agent checks for itself at any point after.
+`get_serve_status` and `list_limits` are the pair an agent reaches for when a run does not
+progress: the first says whether anything is serving the directory at all — the reason a
+run can sit `submitted` past its due time, or `queued` and never start — the second, once
+something is serving it, what a `queued` run is waiting behind. `submit_job` warns about an
+unserved directory once, at the moment it writes; these are how the agent checks for itself
+at any point after.
 
 `init_data_dir` has no `--json` twin to match, because `flowlite init` prints prose rather
 than rows — it is `serve`-shaped, not `job list`-shaped. It takes no arguments at all: the
@@ -1007,11 +1009,13 @@ returns as soon as the run settles; if the time runs out first the run comes bac
 unfinished rather than as an error, because its id is what lets the agent ask again. A value
 above 300 clamps to 300 rather than being refused.
 
-**A submit into a directory nothing is serving queues a run that will not start.** It is
-allowed, for the same reason the command line allows it — work queued for a server that is
-not up yet is legitimate — and the tool result says so in a line beside the JSON. Run
-`flowlite serve` against that directory and the queued run is picked up. A `wait_seconds`
-above 0 is refused there outright, since nothing would ever settle the row it would poll.
+**A submit into a directory nothing is serving writes a run that will not start.** It is
+allowed, for the same reason the command line allows it — work submitted for a server that is
+not up yet is legitimate — and the tool result says so in a line beside the JSON. The run
+stays `submitted`, however far past its due time, since nothing is there to release it into
+`queued`; run `flowlite serve` against that directory and it is picked up from there. A
+`wait_seconds` above 0 is refused there outright, since nothing would ever settle the row it
+would poll.
 
 ## Configuration
 
