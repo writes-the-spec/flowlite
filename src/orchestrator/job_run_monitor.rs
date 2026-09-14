@@ -52,7 +52,11 @@ impl JobRunMonitor {
 
         let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());
 
-        if all_finished && task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Invalid) {
+        if !all_finished {
+            return Ok(JobRunStatus::Running);
+        }
+
+        if task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Invalid) {
             return Ok(JobRunStatus::Invalid);
         }
 
@@ -61,21 +65,17 @@ impl JobRunMonitor {
             return Ok(JobRunStatus::Succeeded);
         }
 
-        if all_finished && task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Failed) {
+        if task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Failed) {
             return Ok(JobRunStatus::Failed);
         }
 
-        if all_finished && task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::TimedOut) {
+        if task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::TimedOut) {
             return Ok(JobRunStatus::TimedOut);
         }
 
         // A stopped task run: killed mid-flight, or skipped before it could start.
-        if all_finished && task_runs.iter().any(|task_run| task_run.status.is_stopped()) {
+        if task_runs.iter().any(|task_run| task_run.status.is_stopped()) {
             return Ok(JobRunStatus::Aborted);
-        }
-
-        if !all_finished {
-            return Ok(JobRunStatus::Running);
         }
 
         Err(anyhow::anyhow!(
