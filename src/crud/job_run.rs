@@ -701,4 +701,25 @@ mod tests {
 
         assert!(select(&db, empty_filter()).await.is_empty());
     }
+
+    /// The INSERT bind and the SELECT column are otherwise only ever exercised against
+    /// NULL, so a missing one of either would decode as None and never fail a test - while
+    /// the scheduler that is built on top of this column reads it every pass.
+    #[tokio::test]
+    async fn a_runs_schedule_id_survives_the_round_trip() {
+
+        let db = crate::test_support::TestDb::new().await;
+
+        let written = db.insert_job_run_at(
+            JobRunStatus::Pending,
+            chrono::Utc::now(),
+            Some("nightly"),
+        ).await;
+
+        assert_eq!(written.schedule_id.as_deref(), Some("nightly"));
+
+        let read_back = db.job_run(written.id).await;
+
+        assert_eq!(read_back.schedule_id.as_deref(), Some("nightly"));
+    }
 }
