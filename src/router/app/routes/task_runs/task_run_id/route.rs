@@ -39,6 +39,22 @@ pub struct AttemptDisplay {
     pub duration: Option<String>,
     pub stdout: String,
     pub stderr: String,
+    pub stdout_note: String,
+    pub stderr_note: String,
+}
+
+/// What a stream's own head says about it. The panels open on click, so this is all a
+/// reader has to go on while they are closed, and "is there anything in here" is the
+/// question they are closed over.
+fn stream_note(stream: &str) -> String {
+    if stream.is_empty() {
+        return "nothing written".to_string();
+    }
+
+    match stream.lines().count() {
+        1 => "1 line".to_string(),
+        lines => format!("{} lines", lines),
+    }
 }
 
 #[derive(Template)]
@@ -71,6 +87,8 @@ fn build_attempt(
         status_word: format::task_run_attempt_word(task_run_attempt.status),
         started_at: task_run_attempt.started_at.map(format::timestamp),
         duration,
+        stdout_note: stream_note(&streams.stdout),
+        stderr_note: stream_note(&streams.stderr),
         stdout: streams.stdout,
         stderr: streams.stderr,
     }
@@ -191,5 +209,28 @@ pub async fn task_run_id_route(
             eprintln!("Template rendering error: {}", err);
             Html("Error rendering template".to_string()).into_response()
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_stream_says_so_rather_than_counting_zero_lines() {
+        assert_eq!(stream_note(""), "nothing written");
+    }
+
+    /// The last line of a command's output usually ends in a newline, and counting the
+    /// empty piece after it would report one line too many for every stream there is.
+    #[test]
+    fn a_trailing_newline_is_not_a_line_of_its_own() {
+        assert_eq!(stream_note("only line\n"), "1 line");
+        assert_eq!(stream_note("first\nsecond\n"), "2 lines");
+    }
+
+    #[test]
+    fn a_stream_without_a_trailing_newline_counts_its_last_line() {
+        assert_eq!(stream_note("first\nsecond"), "2 lines");
     }
 }

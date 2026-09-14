@@ -151,23 +151,32 @@
                 {% endif %}
             </div>
 
-            <div class="stream">
-                <div class="stream__label">stdout</div>
-                {% if attempt.stdout.is_empty() %}
-                <p class="stream__none">nothing written</p>
-                {% else %}
+            {# Closed like the panels above, and keyed by the attempt's number rather than
+               its id: a reader who opens stderr on the first attempt means it of the first
+               attempt of the next run too, where the ids are all different ones. #}
+            <details id="attempt-{{ attempt.attempt }}-stdout" class="stream collapse">
+                <summary class="stream__label">
+                    <span class="collapse__title"><span class="collapse__caret"></span>stdout</span>
+                    <span class="stream__note">{{ attempt.stdout_note }}</span>
+                </summary>
+
+                {% if !attempt.stdout.is_empty() %}
                 <pre class="stream__body">{{ attempt.stdout }}</pre>
                 {% endif %}
-            </div>
+            </details>
+            <script>rememberPanel("attempt-{{ attempt.attempt }}-stdout")</script>
 
-            <div class="stream">
-                <div class="stream__label">stderr</div>
-                {% if attempt.stderr.is_empty() %}
-                <p class="stream__none">nothing written</p>
-                {% else %}
+            <details id="attempt-{{ attempt.attempt }}-stderr" class="stream collapse">
+                <summary class="stream__label">
+                    <span class="collapse__title"><span class="collapse__caret"></span>stderr</span>
+                    <span class="stream__note">{{ attempt.stderr_note }}</span>
+                </summary>
+
+                {% if !attempt.stderr.is_empty() %}
                 <pre class="stream__body stream__body--err">{{ attempt.stderr }}</pre>
                 {% endif %}
-            </div>
+            </details>
+            <script>rememberPanel("attempt-{{ attempt.attempt }}-stderr")</script>
         </div>
         {% endfor %}
         {% endif %}
