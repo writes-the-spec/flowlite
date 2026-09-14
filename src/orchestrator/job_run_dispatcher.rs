@@ -9,7 +9,8 @@ use chrono::Utc;
 
 
 /// Picks up queued job runs, oldest first, and settles each one as skipped, still
-/// queued or running. Hands off to JobRunMonitor through the job run status only.
+/// queued or running, deriving which before writing any of it. Hands off to JobRunMonitor
+/// through the job run status only.
 pub struct JobRunDispatcher {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
@@ -31,53 +32,53 @@ impl JobRunDispatcher {
         }
     }
 
-    /// Settles a queued job run as exactly one outcome. Falling past all three bails
-    /// rather than returning quietly: a row nobody handled looks exactly like one
-    /// legitimately queued, so silence is the one failure this service cannot spot.
-    ///
-    /// `settle_as_queued` has to precede `settle_as_running`, which starts the run
-    /// unconditionally and would take a slot the job does not have.
+    /// Settles a queued run as whatever `derive_next_status` decides. Decision and write
+    /// are split on purpose: deriving only reads, and each `set_to_*` just trusts the
+    /// result rather than re-deriving any part of it.
     async fn handle_queued_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
-        if self.settle_as_skipped(job_run).await? {
-            return Ok(());
+        match self.derive_next_status(job_run).await {
+            Ok(JobRunStatus::Skipped) => self.set_to_skipped(job_run).await,
+            Ok(JobRunStatus::Queued) => self.set_to_queued(),
+            Ok(JobRunStatus::Running) => self.set_to_running(job_run).await,
+            Ok(_) | Err(_) => self.set_to_invalid(job_run).await,
         }
-
-        if self.settle_as_queued(job_run).await? {
-            return Ok(());
-        }
-
-        if self.settle_as_running(job_run).await? {
-            return Ok(());
-        }
-
-        self.settle_unclaimed(job_run).await
     }
 
-    /// Unreachable while `settle_as_running` claims unconditionally: this is the day a
-    /// status is added and a rung is not.
+    /// Derives a queued run's next status without writing anything: skipped if stopped,
+    /// running if a slot is free, else left queued behind max_parallel_runs.
     ///
-    /// Settled rather than raised on — unlike the raises kept for states an invariant makes
-    /// impossible, this one would fire every pass and stop the job scheduling for ever.
-    async fn settle_unclaimed(&self, job_run: &JobRun) -> anyhow::Result<()> {
+    /// Stopped is asked first and returned on early, rather than gathered into a tuple
+    /// alongside max_parallel_runs: unlike a due time, that check is a read, and a stopped
+    /// run's job is never asked about a slot it will not take.
+    async fn derive_next_status(&self, job_run: &JobRun) -> anyhow::Result<JobRunStatus> {
+
+        if self.is_job_run_stopped(job_run).await? {
+            return Ok(JobRunStatus::Skipped);
+        }
+
+        if self.is_job_at_max_parallel_runs(job_run).await? {
+            return Ok(JobRunStatus::Queued);
+        }
+
+        Ok(JobRunStatus::Running)
+    }
+
+    /// Settles a run `derive_next_status` failed to decide, invalidating its task runs too.
+    /// Unreachable — `is_stopped`/`is_at_max_parallel_runs` cover every case above. See
+    /// `JobRunMonitor::settle_unclaimed` for why it settles rather than raises.
+    async fn set_to_invalid(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         eprintln!(
-            "Job run {} was claimed by no outcome: it was not stopped, is not waiting on \
-             max_parallel_runs, and was not started. Settling it invalid. This is a bug.",
+            "Job run {} was queued but its next status could not be derived, or was \
+             derived as something the queued-run dispatch does not handle. Settling it \
+             invalid. This is a bug.",
             job_run.id,
         );
 
-        self.crud.update_job_runs(
-            &*self.conn_pool,
-            &UpdateJobRunsData {
-                filter: UpdateJobRunsDataFilter { id: Some(job_run.id) },
-                input: UpdateJobRunsDataInput {
-                    status: Some(JobRunStatus::Invalid),
-                    started_at: None,
-                    finished_at: Some(Some(Utc::now())),
-                },
-            }
-        ).await?;
+        let mut conn = self.conn_pool.acquire().await?;
+
+        self.crud.invalidate_job_run(&mut conn, job_run.id).await?;
 
         self.signals.publish();
 
@@ -90,13 +91,7 @@ impl JobRunDispatcher {
     /// run stopped before it was ever released, and both go through `skip_job_run` so that
     /// neither can write half the pair. They select on disjoint statuses, so a run is only
     /// ever skipped by one of them.
-    async fn settle_as_skipped(&self, job_run: &JobRun) -> anyhow::Result<bool> {
-
-        let job_run_stopped = self.is_job_run_stopped(job_run).await?;
-
-        if !job_run_stopped {
-            return Ok(false);
-        }
+    async fn set_to_skipped(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         let mut conn = self.conn_pool.acquire().await?;
 
@@ -104,16 +99,15 @@ impl JobRunDispatcher {
 
         self.signals.publish();
 
-        Ok(true)
+        Ok(())
     }
 
     /// Leaves the job run queued, writing nothing, while its job is at max_parallel_runs.
     ///
     /// The only place max_parallel_runs is enforced: submitting never rejects a job, so
     /// every path that creates a job run queues behind this gate without knowing about it.
-    async fn settle_as_queued(&self, job_run: &JobRun) -> anyhow::Result<bool> {
-
-        self.is_job_at_max_parallel_runs(job_run).await
+    fn set_to_queued(&self) -> anyhow::Result<()> {
+        Ok(())
     }
 
     /// Sets the job run to running, which is what makes JobRunMonitor pick it up, and
@@ -127,7 +121,7 @@ impl JobRunDispatcher {
     /// leaves a Running job run whose task runs are Planned for ever - nothing selects a
     /// Running job run to release them, and JobRunMonitor holds it open on task runs that
     /// can never finish.
-    async fn settle_as_running(&self, job_run: &JobRun) -> anyhow::Result<bool> {
+    async fn set_to_running(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         self.crud.update_task_runs(
             &*self.conn_pool,
@@ -159,7 +153,7 @@ impl JobRunDispatcher {
 
         self.signals.publish();
 
-        Ok(true)
+        Ok(())
     }
 
     async fn get_queued_job_runs(&self) -> anyhow::Result<Vec<JobRun>> {
@@ -237,20 +231,20 @@ mod tests {
     use super::*;
     use crate::test_support::TestDb;
 
-    /// Unreachable while every rung of the chain is complete - `settle_as_running` claims
-    /// unconditionally - so it is called directly. It exists for the day a status is added
-    /// and a rung is not, which is exactly what happened to the monitors while `Invalid`
-    /// was being wired up.
+    /// Unreachable through `handle`, so called directly. See `JobRunMonitor`'s equivalent
+    /// for why it is settled at all.
     #[tokio::test]
     async fn an_unclaimed_job_run_is_settled_invalid() {
 
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Queued).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
 
-        db.job_run_dispatcher().settle_unclaimed(&job_run).await.unwrap();
+        db.job_run_dispatcher().set_to_invalid(&job_run).await.unwrap();
 
         assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Invalid);
+        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Invalid);
     }
 
     /// The other half of the skip JobRunReleaser owns for a Submitted run: a Queued one
@@ -282,7 +276,7 @@ mod tests {
         let job_run = db.insert_job_run(JobRunStatus::Queued).await;
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
 
-        db.job_run_dispatcher().settle_as_running(&job_run).await.unwrap();
+        db.job_run_dispatcher().set_to_running(&job_run).await.unwrap();
 
         assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Running);
         assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Waiting);
@@ -298,7 +292,7 @@ mod tests {
         let job_run = db.insert_job_run(JobRunStatus::Queued).await;
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Succeeded).await;
 
-        db.job_run_dispatcher().settle_as_running(&job_run).await.unwrap();
+        db.job_run_dispatcher().set_to_running(&job_run).await.unwrap();
 
         assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Succeeded);
     }
