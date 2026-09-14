@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(notifications[1].recipients.0, vec!["#oncall"]);
 
         // Open again, so the rerun is judged on its own outcome rather than inheriting one.
-        assert_eq!(notifications[0].status, JobRunNotificationStatus::Queued);
+        assert_eq!(notifications[0].status, JobRunNotificationStatus::Pending);
         assert_eq!(notifications[0].sent_at, None);
     }
 }

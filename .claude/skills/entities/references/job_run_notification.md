@@ -10,14 +10,14 @@ One "tell somebody how this run ended" for a [`job_run`](job_run.md), and the re
 | `notify_on` | Which ending this row is waiting for — `failure` or `success`. Spelled as the suffix of the block that declared it, so `on_success:` writes `success`. A column rather than something the sender works out afterwards: a job asking to hear either way carries **one row per block**, and the run ending once has to settle them differently. |
 | `channel` | How it is delivered — `email` or `slack`. A column rather than something the sender infers from `recipients`, so one row says for itself what delivering it means. Spelled exactly as the key inside the block that declared it. |
 | `recipients` | JSON array, addressed however `channel` addresses people: addresses for `email`, conversations for `slack`. Resolved at submit from what the job declared under that channel's key **in that block** — the two blocks are addressed independently, and usually differ. |
-| `status` | `queued`, `sent`, `failed` or `skipped` — see below. |
+| `status` | `pending`, `sent`, `failed` or `skipped` — see below. |
 | `error` | Why a delivery failed; **empty** until one does — a notification nobody has tried has no error, not an unknown one. |
 | `created_at` | Bound from `Toolkit`. |
 | `sent_at` | `NULL` until it leaves. A timestamp that has not happened yet is the nullable case. |
 
-## `queued` means open, not ready
+## `pending` means open, not ready
 
-The row is written **when the run is submitted**, long before anyone knows whether it will be needed. So `queued` is "nobody has decided about this yet", and most passes over one are about a run that has not ended.
+The row is written **when the run is submitted**, long before anyone knows whether it will be needed. So `pending` is "nobody has decided about this yet", and most passes over one are about a run that has not ended.
 
 The other three are all closed, and only [`NotificationService`](../../notifications/SKILL.md) writes them:
 
@@ -39,9 +39,9 @@ The other three are all closed, and only [`NotificationService`](../../notificat
 
 ## Read by
 
-`NotificationService`, which selects the `queued` rows — the open ones — whatever channel and whatever run they are about, and reads the run's status to decide what each deserves.
+`NotificationService`, which selects the `pending` rows — the open ones — whatever channel and whatever run they are about, and reads the run's status to decide what each deserves.
 
-`RetentionService` reads it too, in `select_deletable_job_runs` ([src/crud/multistatements/retention_candidates.rs](../../../../src/crud/multistatements/retention_candidates.rs)): a run with a `queued` row here is never a deletion candidate, whatever `keep_runs` or `keep_runs_total` would otherwise say. A `sent`, `failed` or `skipped` row owes nothing and does not hold a run back.
+`RetentionService` reads it too, in `select_deletable_job_runs` ([src/crud/multistatements/retention_candidates.rs](../../../../src/crud/multistatements/retention_candidates.rs)): a run with a `pending` row here is never a deletion candidate, whatever `keep_runs` or `keep_runs_total` would otherwise say. A `sent`, `failed` or `skipped` row owes nothing and does not hold a run back.
 
 ## One attempt, recorded either way
 

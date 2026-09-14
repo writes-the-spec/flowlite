@@ -232,7 +232,7 @@ impl CRUD {
                         notify_on: notification.notify_on,
                         channel: notification.channel,
                         recipients: notification.recipients.clone(),
-                        status: JobRunNotificationStatus::Queued,
+                        status: JobRunNotificationStatus::Pending,
                         error: String::new(),
                     }
                 }

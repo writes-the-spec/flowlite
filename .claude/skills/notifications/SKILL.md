@@ -1,6 +1,6 @@
 ---
 name: notifications
-description: The notification service (src/notifications/) - the background loop that delivers a job run's outcome over email or Slack, the NotificationChannel enum that decides how, and the single NotificationMessage rendered as text, HTML and Slack blocks. Use when adding or changing a channel, changing what a notification says or how it is rendered, tracing why one was sent, skipped or left queued, or working with job_run_notification rows, FakeSlack, or the [smtp] and [slack] config sections.
+description: The notification service (src/notifications/) - the background loop that delivers a job run's outcome over email or Slack, the NotificationChannel enum that decides how, and the single NotificationMessage rendered as text, HTML and Slack blocks. Use when adding or changing a channel, changing what a notification says or how it is rendered, tracing why one was sent, skipped or left pending, or working with job_run_notification rows, FakeSlack, or the [smtp] and [slack] config sections.
 ---
 
 # Notifications
@@ -22,7 +22,7 @@ It is **not** part of the [orchestrator](../orchestrator/SKILL.md). `serve` star
 
 `NotificationService` is an ordinary [`Service`](../../../src/poller.rs), so it gets the same loop, wake-ups and per-row error handling as every orchestrator service:
 
-- **`select`** returns every **open** [`job_run_notification`](../entities/references/job_run_notification.md) — `status = 'queued'` — oldest first, whatever channel it names and whatever run it is about. A backlog after a restart therefore goes out in the order it built up in.
+- **`select`** returns every **open** [`job_run_notification`](../entities/references/job_run_notification.md) — `status = 'pending'` — oldest first, whatever channel it names and whatever run it is about. A backlog after a restart therefore goes out in the order it built up in.
 - **`handle`** decides what one deserves, and does it.
 
 **Open does not mean ready.** A notification is written when its run is *submitted*, long before anyone knows whether it will be needed, so most passes over one are about a run still going. `handle` asks the run's status first, and then asks the *row* whether that is what it was written for:

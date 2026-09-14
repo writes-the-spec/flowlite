@@ -712,7 +712,7 @@ impl TestDb {
                     notify_on,
                     channel,
                     recipients: recipients.iter().map(|r| r.to_string()).collect(),
-                    status: JobRunNotificationStatus::Queued,
+                    status: JobRunNotificationStatus::Pending,
                     error: String::new(),
                 },
             },

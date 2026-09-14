@@ -5,15 +5,15 @@ use crate::crud::job_run::JobRunStatus;
 
 /// Where one notification has got to.
 ///
-/// It is written Queued when the run is submitted, long before anyone knows whether it
-/// will be needed — so Queued means "open", not "ready to send". `NotificationService`
+/// It is written Pending when the run is submitted, long before anyone knows whether it
+/// will be needed — nobody has decided about it yet. `NotificationService`
 /// is what decides: Skipped once the run ends in a way not worth telling anyone about,
 /// otherwise Sent or Failed once it has tried.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, sqlx::Type)]
 #[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum JobRunNotificationStatus {
-    Queued,
+    Pending,
     Sent,
     Failed,
     Skipped,
@@ -22,7 +22,7 @@ pub enum JobRunNotificationStatus {
 impl std::fmt::Display for JobRunNotificationStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            JobRunNotificationStatus::Queued => write!(f, "queued"),
+            JobRunNotificationStatus::Pending => write!(f, "pending"),
             JobRunNotificationStatus::Sent => write!(f, "sent"),
             JobRunNotificationStatus::Failed => write!(f, "failed"),
             JobRunNotificationStatus::Skipped => write!(f, "skipped"),
