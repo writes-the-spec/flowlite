@@ -48,21 +48,23 @@ impl TaskRunDispatcher {
     /// Derives a waiting run's next status: skipped if stopped or a dependency did not
     /// succeed, running once every dependency has, else still waiting on one unfinished.
     ///
-    /// Each check reloads the dependencies fresh rather than sharing one snapshot, so a
-    /// dependency that moves between checks is read at its later status. A dependency set
-    /// none of the three matches reaches `None`, settled invalid like any other undecided
-    /// or unreadable case.
+    /// Dependencies are loaded once and shared across the three checks, so a dependency
+    /// that changes mid-derivation is not read at two different statuses within the same
+    /// pass. A dependency set none of the three matches reaches `None`, settled invalid
+    /// like any other undecided or unreadable case.
     async fn derive_next_status(&self, task_run: &TaskRun) -> anyhow::Result<Option<TaskRunStatus>> {
 
-        if self.should_skip(task_run).await? {
+        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
+
+        if self.should_skip(task_run, &dependent_task_runs).await? {
             return Ok(Some(TaskRunStatus::Skipped));
         }
 
-        if self.is_still_waiting(task_run).await? {
+        if Self::is_still_waiting(&dependent_task_runs) {
             return Ok(Some(TaskRunStatus::Waiting));
         }
 
-        if self.all_dependencies_succeeded(task_run).await? {
+        if Self::all_dependencies_succeeded(&dependent_task_runs) {
             return Ok(Some(TaskRunStatus::Running));
         }
 
@@ -74,10 +76,10 @@ impl TaskRunDispatcher {
     ///
     /// `Invalid` counts as not succeeding: left out, one unreadable row becomes an
     /// unreadable subtree.
-    async fn should_skip(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
+    async fn should_skip(&self, task_run: &TaskRun, dependent_task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
         let must_skip = self.is_job_run_stopped(task_run).await?
-            || self.get_dependent_task_runs(task_run).await?
+            || dependent_task_runs
                 .iter()
                 .any(|tr| matches!(
                     tr.status,
@@ -93,20 +95,14 @@ impl TaskRunDispatcher {
 
     /// True while a dependency has yet to finish. `should_skip` already ruled out every one
     /// that finished without succeeding.
-    async fn is_still_waiting(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
-
-        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
-
-        Ok(dependent_task_runs.iter().any(|tr| !tr.status.is_finished()))
+    fn is_still_waiting(dependent_task_runs: &[TaskRun]) -> bool {
+        dependent_task_runs.iter().any(|tr| !tr.status.is_finished())
     }
 
     /// True once every dependency has succeeded. Asked rather than starting whatever
     /// `is_still_waiting` turned down, so one that failed since stops the run here.
-    async fn all_dependencies_succeeded(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
-
-        let dependent_task_runs = self.get_dependent_task_runs(task_run).await?;
-
-        Ok(dependent_task_runs.iter().all(|tr| tr.status == TaskRunStatus::Succeeded))
+    fn all_dependencies_succeeded(dependent_task_runs: &[TaskRun]) -> bool {
+        dependent_task_runs.iter().all(|tr| tr.status == TaskRunStatus::Succeeded)
     }
 
     /// Settles a run `derive_next_status` could not decide or read. See
