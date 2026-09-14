@@ -15,7 +15,7 @@ flowlite runs against **two SQLite databases per connection**, and every table b
 | [`job`](references/job.md) | `mem` | one row per job YAML file — the definition |
 | [`task`](references/task.md) | `mem` | one row per task of a job — description, command, dependencies, retry policy |
 | [`task_dependent`](references/task_dependent.md) | `mem` | the dependency edges, normalized — **read by nothing** |
-| [`schedule`](references/schedule.md) | `mem` | one row per schedule YAML file, plus its live `next_run` |
+| [`schedule`](references/schedule.md) | `mem` | one row per schedule YAML file |
 | [`schedule_job`](references/schedule_job.md) | `mem` | which jobs a schedule submits |
 | [`job_run`](references/job_run.md) | disk | one execution of a job |
 | [`task_run`](references/task_run.md) | disk | one task within one job run, and the config it was submitted with |
@@ -40,7 +40,7 @@ Each history is a separate `sqlx::migrate!` with its own checksums, which is why
 
 **How a table is declared is the [db-schema skill](../db-schema/SKILL.md)'s.** Four rules shape every column and every entity struct here — how the table is keyed, when a column is `NOT NULL`, that no column carries a `DEFAULT`, and where a foreign key can and cannot reach — and they follow from which of the two databases the table is in, which is the question this skill answers. Read [declaring-a-table.md](../db-schema/references/declaring-a-table.md) before declaring anything. One of them shows up all over the reference files below: "an attempt that printed nothing has empty output, not unknown output" is the nullability rule talking.
 
-**Updated after insert?** Disk tables are; that is what `update_*` methods are for. `mem` tables are re-seeded fresh every startup and are mostly insert-only — **except `schedule.next_run`**, which the [Scheduler](../scheduler/SKILL.md) rewrites on every reconcile pass, purely as a display value; nothing reads it back. It is the one config column that carries live state.
+**Updated after insert?** Disk tables are; that is what `update_*` methods are for. `mem` tables are re-seeded fresh every startup and are insert-only, without exception — no config table carries live state, and none of them has an `update_*` method at all.
 
 **Deleted from, on the disk side only.** `RetentionService` ([src/retention/service.rs](../../../src/retention/service.rs)) deletes finished job runs old enough that nothing needs them — never one still `Queued` or `Running`, and never one still owing an undelivered notification — and with each one, every row across the other five disk tables that carries its `job_run_id`. Each reference file below says so under its own **Deleted by**. A job overrides how many of its own runs survive on `mem.job.keep_runs` (see [job.md](references/job.md)); `mem` tables are never deleted this way, since there is nothing to prune in a schema rebuilt fresh on every start.
 

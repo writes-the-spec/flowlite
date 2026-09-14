@@ -13,7 +13,6 @@ use crate::crud::task_dependent::{InsertTaskDependentData, InsertTaskDependentDa
 use crate::toolkit::Toolkit;
 use crate::yaml_models::job_yaml::{JobYaml, JobYamlNotify};
 use crate::yaml_models::schedule_yaml::ScheduleYaml;
-use crate::cron_trigger::CronTrigger;
 
 
 #[derive(Clone)]
@@ -88,19 +87,8 @@ impl CRUD {
                 if Self::is_yaml_file(&schedule_path) {
                     let schedule_yaml = ScheduleYaml::from_yaml(&schedule_path)?;
 
-                    // Resolved once: the trigger that computes the first next_run and the
-                    // row it is stored on must read the cron in the same zone.
                     let timezone = schedule_yaml.timezone
                         .unwrap_or(schedule_defaults.timezone);
-
-                    let cron_trigger = CronTrigger::new(
-                        schedule_yaml.cron.clone(),
-                        timezone,
-                        schedule_yaml.start_date,
-                        schedule_yaml.end_date,
-                    );
-
-                    let next_run = cron_trigger.get_next_run(None);
 
                     row_id += 1;
                     self.insert_schedule(&mut *tx, &InsertScheduleData {
@@ -115,7 +103,6 @@ impl CRUD {
                             end_date: schedule_yaml.end_date,
                             disabled: schedule_yaml.disabled,
                             submit_ahead: schedule_yaml.submit_ahead,
-                            next_run,
                         }
                     })
                         .await

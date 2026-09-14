@@ -29,7 +29,6 @@ use crate::poller::Service;
 use crate::scheduler::Scheduler;
 use crate::signals::Signals;
 use crate::toolkit::Toolkit;
-use crate::cron_trigger::CronTrigger;
 use crate::crud::schedule::{InsertScheduleData, InsertScheduleDataInput, Schedule, SelectSchedulesData, SelectSchedulesDataFilter};
 use crate::crud::schedule_job::{InsertScheduleJobData, InsertScheduleJobDataInput};
 
@@ -223,16 +222,16 @@ impl TestDb {
         self.seed_schedule_with(schedule_id, cron, submit_ahead, true, None, &["job"]).await
     }
 
-    /// The same schedule, retired on the given day — for the case where `get_next_run`
-    /// runs out of occurrences and there is nothing left to keep submitted.
+    /// The same schedule, retired on the given day — for the case where the cron runs out
+    /// of occurrences and there is nothing left to keep submitted.
     pub async fn seed_schedule_ending(&self, schedule_id: &str, cron: &str, submit_ahead: u32, end_date: NaiveDate) -> Schedule {
         self.seed_schedule_with(schedule_id, cron, submit_ahead, false, Some(end_date), &["job"]).await
     }
 
     /// Re-seeding the same id replaces the row rather than colliding on its primary key,
     /// because that is what a restart does: `CRUD::init` rebuilds `mem` from the YAML, and
-    /// the reconcile's restart case is exactly "the same schedule, seeded again, with
-    /// next_run recomputed from now".
+    /// the reconcile's restart case is exactly "the same schedule, seeded again, with its
+    /// occurrences recomputed from now".
     ///
     /// The delete is raw SQL rather than a CRUD method because nothing in the program
     /// deletes a schedule — `mem` is dropped wholesale at shutdown instead.
@@ -280,10 +279,6 @@ impl TestDb {
 
         let cron_schedule = <cron::Schedule as std::str::FromStr>::from_str(cron).unwrap();
 
-        // Built the same way CRUD::init builds it: the trigger that computes next_run and
-        // the row it is stored on have to read the cron in the same zone.
-        let cron_trigger = CronTrigger::new(cron_schedule.clone(), chrono_tz::Tz::UTC, None, end_date);
-
         // row_id is unique per row across the seeded mem schema. Same static-counter shape
         // insert_job uses, offset well past its range so the two cannot collide, and taking
         // one id per row this call writes - the schedule, plus one per schedule_job.
@@ -307,7 +302,6 @@ impl TestDb {
                 end_date,
                 disabled,
                 submit_ahead,
-                next_run: cron_trigger.get_next_run(None),
             },
         }).await.unwrap();
 

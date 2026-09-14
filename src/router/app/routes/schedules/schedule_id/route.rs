@@ -3,6 +3,7 @@ use axum::response::{Html, IntoResponse};
 use askama::Template;
 use axum::Extension;
 
+use crate::cron_trigger::CronTrigger;
 use crate::crud::CRUD;
 use crate::crud::schedule::{SelectSchedulesData, SelectSchedulesDataFilter, SelectSchedulesDataSort};
 use crate::crud::schedule_job::{ScheduleJob, SelectScheduleJobsData, SelectScheduleJobsDataFilter, SelectScheduleJobsDataSort};
@@ -64,6 +65,10 @@ pub async fn schedule_id_route(
         offset: None,
     }).await.unwrap_or_default();
 
+    // Derived here rather than stored on the row: it is the next occurrence after now,
+    // which is a different answer every time it is asked and nothing else reads.
+    let next_run = CronTrigger::from_schedule(&schedule).get_next_run(None);
+
     let template = ScheduleIdRouteTemplate {
         current_route: "schedules",
         theme: state.toolkit.app_config.ui.theme.as_attribute(),
@@ -75,7 +80,7 @@ pub async fn schedule_id_route(
             timezone: schedule.timezone,
             start_date: schedule.start_date.map(|date| date.to_string()),
             end_date: schedule.end_date.map(|date| date.to_string()),
-            next_run: schedule.next_run.map(format::timestamp),
+            next_run: next_run.map(format::timestamp),
             disabled: schedule.disabled,
         },
         schedule_jobs,

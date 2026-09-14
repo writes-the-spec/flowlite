@@ -9,7 +9,6 @@ CREATE TABLE schedule (
     end_date DATE,
     disabled INTEGER NOT NULL,
     submit_ahead INTEGER NOT NULL,
-    next_run TIMESTAMP,
     PRIMARY KEY (schedule_id),
     UNIQUE (row_id)
 );

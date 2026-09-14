@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use cron::Schedule as CronSchedule;
 use serde::{Deserialize, Serialize};
@@ -17,7 +16,6 @@ pub struct InsertScheduleDataInput {
     pub end_date: Option<NaiveDate>,
     pub disabled: bool,
     pub submit_ahead: u32,
-    pub next_run: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,22 +44,6 @@ pub struct SelectSchedulesData {
     pub offset: Option<u32>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UpdateSchedulesDataFilter {
-    pub schedule_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UpdateSchedulesDataInput {
-    pub next_run: Option<Option<DateTime<Utc>>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UpdateSchedulesData {
-    pub filter: UpdateSchedulesDataFilter,
-    pub input: UpdateSchedulesDataInput,
-}
-
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
 pub struct Schedule {
     pub schedule_id: String,
@@ -73,7 +55,6 @@ pub struct Schedule {
     pub end_date: Option<NaiveDate>,
     pub disabled: bool,
     pub submit_ahead: u32,
-    pub next_run: Option<DateTime<Utc>>,
 }
 
 
@@ -83,7 +64,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         sqlx::query(
-            "INSERT INTO mem.schedule (row_id, schedule_id, name, description, cron, timezone, start_date, end_date, disabled, submit_ahead, next_run) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO mem.schedule (row_id, schedule_id, name, description, cron, timezone, start_date, end_date, disabled, submit_ahead) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(data.input.row_id as i64)
         .bind(&data.input.schedule_id)
@@ -95,7 +76,6 @@ impl CRUD {
         .bind(&data.input.end_date)
         .bind(if data.input.disabled { 1 } else { 0 })
         .bind(data.input.submit_ahead as i64)
-        .bind(&data.input.next_run)
         .execute(executor)
         .await?;
 
@@ -106,7 +86,7 @@ impl CRUD {
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
-        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT schedule_id, name, description, cron, timezone, start_date, end_date, disabled, submit_ahead, next_run FROM mem.schedule WHERE 1=1");
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT schedule_id, name, description, cron, timezone, start_date, end_date, disabled, submit_ahead FROM mem.schedule WHERE 1=1");
 
         if let Some(schedule_id) = &data.filter.schedule_id {
             query_builder.push(" AND schedule_id = ");
@@ -159,37 +139,5 @@ impl CRUD {
         let schedules = self.select_schedules(executor, data).await?;
 
         Ok(schedules.into_iter().next())
-    }
-
-    pub async fn update_schedules<'e, E>(&self, executor: E, data: &UpdateSchedulesData) -> anyhow::Result<()>
-    where
-        E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
-    {
-        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("UPDATE mem.schedule SET ");
-
-        let mut separated = query_builder.separated(", ");
-
-        if let Some(next_run) = &data.input.next_run {
-            separated.push("next_run = ");
-            separated.push_bind_unseparated(next_run);
-        }
-
-        if data.input.next_run.is_none() {
-            return Ok(());
-        }
-
-        query_builder.push(" WHERE 1=1");
-
-        if let Some(schedule_id) = &data.filter.schedule_id {
-            query_builder.push(" AND schedule_id = ");
-            query_builder.push_bind(schedule_id);
-        }
-
-        query_builder
-            .build()
-            .execute(executor)
-            .await?;
-
-        Ok(())
     }
 }

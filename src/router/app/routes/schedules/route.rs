@@ -4,6 +4,7 @@ use askama::Template;
 use axum::Extension;
 use serde::Deserialize;
 
+use crate::cron_trigger::CronTrigger;
 use crate::crud::CRUD;
 use crate::crud::schedule::{SelectSchedulesData, SelectSchedulesDataFilter, SelectSchedulesDataSort};
 use crate::router::app::app_state::AppState;
@@ -76,12 +77,17 @@ pub async fn schedules_route(
     let has_next_page = schedules.len() > page_size as usize;
 
     let entries = schedules.into_iter().take(page_size as usize).map(|schedule| {
+
+        // Derived here rather than stored on the row: it is the next occurrence after now,
+        // which is a different answer every time it is asked and nothing else reads.
+        let next_run = CronTrigger::from_schedule(&schedule).get_next_run(None);
+
         ScheduleEntry {
             schedule_id: schedule.schedule_id,
             name: schedule.name,
             description: schedule.description,
             cron: schedule.cron,
-            next_run: schedule.next_run.map(format::timestamp),
+            next_run: next_run.map(format::timestamp),
             disabled: schedule.disabled,
         }
     }).collect();

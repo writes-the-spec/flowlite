@@ -3,13 +3,16 @@ use chrono::{DateTime, Utc};
 use crate::cron_trigger::CronTrigger;
 use crate::crud::CRUD;
 use crate::crud::job_run::{DeleteJobRunsData, DeleteJobRunsDataFilter, JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
-use crate::crud::schedule::{Schedule, SelectSchedulesData, SelectSchedulesDataFilter, SelectSchedulesDataSort, UpdateSchedulesData, UpdateSchedulesDataFilter, UpdateSchedulesDataInput};
+use crate::crud::schedule::{Schedule, SelectSchedulesData, SelectSchedulesDataFilter, SelectSchedulesDataSort};
 use crate::crud::schedule_job::{ScheduleJob, SelectScheduleJobsData, SelectScheduleJobsDataFilter, SelectScheduleJobsDataSort};
 use crate::poller::Service;
 use crate::signals::Signals;
 use crate::toolkit::Toolkit;
 
 
+/// Keeps each schedule's next `submit_ahead` occurrences submitted as job runs, submitting
+/// what is missing and deleting what is surplus. It never decides a run is due - moving a
+/// run from Submitted to Queued at its time is JobRunReleaser's job.
 pub struct Scheduler {
     pub toolkit: Arc<Toolkit>,
     pub crud: Arc<CRUD>,
@@ -34,245 +37,46 @@ impl Scheduler {
         }
     }
 
-    /// Every schedule, not only the due ones. A disabled schedule still has outstanding
-    /// runs to take back, and "due" is no longer a question this service asks at all —
-    /// JobRunReleaser asks it, of the runs rather than of the schedules.
-    async fn get_schedules(&self) -> anyhow::Result<Vec<Schedule>> {
-
-        self.crud.select_schedules(
-            &*self.conn_pool,
-            &SelectSchedulesData {
-                filter: SelectSchedulesDataFilter {
-                    schedule_id: None,
-                    name_like: None,
-                    disabled: None,
-                },
-                sort: Some(SelectSchedulesDataSort::RowId),
-                limit: None,
-                offset: None,
-            },
-        ).await
-    }
-
-    /// The next `submit_ahead` occurrences strictly after `now`: what ought to exist.
-    ///
-    /// Empty for a disabled schedule, and short or empty for one past its end_date, where
-    /// `get_next_run` returns None. Both fall out of the same rule rather than needing a
-    /// branch of their own.
-    ///
-    /// `now` is passed in rather than read here, so that this and the past-due guard in
-    /// `delete_surplus_runs` derive from one instant. Reading the clock a second time - even
-    /// only as late as the cron parse - opens a window in which an occurrence falls after
-    /// the first read and before the second: it would then be missing from `desired` while
-    /// still counting as future-dated to every guard, and the reconcile would delete the run
-    /// at the exact moment it came due. Same argument as the one that moved
-    /// `delete_job_runs_with_children`'s id resolution inside its transaction, one level up.
-    fn desired_occurrences(&self, schedule: &Schedule, now: DateTime<Utc>) -> Vec<DateTime<Utc>> {
-
-        if schedule.disabled {
-            return Vec::new();
-        }
-
-        let cron_trigger = CronTrigger::from_schedule(schedule);
-
-        let mut occurrences = Vec::new();
-        let mut from = Some(now);
-
-        for _ in 0..schedule.submit_ahead {
-            let Some(next) = cron_trigger.get_next_run(from) else {
-                break;
-            };
-
-            occurrences.push(next);
-            from = Some(next);
-        }
-
-        occurrences
-    }
-
     /// Makes this schedule's outstanding runs equal its desired occurrences.
     ///
-    /// Convergent on purpose: every case in the design - a first pass, a top-up after a
-    /// release, a restart, submit_ahead changing either way, an edited cron, a disabled
-    /// schedule - is the same two loops finding a different difference. There is no
-    /// "what changed?" to get wrong, because nothing is remembered between passes.
+    /// Convergent, not additive: nothing is remembered between passes, so every case - a
+    /// first pass, a top-up after a release, a restart, an edited cron - is the same two
+    /// loops finding a different difference.
     async fn reconcile_schedule(&self, schedule: &Schedule) -> anyhow::Result<()> {
 
         let now = self.toolkit.get_current_ts();
-        let desired = self.desired_occurrences(schedule, now);
+
+        // One instant, passed to every step below: read twice, an occurrence could fall
+        // between the reads, go missing from `desired` while still counting as future-dated,
+        // and have its run deleted at the moment it came due. A schedule that is disabled or
+        // past its end_date desires nothing, both out of `get_next_runs` itself.
+        let desired = CronTrigger::from_schedule(schedule)
+            .get_next_runs(Some(now), schedule.submit_ahead);
+
         let schedule_jobs = self.schedule_jobs(schedule).await?;
         let outstanding = self.outstanding_runs(Some(&schedule.schedule_id)).await?;
 
         self.delete_surplus_runs(&outstanding, &desired, &schedule_jobs, schedule, now).await?;
 
-        // Read after the deletes rather than reused from above, and across every status
-        // rather than only Submitted - see `runs_of_schedule` for why the submit side has to
-        // ask the wider question.
+        // Read after the deletes, and across every status rather than only Submitted - see
+        // `runs_of_schedule` for why the submit side asks the wider question.
         let dealt_with = self.runs_of_schedule(&schedule.schedule_id).await?;
 
         self.submit_missing_runs(&dealt_with, &desired, &schedule_jobs, schedule).await?;
 
-        // next_run is no longer a cursor - nothing advances it, and nothing reads it to
-        // decide anything. It is written here purely so the dashboard can show when a
-        // schedule next runs.
-        self.crud.update_schedules(
-            &*self.conn_pool,
-            &UpdateSchedulesData {
-                input: UpdateSchedulesDataInput {
-                    next_run: Some(desired.first().copied()),
-                },
-                filter: UpdateSchedulesDataFilter {
-                    schedule_id: Some(schedule.schedule_id.clone()),
-                },
-            },
-        ).await?;
-
         Ok(())
     }
 
-    /// The runs this reconcile may still take back: `Submitted` and nothing else, because
-    /// a run that has left that status has been acted on by somebody and is no longer this
-    /// service's to remove.
-    async fn outstanding_runs(&self, schedule_id: Option<&str>) -> anyhow::Result<Vec<JobRun>> {
-
-        self.crud.select_job_runs(
-            &*self.conn_pool,
-            &SelectJobRunsData {
-                filter: SelectJobRunsDataFilter {
-                    id: None,
-                    job_id: None,
-                    status: Some(JobRunStatus::Submitted),
-                    statuses: None,
-                    schedule_id: schedule_id.map(str::to_string),
-                },
-                sort: Some(SelectJobRunsDataSort::Id),
-                limit: None,
-                offset: None,
-            },
-        ).await
-    }
-
-    /// Every run this schedule has ever produced, whatever became of it - which is the set
-    /// the submit side has to compare against.
+    /// Deletes the outstanding runs the schedule no longer asks for, keyed on the job and
+    /// the instant together - the same pair the submit side writes on, so that a job dropped
+    /// from `jobs:` does not keep a run some other job's occurrence still wants.
     ///
-    /// "Have I already dealt with this occurrence?" is not the same question as "is a
-    /// Submitted row still sitting there?", and reading only the latter answers the former
-    /// wrongly in the one case the design itself creates. Stopping a future-dated scheduled
-    /// run is allowed; `JobRunReleaser` then releases it early, `JobRunDispatcher` skips it,
-    /// and the row leaves `Submitted` while its instant is still in the future. A submit
-    /// side that only looked for `Submitted` rows would find the occurrence missing, submit
-    /// it again, and the run the user cancelled would happen anyway - once per attempt,
-    /// leaving a trail of skipped rows behind it.
+    /// Future-dated only: a run whose instant has arrived belongs to JobRunReleaser. Both
+    /// conditions are restated on the delete's own filter, which re-resolves inside its
+    /// transaction, in case the releaser promoted the row since the select read it.
     ///
-    /// The delete side must keep asking the narrower question: it may only ever remove runs
-    /// nobody has acted on.
-    async fn runs_of_schedule(&self, schedule_id: &str) -> anyhow::Result<Vec<JobRun>> {
-
-        self.crud.select_job_runs(
-            &*self.conn_pool,
-            &SelectJobRunsData {
-                filter: SelectJobRunsDataFilter {
-                    id: None,
-                    job_id: None,
-                    status: None,
-                    statuses: None,
-                    schedule_id: Some(schedule_id.to_string()),
-                },
-                sort: Some(SelectJobRunsDataSort::Id),
-                limit: None,
-                offset: None,
-            },
-        ).await
-    }
-
-    /// The jobs the schedule names right now, in the order the YAML lists them.
-    ///
-    /// Read once per pass and handed to both halves of the reconcile, so that "does this
-    /// schedule still want this job?" is one answer rather than two reads that could
-    /// disagree across the delete and the submit.
-    async fn schedule_jobs(&self, schedule: &Schedule) -> anyhow::Result<Vec<ScheduleJob>> {
-
-        self.crud.select_schedule_jobs(
-            &*self.conn_pool,
-            &SelectScheduleJobsData {
-                filter: SelectScheduleJobsDataFilter {
-                    schedule_id: Some(schedule.schedule_id.clone()),
-                    job_id: None,
-                },
-                sort: Some(SelectScheduleJobsDataSort::RowId),
-                limit: None,
-                offset: None,
-            }
-        ).await
-    }
-
-    /// Takes back the runs of schedules that are no longer there.
-    ///
-    /// A schedule deleted from the YAML has no row to reconcile, so no schedule's own pass
-    /// can ever collect its leftovers: `delete_surplus_runs` scopes every delete to the
-    /// schedule it is reconciling. Left alone, those runs would be released and would run,
-    /// which is the one thing deleting a schedule is supposed to stop.
-    ///
-    /// It runs once per pass, at the head of `select`, because that is the shape of the
-    /// question - "is anything outstanding for a schedule that is gone?" is asked of the
-    /// whole set, not of one row - and because `Service::Row` is `Schedule`, so `handle`
-    /// has nothing to be called with.
-    ///
-    /// Same terms as `delete_surplus_runs`: future-dated only, status re-asserted. A run
-    /// carrying no schedule_id is a manual submission and belongs to nobody's reconcile.
-    async fn delete_orphaned_runs(&self, schedules: &[Schedule]) -> anyhow::Result<()> {
-
-        let now = self.toolkit.get_current_ts();
-
-        for run in self.outstanding_runs(None).await? {
-
-            let Some(schedule_id) = run.schedule_id.clone() else {
-                continue;
-            };
-
-            if run.scheduled_at <= now
-                || schedules.iter().any(|schedule| schedule.schedule_id == schedule_id)
-            {
-                continue;
-            }
-
-            let mut conn = self.conn_pool.acquire().await?;
-
-            self.crud.delete_job_runs_with_children(&mut conn, &DeleteJobRunsData {
-                filter: DeleteJobRunsDataFilter {
-                    id: Some(run.id),
-                    job_id: None,
-                    status: Some(JobRunStatus::Submitted),
-                    schedule_id: Some(schedule_id),
-                    scheduled_at_gt: Some(now),
-                },
-            }).await?;
-
-            self.signals.publish();
-        }
-
-        Ok(())
-    }
-
-    /// Deletes the outstanding runs the schedule no longer asks for.
-    ///
-    /// "No longer asks for" is keyed on the job and the instant together, the same pair the
-    /// submit side writes on. Keyed on the instant alone, a job dropped from the schedule's
-    /// `jobs:` list would keep its already-submitted future run and go on to execute it,
-    /// because some other job of the same schedule still wants that occurrence.
-    ///
-    /// Only ones still in the future: a run whose instant has arrived belongs to
-    /// JobRunReleaser, and deleting it here would cancel a run at the moment it came due.
-    /// The same conditions are restated on the delete's own filter, because the releaser may
-    /// have promoted the row since this select read it - and the delete re-resolves that
-    /// filter inside its transaction, so the row it checks is the row it removes. The check
-    /// on the run's due time is the weaker half of that: `scheduled_at` is never updated
-    /// after insert, so a stale reading of it is not a thing that can happen.
-    ///
-    /// Deleted rather than stopped. A run cancelled before it was ever due never happened,
-    /// and settling it as skipped would put it in the history beside runs that were
-    /// genuinely stood down. This reconcile also recreates whatever it wrongly removes on
-    /// the next pass, which a stop row would not.
+    /// Deleted rather than stopped: a run cancelled before it was ever due never happened,
+    /// and a stop row would sit in the history beside runs genuinely stood down.
     async fn delete_surplus_runs(
         &self,
         outstanding: &[JobRun],
@@ -288,32 +92,15 @@ impl Scheduler {
                 continue;
             }
 
-            let mut conn = self.conn_pool.acquire().await?;
-
-            self.crud.delete_job_runs_with_children(&mut conn, &DeleteJobRunsData {
-                filter: DeleteJobRunsDataFilter {
-                    id: Some(run.id),
-                    job_id: None,
-                    status: Some(JobRunStatus::Submitted),
-                    schedule_id: Some(schedule.schedule_id.clone()),
-                    scheduled_at_gt: Some(now),
-                },
-            }).await?;
-
-            self.signals.publish();
+            self.delete_run(run.id, &schedule.schedule_id, now).await?;
         }
 
         Ok(())
     }
 
-    /// Submits what is missing, per occurrence and per job.
-    ///
-    /// Per job rather than per occurrence, because a schedule can name several and one of
-    /// them failing to submit must not leave the rest of that occurrence permanently
-    /// half-written: the next pass finds the gap and fills it.
-    ///
-    /// `dealt_with` is every run of this schedule whatever its status, not only the
-    /// outstanding ones - see `runs_of_schedule`.
+    /// Submits whichever (occurrence, job) pair has no run yet, exactly as `job submit`
+    /// does. `dealt_with` is every run of this schedule whatever its status - see
+    /// `runs_of_schedule`.
     async fn submit_missing_runs(
         &self,
         dealt_with: &[JobRun],
@@ -323,7 +110,7 @@ impl Scheduler {
     ) -> anyhow::Result<()> {
 
         for occurrence in desired {
-            for schedule_job in schedule_jobs.iter() {
+            for schedule_job in schedule_jobs {
 
                 let already_submitted = dealt_with.iter().any(|run| {
                     run.job_id == schedule_job.job_id
@@ -337,8 +124,8 @@ impl Scheduler {
                 let mut conn = self.conn_pool.acquire().await?;
 
                 // Reported and stepped over rather than raised on: one unsubmittable job
-                // must not stop the schedule's other jobs, or the other schedules, and the
-                // next pass will try it again anyway.
+                // must not cost the schedule's other jobs their occurrence, and the next
+                // pass tries it again anyway.
                 if let Err(e) = self.crud.submit_job(
                     &mut conn,
                     &schedule_job.job_id,
@@ -362,29 +149,156 @@ impl Scheduler {
         Ok(())
     }
 
+    /// Takes back the runs of schedules that are no longer in the YAML. Their rows are gone,
+    /// so no schedule's own reconcile can collect them - `delete_surplus_runs` only ever
+    /// touches the schedule it is reconciling.
+    ///
+    /// Same terms as `delete_surplus_runs`: future-dated only, status re-asserted. A run
+    /// carrying no schedule_id is a manual submission and belongs to nobody's reconcile.
+    async fn delete_orphaned_runs(&self, schedules: &[Schedule]) -> anyhow::Result<()> {
+
+        let now = self.toolkit.get_current_ts();
+
+        for run in self.outstanding_runs(None).await? {
+
+            let Some(schedule_id) = run.schedule_id.clone() else {
+                continue;
+            };
+
+            if run.scheduled_at <= now
+                || schedules.iter().any(|schedule| schedule.schedule_id == schedule_id)
+            {
+                continue;
+            }
+
+            self.delete_run(run.id, &schedule_id, now).await?;
+        }
+
+        Ok(())
+    }
+
+    /// The filter restates what the caller already checked, because the delete re-resolves
+    /// it inside its own transaction - so the row it checks is the row it removes.
+    async fn delete_run(&self, id: i64, schedule_id: &str, now: DateTime<Utc>) -> anyhow::Result<()> {
+
+        let mut conn = self.conn_pool.acquire().await?;
+
+        self.crud.delete_job_runs_with_children(&mut conn, &DeleteJobRunsData {
+            filter: DeleteJobRunsDataFilter {
+                id: Some(id),
+                job_id: None,
+                status: Some(JobRunStatus::Submitted),
+                schedule_id: Some(schedule_id.to_string()),
+                scheduled_at_gt: Some(now),
+            },
+        }).await?;
+
+        self.signals.publish();
+
+        Ok(())
+    }
+
+    /// Every schedule, not only the due ones: a disabled schedule still has outstanding runs
+    /// to take back, and "due" is not a question this service asks at all.
+    async fn get_schedules(&self) -> anyhow::Result<Vec<Schedule>> {
+
+        self.crud.select_schedules(
+            &*self.conn_pool,
+            &SelectSchedulesData {
+                filter: SelectSchedulesDataFilter {
+                    schedule_id: None,
+                    name_like: None,
+                    disabled: None,
+                },
+                sort: Some(SelectSchedulesDataSort::RowId),
+                limit: None,
+                offset: None,
+            },
+        ).await
+    }
+
+    /// The runs this reconcile may still take back: Submitted and nothing else, because a
+    /// run that has left that status has been acted on by somebody else.
+    async fn outstanding_runs(&self, schedule_id: Option<&str>) -> anyhow::Result<Vec<JobRun>> {
+
+        self.crud.select_job_runs(
+            &*self.conn_pool,
+            &SelectJobRunsData {
+                filter: SelectJobRunsDataFilter {
+                    id: None,
+                    job_id: None,
+                    status: Some(JobRunStatus::Submitted),
+                    statuses: None,
+                    schedule_id: schedule_id.map(str::to_string),
+                },
+                sort: Some(SelectJobRunsDataSort::Id),
+                limit: None,
+                offset: None,
+            },
+        ).await
+    }
+
+    /// Every run this schedule has ever produced, whatever became of it - what the submit
+    /// side compares against, since "have I dealt with this occurrence?" is a wider question
+    /// than "is a Submitted row still sitting there?".
+    ///
+    /// Stopping a future-dated scheduled run is allowed: the row leaves Submitted while its
+    /// instant is still ahead. A submit side reading only Submitted would find the
+    /// occurrence missing and run the job the user just cancelled.
+    async fn runs_of_schedule(&self, schedule_id: &str) -> anyhow::Result<Vec<JobRun>> {
+
+        self.crud.select_job_runs(
+            &*self.conn_pool,
+            &SelectJobRunsData {
+                filter: SelectJobRunsDataFilter {
+                    id: None,
+                    job_id: None,
+                    status: None,
+                    statuses: None,
+                    schedule_id: Some(schedule_id.to_string()),
+                },
+                sort: Some(SelectJobRunsDataSort::Id),
+                limit: None,
+                offset: None,
+            },
+        ).await
+    }
+
+    /// Read once per pass and handed to both halves of the reconcile, so "does this schedule
+    /// still want this job?" is one answer rather than two reads that could disagree.
+    async fn schedule_jobs(&self, schedule: &Schedule) -> anyhow::Result<Vec<ScheduleJob>> {
+
+        self.crud.select_schedule_jobs(
+            &*self.conn_pool,
+            &SelectScheduleJobsData {
+                filter: SelectScheduleJobsDataFilter {
+                    schedule_id: Some(schedule.schedule_id.clone()),
+                    job_id: None,
+                },
+                sort: Some(SelectScheduleJobsDataSort::RowId),
+                limit: None,
+                offset: None,
+            }
+        ).await
+    }
+
 }
 
 
-/// Compared at whole seconds. A cron occurrence has no sub-second part, but an instant that
-/// has been through the database has been through a string, and an equality that depends on
-/// that round-trip being exact would fail by deleting and resubmitting the same run every
-/// pass — the most expensive way this could go wrong and the least visible.
-///
-/// Both the delete's "is this still wanted?" and the submit's "have I written this already?"
-/// ask through here, so the rule is stated once rather than once per caller.
-fn is_same_instant(at: DateTime<Utc>, occurrences: &[DateTime<Utc>]) -> bool {
-    occurrences.iter().any(|occurrence| occurrence.timestamp() == at.timestamp())
-}
-
-
-/// Whether the schedule still asks for this exact run: the job is one it names now, and the
-/// instant is one it wants now. Both halves, because the submit side writes a run per
-/// (job, occurrence) pair and a delete side that asked less would never take back a run
-/// whose job has left the schedule while the occurrence itself is still wanted.
+/// Whether the schedule still asks for this exact run. Both halves, because the submit side
+/// writes a run per (job, occurrence) pair.
 fn is_still_wanted(run: &JobRun, desired: &[DateTime<Utc>], schedule_jobs: &[ScheduleJob]) -> bool {
 
     schedule_jobs.iter().any(|schedule_job| schedule_job.job_id == run.job_id)
         && is_same_instant(run.scheduled_at, desired)
+}
+
+
+/// Compared at whole seconds: an instant that has been through the database has been through
+/// a string, and an equality depending on that round-trip being exact would delete and
+/// resubmit the same run every pass.
+fn is_same_instant(at: DateTime<Utc>, occurrences: &[DateTime<Utc>]) -> bool {
+    occurrences.iter().any(|occurrence| occurrence.timestamp() == at.timestamp())
 }
 
 
@@ -404,13 +318,9 @@ impl Service for Scheduler {
         let schedules = self.get_schedules().await?;
 
         // Swept here rather than in handle, because a schedule that is gone is not one of
-        // the rows handle will be called with - see `delete_orphaned_runs`.
-        //
-        // Reported and stepped over rather than raised on, the same way an unsubmittable job
-        // is: an error out of `select` kills the Poller's loop and costs every schedule its
-        // reconcile until the backoff is over, and the sweep re-selects the same run next
-        // pass - so one row nothing can delete would stall the whole Scheduler indefinitely.
-        // A run left behind for a pass is the smaller failure, and the next pass retries it.
+        // the rows handle will be called with. Reported and stepped over rather than raised
+        // on: an error out of select kills the Poller's loop for the whole backoff, so one
+        // undeletable row would stall every schedule's reconcile, pass after pass.
         if let Err(e) = self.delete_orphaned_runs(&schedules).await {
             eprintln!("Scheduler could not sweep orphaned runs: {e:?}");
         }
@@ -422,6 +332,7 @@ impl Service for Scheduler {
         self.reconcile_schedule(schedule).await
     }
 }
+
 
 #[cfg(test)]
 mod tests {

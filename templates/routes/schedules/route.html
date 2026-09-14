@@ -26,9 +26,9 @@
     </form>
 </div>
 
-{# `next_run` is live state: the Scheduler rewrites it on every fire. Rendered once, this
-   page ages into showing a time receding into the past, which reads as a stuck scheduler
-   on the one screen whose job is answering "did my cron fire?". #}
+{# `next_run` is computed per request, from now. Rendered once, this page ages into showing
+   a time receding into the past, which reads as a stuck scheduler on the one screen whose
+   job is answering "did my cron fire?". #}
 <div
     id="schedules"
     hx-get="{{ self_href }}"

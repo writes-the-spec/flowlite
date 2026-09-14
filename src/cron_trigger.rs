@@ -6,34 +6,21 @@ use cron::Schedule as CronSchedule;
 use std::str::FromStr;
 use crate::crud::schedule::Schedule;
 
-/// A schedule's cron expression, the zone it is read in, and the dates that bound it.
+/// A schedule's cron expression, the zone it is read in, and everything that bounds it -
+/// its dates, and whether it is disabled at all.
 ///
 /// The fields are private because the bounds are the whole point: reading `schedule` and
-/// calling `after()` on it directly would skip `start_date` and `end_date`, which is the
-/// one thing `get_next_run` is here to apply.
+/// calling `after()` on it directly would skip them, which is the one thing `get_next_run`
+/// is here to apply.
 pub struct CronTrigger {
     schedule: CronSchedule,
     timezone: Tz,
     start_date: Option<NaiveDate>,
     end_date: Option<NaiveDate>,
+    disabled: bool,
 }
 
 impl CronTrigger {
-
-    pub fn new(
-        schedule: CronSchedule,
-        timezone: Tz,
-        start_date: Option<NaiveDate>,
-        end_date: Option<NaiveDate>,
-    ) -> Self {
-
-        Self {
-            schedule,
-            timezone,
-            start_date,
-            end_date,
-        }
-    }
 
     pub fn from_schedule(
         schedule: &Schedule,
@@ -43,6 +30,7 @@ impl CronTrigger {
             timezone: Tz::from_str(&*schedule.timezone).unwrap(),
             start_date: schedule.start_date,
             end_date: schedule.end_date,
+            disabled: schedule.disabled,
         }
     }
 
@@ -51,7 +39,30 @@ impl CronTrigger {
         self.get_next_run_tz(start_from).map(|dt| dt.with_timezone(&Utc))
     }
 
+    /// The next `count` runs, each one the next after the last. Short or empty once
+    /// `get_next_run` stops returning anything, which is how `end_date` ends the list.
+    pub fn get_next_runs(&self, start_from: Option<DateTime<Utc>>, count: u32) -> Vec<DateTime<Utc>> {
+
+        let mut runs = Vec::new();
+        let mut from = start_from;
+
+        for _ in 0..count {
+            let Some(next) = self.get_next_run(from) else {
+                break;
+            };
+
+            runs.push(next);
+            from = Some(next);
+        }
+
+        runs
+    }
+
     fn get_next_run_tz(&self, start_from: Option<DateTime<Utc>>) -> Option<DateTime<Tz>> {
+
+        if self.disabled {
+            return None;
+        }
 
         let start_from = match start_from {
             Some(t) => t.with_timezone(&self.timezone),
@@ -95,12 +106,17 @@ mod tests {
 
     /// The repo's own spelling: six fields, seconds first, as `.data/schedules/` uses.
     fn trigger(cron: &str, start_date: Option<NaiveDate>, end_date: Option<NaiveDate>) -> CronTrigger {
-        CronTrigger::new(
-            CronSchedule::from_str(cron).unwrap(),
-            Tz::Europe__Vienna,
+        CronTrigger::from_schedule(&Schedule {
+            schedule_id: "nightly".to_string(),
+            name: "nightly".to_string(),
+            description: String::new(),
+            cron: cron.to_string(),
+            timezone: Tz::Europe__Vienna.to_string(),
             start_date,
             end_date,
-        )
+            disabled: false,
+            submit_ahead: 1,
+        })
     }
 
     fn at(instant: &str) -> DateTime<Utc> {
@@ -118,6 +134,34 @@ mod tests {
         assert_eq!(
             nightly.get_next_run(Some(at("2026-06-10T00:00:00Z"))),
             Some(at("2026-06-10T01:30:00Z")),
+        );
+    }
+
+    /// Each run is the next one after the last, so asking for several walks the cron
+    /// forward rather than returning the same instant over and over.
+    #[test]
+    fn several_runs_come_back_one_after_another() {
+        let nightly = trigger("0 30 3 * * *", None, None);
+
+        assert_eq!(
+            nightly.get_next_runs(Some(at("2026-06-10T00:00:00Z")), 3),
+            vec![
+                at("2026-06-10T01:30:00Z"),
+                at("2026-06-11T01:30:00Z"),
+                at("2026-06-12T01:30:00Z"),
+            ],
+        );
+    }
+
+    /// The bounds apply per run, so a list that reaches the end date stops there instead of
+    /// being padded out to the count asked for.
+    #[test]
+    fn the_list_stops_at_the_end_date_rather_than_filling_the_count() {
+        let nightly = trigger("0 30 3 * * *", None, date("2026-12-31"));
+
+        assert_eq!(
+            nightly.get_next_runs(Some(at("2026-12-30T04:00:00Z")), 3),
+            vec![at("2026-12-31T02:30:00Z")],
         );
     }
 

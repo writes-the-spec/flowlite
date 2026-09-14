@@ -18,7 +18,7 @@ This is also what decides an insert's return type — `()` for a caller-assigned
 
 If a column's type has a natural empty value — `''` for text, `0` for a counter, `'[]'` for a JSON list — *that value is the null*: declare `NOT NULL` and write the empty value explicitly on insert.
 
-A nullable column is only right when "no value" is a real, distinct state that no ordinary value can express. In this schema that means timestamps which have not happened yet (`started_at`, `finished_at`, `next_run`) and genuinely open-ended bounds (`start_date`, `end_date`).
+A nullable column is only right when "no value" is a real, distinct state that no ordinary value can express. In this schema that means timestamps which have not happened yet (`started_at`, `finished_at`) and genuinely open-ended bounds (`start_date`, `end_date`).
 
 The rule keeps two spellings of "nothing" from coexisting. Once a text column is nullable, `NULL` and `''` both mean "no output", and no query can be written without an `OR ... IS NULL`. It pays off in Rust too: a `NOT NULL` column is a plain `String`/`u32` rather than an `Option<...>`, so no call site has to invent a meaning for `None`.
 

@@ -6,8 +6,8 @@
 
 <a href="/schedules" class="back">← Schedules</a>
 
-{# See the schedules list: `next_run` is rewritten on every fire, so this page re-asks for
-   itself rather than ageing into a stale answer. #}
+{# See the schedules list: `next_run` is computed from now, so this page re-asks for itself
+   rather than ageing into a stale answer. #}
 <div
     id="schedule"
     hx-get="/schedules/{{ schedule.schedule_id }}"
