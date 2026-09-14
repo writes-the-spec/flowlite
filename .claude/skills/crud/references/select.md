@@ -74,7 +74,7 @@ Column list is explicit (`SELECT a, b, c FROM ...`), never `SELECT *` — the co
 
 - **Equality**: `AND col = <bind>`, guarded by `if let Some(v) = &data.filter.col`.
 - **Substring match**: `name_like: Option<String>` binds `format!("%{}%", name)` against `LIKE` — see `SelectJobsDataFilter::name_like` in [src/crud/job.rs](../../../../src/crud/job.rs) and `SelectSchedulesDataFilter::name_like`.
-- **Comparison**: name the field after the operator, e.g. `next_run_lt: Option<DateTime<Utc>>` → `AND next_run < <bind>` (see [src/crud/schedule.rs](../../../../src/crud/schedule.rs)).
+- **Comparison**: name the field after the operator, e.g. `scheduled_at_gt: Option<DateTime<Utc>>` → `AND scheduled_at > <bind>` (see [src/crud/job_run.rs](../../../../src/crud/job_run.rs)).
 - **Bool**: bind `if v { 1 } else { 0 }`, same as insert.
 - **Enum**: bind directly, same as insert (`status: Option<JobRunStatus>`).
 - **Any of several**: `statuses: Option<Vec<JobRunStatus>>` pushes `AND status IN (?, ?, ...)` with `query_builder.separated(", ")`. It sits *beside* the singular `status` rather than replacing it — "exactly this one" and "any of these" are different questions, and every existing caller keeps passing `statuses: None`. Pass a non-empty list: `IN ()` is not valid SQLite.

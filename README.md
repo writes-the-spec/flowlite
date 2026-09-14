@@ -151,10 +151,16 @@ cron takes the outstanding ones back.
 
 A run **snapshots the job as it stands when the run is written**, not as it stands when it
 starts. With `submit_ahead: 1` and a 03:00 cron, tonight's run was written just after 03:00
-yesterday, so editing that job's YAML this morning does not change it — the edit reaches
-the occurrence submitted after it, which with `submit_ahead: 7` is a week out. To make an
-edit apply to the next occurrence, delete that schedule's outstanding run and let the next
-pass write it again from the current file.
+yesterday, so editing that job's YAML this morning does not change it. A running server makes
+this worse, not better: the YAML is read once, at startup, into an in-memory schema with no
+watcher and nothing that reloads it, so every run a server submits carries the file as it
+stood when *that server* started, however long ago that was — not the file on disk now. An
+edit takes effect only once the server has been restarted, and even then only for runs whose
+occurrence changes as a result: the reconcile replaces an outstanding run whose occurrence the
+schedule no longer wants, but a run whose occurrence is unchanged keeps the definition it was
+already submitted with. There is no user-facing way to delete a run to force this sooner — no
+CLI command, MCP tool or dashboard action does it; restarting the server is what makes an edit
+current.
 
 ## Command inputs
 
