@@ -494,6 +494,39 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
 
 .section__note { color: var(--text-2); font-size: 0.8125rem; }
 
+/* A section that opens on click. `details` draws its own marker and its own `display`,
+   both of which fight `.section__head`, so the marker is dropped and the caret redrawn
+   here - from the same rule colour as everything else, turning with the state. */
+.collapse > summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.collapse > summary::-webkit-details-marker { display: none; }
+
+/* Closed, the head's rule is the only thing under it, so the space it reserves for a body
+   would read as a gap the panel forgot to fill. */
+.collapse:not([open]) > summary { margin-bottom: 0; }
+
+.collapse__title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.collapse__caret {
+    width: 0.375rem;
+    height: 0.375rem;
+    border-right: 1.5px solid var(--text-2);
+    border-bottom: 1.5px solid var(--text-2);
+    transform: rotate(-45deg);
+    transition: transform 120ms ease;
+}
+
+.collapse[open] .collapse__caret { transform: rotate(45deg); }
+
+.collapse > summary:hover .collapse__caret { border-color: var(--text); }
+
 /* ---------- Timeline (job run detail) ---------- */
 
 .timeline {

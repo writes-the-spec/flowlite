@@ -59,15 +59,25 @@
     </div>
 </div>
 
-<div class="section section--cap">
-    <div class="section__head">
-        <h2 class="section__title">Concurrency limits</h2>
+{# Closed until asked for: the limits are a reference the reader consults when a run is
+   not starting, not something to watch, and the runs above are what the page is for. A
+   native `details` rather than a scripted panel so it still opens with scripting off, and
+   so the keyboard and the screen reader get the disclosure for free. #}
+<details class="section section--cap collapse">
+    <summary class="section__head">
+        <h2 class="section__title collapse__title"><span class="collapse__caret"></span>Concurrency limits</h2>
         <span class="section__note">From [concurrency_limits] and orchestrator.max_running_attempts in config.toml — updates every {{ refresh_seconds }} seconds</span>
-    </div>
+    </summary>
 
     {# Its own polled fragment, not part of the page: `in use` is live state, and a panel
        that answered "why is nothing running" with a frozen count would be worse than no
-       panel, sitting as it does beside a run table that keeps moving. #}
+       panel, sitting as it does beside a run table that keeps moving.
+
+       It keeps polling while closed - a closed panel is cheap to refresh against a local
+       SQLite file, and it means opening one shows the counts rather than a spinner. For
+       the same reason the summary carries no count of its own: the page around it is not
+       polled, so a number rendered there would be the frozen one this panel exists to
+       avoid. #}
     <div
         id="limits"
         hx-get="/limits-panel"
@@ -79,6 +89,6 @@
             <span>Loading limits</span>
         </div>
     </div>
-</div>
+</details>
 
 {% endblock %}
