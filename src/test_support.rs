@@ -202,17 +202,31 @@ impl TestDb {
     /// from a YAML file. Needs a `TestDb` built with `new_with_migrated_mem`, since `mem`
     /// is left unmigrated under the plain `new` — see this struct's own doc comment.
     pub async fn seed_schedule(&self, schedule_id: &str, cron: &str, submit_ahead: u32) -> Schedule {
-        self.seed_schedule_with(schedule_id, cron, submit_ahead, false, None).await
+        self.seed_schedule_with(schedule_id, cron, submit_ahead, false, None, &["job"]).await
+    }
+
+    /// The same schedule naming the jobs given, for the cases that turn on *which* jobs a
+    /// schedule lists — a job dropped from `jobs:` between two passes, above all. Each id is
+    /// given a `mem.job` row if it does not have one, since `schedule_job.job_id` is a
+    /// foreign key.
+    pub async fn seed_schedule_with_jobs(
+        &self,
+        schedule_id: &str,
+        cron: &str,
+        submit_ahead: u32,
+        job_ids: &[&str],
+    ) -> Schedule {
+        self.seed_schedule_with(schedule_id, cron, submit_ahead, false, None, job_ids).await
     }
 
     pub async fn seed_disabled_schedule(&self, schedule_id: &str, cron: &str, submit_ahead: u32) -> Schedule {
-        self.seed_schedule_with(schedule_id, cron, submit_ahead, true, None).await
+        self.seed_schedule_with(schedule_id, cron, submit_ahead, true, None, &["job"]).await
     }
 
     /// The same schedule, retired on the given day — for the case where `get_next_run`
     /// runs out of occurrences and there is nothing left to keep submitted.
     pub async fn seed_schedule_ending(&self, schedule_id: &str, cron: &str, submit_ahead: u32, end_date: NaiveDate) -> Schedule {
-        self.seed_schedule_with(schedule_id, cron, submit_ahead, false, Some(end_date)).await
+        self.seed_schedule_with(schedule_id, cron, submit_ahead, false, Some(end_date), &["job"]).await
     }
 
     /// Re-seeding the same id replaces the row rather than colliding on its primary key,
@@ -229,23 +243,27 @@ impl TestDb {
         submit_ahead: u32,
         disabled: bool,
         end_date: Option<NaiveDate>,
+        job_ids: &[&str],
     ) -> Schedule {
 
         // `insert_job` is unconditional and `mem.job` is keyed on `job_id`, so a second
         // seeding of the same schedule would fail on the primary key rather than on the
         // behaviour under test — and re-seeding is the whole point of this helper.
-        let existing = self.crud.select_job(
-            &*self.conn_pool,
-            &SelectJobsData {
-                filter: SelectJobsDataFilter { job_id: Some("job".to_string()), name_like: None },
-                sort: None,
-                limit: Some(1),
-                offset: None,
-            },
-        ).await.unwrap();
+        for job_id in job_ids {
 
-        if existing.is_none() {
-            self.insert_job("job", 0).await;
+            let existing = self.crud.select_job(
+                &*self.conn_pool,
+                &SelectJobsData {
+                    filter: SelectJobsDataFilter { job_id: Some(job_id.to_string()), name_like: None },
+                    sort: None,
+                    limit: Some(1),
+                    offset: None,
+                },
+            ).await.unwrap();
+
+            if existing.is_none() {
+                self.insert_job(job_id, 0).await;
+            }
         }
 
         sqlx::query("DELETE FROM mem.schedule_job WHERE schedule_id = ?")
@@ -268,11 +286,14 @@ impl TestDb {
 
         // row_id is unique per row across the seeded mem schema. Same static-counter shape
         // insert_job uses, offset well past its range so the two cannot collide, and taking
-        // two ids per call - one for the schedule, one for its schedule_job.
+        // one id per row this call writes - the schedule, plus one per schedule_job.
         static NEXT_SCHEDULE_ROW_ID: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(9_000);
 
-        let row_id = NEXT_SCHEDULE_ROW_ID.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+        let row_id = NEXT_SCHEDULE_ROW_ID.fetch_add(
+            job_ids.len() as u64 + 1,
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         self.crud.insert_schedule(&*self.conn_pool, &InsertScheduleData {
             input: InsertScheduleDataInput {
@@ -290,20 +311,21 @@ impl TestDb {
             },
         }).await.unwrap();
 
-        self.crud.insert_schedule_job(&*self.conn_pool, &InsertScheduleJobData {
-            input: InsertScheduleJobDataInput {
-                row_id: row_id + 1,
-                schedule_id: schedule_id.to_string(),
-                job_id: "job".to_string(),
-                parameters: BTreeMap::new(),
-            },
-        }).await.unwrap();
+        for (offset, job_id) in job_ids.iter().enumerate() {
+            self.crud.insert_schedule_job(&*self.conn_pool, &InsertScheduleJobData {
+                input: InsertScheduleJobDataInput {
+                    row_id: row_id + 1 + offset as u64,
+                    schedule_id: schedule_id.to_string(),
+                    job_id: job_id.to_string(),
+                    parameters: BTreeMap::new(),
+                },
+            }).await.unwrap();
+        }
 
         self.crud.select_schedule(&*self.conn_pool, &SelectSchedulesData {
             filter: SelectSchedulesDataFilter {
                 schedule_id: Some(schedule_id.to_string()),
                 name_like: None,
-                next_run_lt: None,
                 disabled: None,
             },
             sort: None,
@@ -880,7 +902,6 @@ impl TestDb {
                     job_id: None,
                     status: None,
                     statuses: None,
-                    scheduled_at_lte: None,
                     schedule_id: None,
                 },
                 sort: None,
