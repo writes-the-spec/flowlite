@@ -10,14 +10,6 @@ use crate::signals::Signals;
 use chrono::Utc;
 
 
-/// Whether the ladder settled the attempt for good or handed it on to the next pass,
-/// which is what decides whether the process goes back into TaskRunAttemptChildren.
-enum Settled {
-    Terminal,
-    Running,
-}
-
-
 /// Waits on the child process TaskRunAttemptDispatcher spawned for every running task
 /// run attempt and finishes the attempt once its process exits, runs past its timeout
 /// or gets aborted. Takes the process out of TaskRunAttemptChildren and owns it from
@@ -53,190 +45,151 @@ impl TaskRunAttemptMonitor {
         }
     }
 
-    /// Settles a running attempt as exactly one outcome, from the process
-    /// `TaskRunAttemptChildren` hands over — or as `Invalid` when it holds none, which is
-    /// a row this program cannot read rather than an outcome it can name.
+    /// Takes the process `TaskRunAttemptChildren` holds for the attempt — or settles it
+    /// `Invalid` when it holds none, since that is a row this program cannot read rather
+    /// than an outcome it can name — then dispatches the write for whatever
+    /// `derive_next_status` decides. Deciding only reads.
     ///
-    /// **Order decides precedence**: a real outcome outranks a stop, so a process that has
-    /// already exited reports its exit status rather than being recorded as killed.
-    /// `settle_for_running` guards nothing, so it has to stay last.
-    ///
-    /// **In the two rungs that kill, the kill comes before the drain.** A pipe closes when
-    /// the process holding it dies, and that EOF is what lets `finish_reading` return;
-    /// draining first waits out the whole reader EOF timeout.
+    /// `Running` is the only outcome that hands the process back; every other arm consumes
+    /// it. A failure to derive puts it back untouched rather than settling `Invalid`: it may
+    /// be a transient failure, and the process is still there to ask about next pass.
     async fn handle_running_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         let Some(mut task_run_attempt_child) = self.children.remove(task_run_attempt.id).await else {
-            return self.settle_for_invalid(task_run_attempt).await;
+            return self.set_to_invalid(task_run_attempt, None).await;
         };
 
-        match self.settle_task_run_attempt(task_run_attempt, &mut task_run_attempt_child).await {
-            Ok(Settled::Terminal) => Ok(()),
-            Ok(Settled::Running) => {
+        match self.derive_next_status(task_run_attempt, &mut task_run_attempt_child).await {
+            Ok(TaskRunAttemptStatus::Succeeded) =>
+                self.set_to_succeeded(task_run_attempt, &mut task_run_attempt_child).await,
+            Ok(TaskRunAttemptStatus::Failed) =>
+                self.set_to_failed(task_run_attempt, &mut task_run_attempt_child).await,
+            Ok(TaskRunAttemptStatus::TimedOut) =>
+                self.set_to_timed_out(task_run_attempt, &mut task_run_attempt_child).await,
+            Ok(TaskRunAttemptStatus::Aborted) =>
+                self.set_to_aborted(task_run_attempt, &mut task_run_attempt_child).await,
+            Ok(TaskRunAttemptStatus::Running) => {
+                let result = self.record_output(task_run_attempt, &mut task_run_attempt_child).await;
                 self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
-                Ok(())
+                result
             },
-            // Put the process back rather than dropping it. A dropped Child is not killed,
-            // so it would keep running unowned, whatever it had written would be lost, and
-            // the next pass would find the row Running with no process and settle it
-            // Invalid — an unknown ending for an attempt that was merely interrupted.
-            Err(e) => {
+            Ok(_) => self.set_to_invalid(task_run_attempt, Some(&mut task_run_attempt_child)).await,
+            Err(error) => {
                 self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
-                Err(e)
+                Err(error)
             },
         }
     }
 
-    /// Runs the ladder and reports which side of it claimed the attempt, so the caller
-    /// alone decides whether the process goes back into TaskRunAttemptChildren. Keeping
-    /// that decision in one place is what lets the error path put it back too.
-    async fn settle_task_run_attempt(
+    /// Derives a running attempt's next status: its exit status if it has one, else whether
+    /// it is past its timeout, else whether its job run was stopped, else still running.
+    ///
+    /// A real outcome outranks a stop, so an exited process reports its exit status and one
+    /// past its timeout reports that, ahead of a stop reaching it on the same pass.
+    async fn derive_next_status(
         &self,
         task_run_attempt: &TaskRunAttempt,
         task_run_attempt_child: &mut TaskRunAttemptChild,
-    ) -> anyhow::Result<Settled> {
+    ) -> anyhow::Result<TaskRunAttemptStatus> {
 
-        if self.settle_for_succeeded(task_run_attempt, task_run_attempt_child).await? {
-            return Ok(Settled::Terminal);
+        if let Some(exit_status) = task_run_attempt_child.child.try_wait()? {
+            return Ok(if exit_status.success() {
+                TaskRunAttemptStatus::Succeeded
+            } else {
+                TaskRunAttemptStatus::Failed
+            });
         }
 
-        if self.settle_for_failed(task_run_attempt, task_run_attempt_child).await? {
-            return Ok(Settled::Terminal);
+        if Utc::now() > task_run_attempt_child.times_out_at {
+            return Ok(TaskRunAttemptStatus::TimedOut);
         }
 
-        if self.settle_for_timed_out(task_run_attempt, task_run_attempt_child).await? {
-            return Ok(Settled::Terminal);
+        if self.is_job_run_stopped(task_run_attempt).await? {
+            return Ok(TaskRunAttemptStatus::Aborted);
         }
 
-        if self.settle_for_aborted(task_run_attempt, task_run_attempt_child).await? {
-            return Ok(Settled::Terminal);
-        }
-
-        if self.settle_for_running(task_run_attempt, task_run_attempt_child).await? {
-            return Ok(Settled::Running);
-        }
-
-        self.settle_unclaimed(task_run_attempt, task_run_attempt_child).await?;
-
-        Ok(Settled::Terminal)
+        Ok(TaskRunAttemptStatus::Running)
     }
 
-    /// Unreachable while `settle_for_running` claims unconditionally. See
-    /// `JobRunDispatcher::settle_unclaimed` for why it settles rather than raises.
+    /// Settles a row this program cannot account for: either the restart path, where
+    /// `TaskRunAttemptChildren` holds no process for it at all, or a row
+    /// `derive_next_status` failed to decide or derived as something this match doesn't
+    /// handle — unreachable while its checks cover every case. See
+    /// `JobRunDispatcher::set_to_invalid` for why it settles rather than raises.
     ///
-    /// Alone among the five it holds a live process, so the group is killed first — before
-    /// the drain, for the reason `settle_for_timed_out` gives — rather than leaked.
-    async fn settle_unclaimed(
+    /// A held process is killed before the drain, for the reason `set_to_timed_out` gives,
+    /// rather than leaked; with none held there is nothing to kill or drain.
+    async fn set_to_invalid(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        task_run_attempt_child: Option<&mut TaskRunAttemptChild>,
+    ) -> anyhow::Result<()> {
+
+        match task_run_attempt_child {
+            Some(task_run_attempt_child) => {
+
+                eprintln!(
+                    "Task run attempt {} was claimed by no outcome, or its next status could \
+                     not be derived. Killing it and settling it invalid. This is a bug.",
+                    task_run_attempt.id,
+                );
+
+                task_run_attempt_child.kill_process_group().await;
+
+                self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
+            },
+            None => eprintln!(
+                "Task run attempt {} was running with no process to wait on, so its outcome \
+                 is unknown and it has been settled invalid. Its command may still be \
+                 running.",
+                task_run_attempt.id,
+            ),
+        }
+
+        self.finish_task_run_attempt(
+            task_run_attempt,
+            TaskRunAttemptStatus::Invalid,
+        ).await
+    }
+
+    /// Succeeds the attempt whose process `derive_next_status` found exited zero.
+    async fn set_to_succeeded(
         &self,
         task_run_attempt: &TaskRunAttempt,
         task_run_attempt_child: &mut TaskRunAttemptChild,
     ) -> anyhow::Result<()> {
-
-        eprintln!(
-            "Task run attempt {} was claimed by no outcome: its process had neither \
-             succeeded nor failed, it was not past its timeout, its job run was not \
-             stopped, and it was not kept running. Killing it and settling it invalid. \
-             This is a bug.",
-            task_run_attempt.id,
-        );
-
-        task_run_attempt_child.kill_process_group().await;
-
-        self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
-
-        self.finish_task_run_attempt(
-            task_run_attempt,
-            TaskRunAttemptStatus::Invalid,
-        ).await
-    }
-
-    /// Settles an attempt whose process this program does not hold — the restart path,
-    /// since `TaskRunAttemptChildren` holds only processes this run of the program spawned.
-    ///
-    /// No exit status, no group to kill, nothing left to drain, so no outcome can honestly
-    /// be claimed. Settled rather than raised on: a row left Running strands the task run
-    /// and job run above it, holding a parallel slot for ever.
-    async fn settle_for_invalid(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
-
-        eprintln!(
-            "Task run attempt {} was running with no process to wait on, so its outcome is \
-             unknown and it has been settled invalid. Its command may still be running.",
-            task_run_attempt.id,
-        );
-
-        self.finish_task_run_attempt(
-            task_run_attempt,
-            TaskRunAttemptStatus::Invalid,
-        ).await
-    }
-
-    /// Succeeds the attempt once its process has exited zero.
-    ///
-    /// Asks `try_wait` for itself rather than sharing one call with `settle_for_failed`, so
-    /// each status is its own rung of the ladder. `try_wait` caches the status it reaped,
-    /// so asking twice is a repeated question, not a race.
-    async fn settle_for_succeeded(
-        &self,
-        task_run_attempt: &TaskRunAttempt,
-        task_run_attempt_child: &mut TaskRunAttemptChild,
-    ) -> anyhow::Result<bool> {
-
-        let Some(exit_status) = task_run_attempt_child.child.try_wait()? else {
-            return Ok(false);
-        };
-
-        if !exit_status.success() {
-            return Ok(false);
-        }
 
         self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
 
         self.finish_task_run_attempt(
             task_run_attempt,
             TaskRunAttemptStatus::Succeeded,
-        ).await?;
-
-        Ok(true)
+        ).await
     }
 
-    /// Fails the attempt once its process has exited non-zero. Nothing is retried here:
-    /// TaskRunMonitor reads this status and decides whether another attempt goes in.
-    async fn settle_for_failed(
+    /// Fails the attempt whose process `derive_next_status` found exited non-zero. Nothing
+    /// is retried here: TaskRunMonitor reads this status and decides whether another
+    /// attempt goes in.
+    async fn set_to_failed(
         &self,
         task_run_attempt: &TaskRunAttempt,
         task_run_attempt_child: &mut TaskRunAttemptChild,
-    ) -> anyhow::Result<bool> {
-
-        let Some(exit_status) = task_run_attempt_child.child.try_wait()? else {
-            return Ok(false);
-        };
-
-        if exit_status.success() {
-            return Ok(false);
-        }
+    ) -> anyhow::Result<()> {
 
         self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
 
         self.finish_task_run_attempt(
             task_run_attempt,
             TaskRunAttemptStatus::Failed,
-        ).await?;
-
-        Ok(true)
+        ).await
     }
 
     /// Kills the process that ran past its timeout and times the attempt out.
-    async fn settle_for_timed_out(
+    async fn set_to_timed_out(
         &self,
         task_run_attempt: &TaskRunAttempt,
         task_run_attempt_child: &mut TaskRunAttemptChild,
-    ) -> anyhow::Result<bool> {
-
-        let timed_out = Utc::now() > task_run_attempt_child.times_out_at;
-
-        if !timed_out {
-            return Ok(false);
-        }
+    ) -> anyhow::Result<()> {
 
         // The kill comes before the drain: killing is what closes the pipes, and a closed
         // pipe is the EOF that ends a reader. Draining first would wait out the whole of
@@ -248,25 +201,17 @@ impl TaskRunAttemptMonitor {
         self.finish_task_run_attempt(
             task_run_attempt,
             TaskRunAttemptStatus::TimedOut,
-        ).await?;
-
-        Ok(true)
+        ).await
     }
 
     /// Kills the process of a stopped job run and aborts the attempt.
-    async fn settle_for_aborted(
+    async fn set_to_aborted(
         &self,
         task_run_attempt: &TaskRunAttempt,
         task_run_attempt_child: &mut TaskRunAttemptChild,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<()> {
 
-        let job_run_stopped = self.is_job_run_stopped(task_run_attempt).await?;
-
-        if !job_run_stopped {
-            return Ok(false);
-        }
-
-        // Killed before drained, for the reason `settle_for_timed_out` gives.
+        // Killed before drained, for the reason `set_to_timed_out` gives.
         task_run_attempt_child.kill_process_group().await;
 
         self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
@@ -274,24 +219,7 @@ impl TaskRunAttemptMonitor {
         self.finish_task_run_attempt(
             task_run_attempt,
             TaskRunAttemptStatus::Aborted,
-        ).await?;
-
-        Ok(true)
-    }
-
-    /// Leaves the attempt running: persists what its process has written so far. Takes
-    /// every attempt the outcomes above did not, so the bail is unreachable until one of
-    /// them grows a guard. Putting the process back for the next pass belongs to
-    /// `handle_running_task_run_attempt`, which does it for the error path too.
-    async fn settle_for_running(
-        &self,
-        task_run_attempt: &TaskRunAttempt,
-        task_run_attempt_child: &mut TaskRunAttemptChild,
-    ) -> anyhow::Result<bool> {
-
-        self.record_output(task_run_attempt, task_run_attempt_child).await?;
-
-        Ok(true)
+        ).await
     }
 
     /// Records whatever the readers have delivered so far and returns immediately.
@@ -508,9 +436,10 @@ mod tests {
         db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await
     }
 
-    /// Pins `settle_for_succeeded` ahead of `settle_for_running`. `settle_for_running`
-    /// guards nothing and returns true for every attempt it is asked about, so moving it
-    /// up leaves this attempt Running for ever and the task run never finishes.
+    /// Pins the exit-status check ahead of `Running` in `derive_next_status`. `Running` is
+    /// what is left once nothing else claims the attempt, so an exited process has to be
+    /// read before it, or this attempt is left Running for ever and the task run never
+    /// finishes.
     #[tokio::test]
     async fn an_exited_process_reports_the_status_it_exited_with() {
         let db = TestDb::new().await;
@@ -526,7 +455,7 @@ mod tests {
         );
     }
 
-    /// The same for `settle_for_failed`, the other half of the exit status.
+    /// The same for a non-zero exit, the other half of the exit status.
     #[tokio::test]
     async fn a_process_that_exited_non_zero_fails_the_attempt() {
         let db = TestDb::new().await;
@@ -542,7 +471,7 @@ mod tests {
         );
     }
 
-    /// Pins `settle_for_timed_out` ahead of `settle_for_running`.
+    /// Pins the timeout check ahead of `Running` in `derive_next_status`.
     #[tokio::test]
     async fn a_process_past_its_deadline_times_the_attempt_out() {
         let db = TestDb::new().await;
@@ -562,9 +491,9 @@ mod tests {
         );
     }
 
-    /// Pins `settle_for_aborted` ahead of `settle_for_running`, and behind the two above
-    /// it: a stop kills a process that is still going, but does not outrank an outcome the
-    /// process reached on its own.
+    /// Pins the stop check ahead of `Running` in `derive_next_status`, and behind the exit
+    /// status and timeout checks: a stop kills a process that is still going, but does not
+    /// outrank an outcome the process reached on its own.
     #[tokio::test]
     async fn a_stopped_job_run_aborts_a_process_that_is_still_running() {
         let db = TestDb::new().await;
@@ -603,9 +532,10 @@ mod tests {
         );
     }
 
-    /// Pins `settle_for_succeeded` ahead of `settle_for_timed_out`: a process that got
-    /// there on its own before the poll pass noticed the deadline reports what it exited
-    /// with, rather than being recorded as killed by a timeout that never killed it.
+    /// Pins the exit-status check ahead of the timeout check in `derive_next_status`: a
+    /// process that got there on its own before the poll pass noticed the deadline reports
+    /// what it exited with, rather than being recorded as killed by a timeout that never
+    /// killed it.
     #[tokio::test]
     async fn an_exit_status_outranks_a_timeout() {
         let db = TestDb::new().await;
@@ -625,9 +555,9 @@ mod tests {
         );
     }
 
-    /// Pins `settle_for_timed_out` ahead of `settle_for_aborted`, the other half of "a real
-    /// outcome outranks a stop": a process past its deadline reports the timeout even though
-    /// its job run was stopped and it was killed on this same pass.
+    /// Pins the timeout check ahead of the stop check in `derive_next_status`, the other
+    /// half of "a real outcome outranks a stop": a process past its deadline reports the
+    /// timeout even though its job run was stopped and it was killed on this same pass.
     #[tokio::test]
     async fn a_timeout_outranks_a_stop() {
         let db = TestDb::new().await;
@@ -803,9 +733,9 @@ mod tests {
             Utc::now() + TimeDelta::seconds(3600),
         ).await;
 
-        // Closing the pool fails the stop lookup in `settle_for_aborted`, which is the
-        // first rung of the ladder that asks the database anything for a process that is
-        // still running and not yet past its deadline.
+        // Closing the pool fails the stop lookup in `derive_next_status`, which is the
+        // first check that asks the database anything for a process that is still running
+        // and not yet past its deadline.
         db.conn_pool.close().await;
 
         assert!(db.task_run_attempt_monitor().handle(&task_run_attempt).await.is_err());
@@ -842,7 +772,7 @@ mod tests {
         // The process is handed back for the next pass, so this is the one outcome that
         // leaves one running: take it back and kill it rather than outliving the suite.
         let mut handed_back = db.children.remove(task_run_attempt.id).await
-            .expect("settle_for_running must put the process back for the next pass");
+            .expect("the Running arm must put the process back for the next pass");
 
         handed_back.child.kill().await.unwrap();
     }
@@ -989,8 +919,8 @@ mod tests {
         assert_eq!(streams.stderr, "err\n");
     }
 
-    /// Unreachable while `settle_for_running` claims unconditionally, so it is called
-    /// directly. Unlike the other four this one holds a live process, so settling the row
+    /// Unreachable while `derive_next_status` covers every case, so it is called directly.
+    /// Unlike the other four writers this one holds a live process, so settling the row
     /// terminal without killing its group would leak the command it can no longer account
     /// for - the pid file proves the kill happened.
     #[tokio::test]
@@ -1011,7 +941,7 @@ mod tests {
 
         let mut child = db.children.remove(task_run_attempt.id).await.unwrap();
 
-        db.task_run_attempt_monitor().settle_unclaimed(&task_run_attempt, &mut child).await.unwrap();
+        db.task_run_attempt_monitor().set_to_invalid(&task_run_attempt, Some(&mut child)).await.unwrap();
 
         assert_eq!(
             db.task_run_attempt(task_run_attempt.id).await.status,
