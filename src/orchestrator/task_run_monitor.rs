@@ -48,23 +48,16 @@ impl TaskRunMonitor {
         }
     }
 
-    /// Derives a running task run's next status from its last attempt alone: the guards
-    /// are exclusive — the last attempt has one status — so the order carries nothing and
-    /// follows the other two monitors only so all three read alike.
-    ///
-    /// A failed attempt with retries left inserts its next attempt here rather than
-    /// reporting a status the caller would have to insert it for: starting the next
-    /// attempt is not a task run status, so `Running` alone would lose the distinction
-    /// from an attempt already in flight. An attempt none of these claims errs, unreachable
-    /// while this covers every attempt status.
+    /// Derives the next status from the last attempt's status alone; a failed attempt with
+    /// retries left inserts its next attempt here, since starting one is not itself a
+    /// status. Errs, unreachable, if no rung claims the status.
     async fn derive_next_status(
         &self,
         task_run: &TaskRun,
         last_task_run_attempt: &TaskRunAttempt,
     ) -> anyhow::Result<TaskRunStatus> {
 
-        // An unknown outranks every named outcome: the task run cannot claim an ending it
-        // does not know. Never retried — flowlite has no idea what that attempt did.
+        // Never retried — flowlite has no idea what that attempt did.
         if last_task_run_attempt.status == TaskRunAttemptStatus::Invalid {
             return Ok(TaskRunStatus::Invalid);
         }
@@ -73,13 +66,13 @@ impl TaskRunMonitor {
             return Ok(TaskRunStatus::Succeeded);
         }
 
-        // The attempt services still own the attempt.
+        // Still owned by the attempt services.
         if !last_task_run_attempt.status.is_finished() {
             return Ok(TaskRunStatus::Running);
         }
 
         if last_task_run_attempt.status == TaskRunAttemptStatus::Failed {
-            // Attempts count from 1, so the task run gets max_retries + 1 of them.
+            // Attempts count from 1, so max_retries + 1 of them run in all.
             if last_task_run_attempt.attempt < task_run.max_retries + 1 {
                 self.insert_next_attempt(task_run, last_task_run_attempt).await?;
                 return Ok(TaskRunStatus::Running);
@@ -91,9 +84,8 @@ impl TaskRunMonitor {
             return Ok(TaskRunStatus::TimedOut);
         }
 
-        // Both stop outcomes land here: killed mid-flight, or skipped before the command
-        // started. A skipped attempt does **not** make the task run Skipped — it had
-        // started and may have left output, so Skipped would claim nothing ran.
+        // Killed mid-flight or skipped before starting; either way not Skipped — the task
+        // run had started and may have left output.
         if last_task_run_attempt.status.is_stopped() {
             return Ok(TaskRunStatus::Aborted);
         }
@@ -105,9 +97,7 @@ impl TaskRunMonitor {
         ))
     }
 
-    /// Starts the next attempt for a failed task run that still has retries left. Writes no
-    /// task run status — it stays Running for the whole retry loop — and the row goes in
-    /// immediately for `TaskRunAttemptDispatcher` to hold until `retry_delay` passes.
+    /// Inserts a task run's next retry attempt; the task run itself stays Running.
     async fn insert_next_attempt(
         &self,
         task_run: &TaskRun,
@@ -133,10 +123,6 @@ impl TaskRunMonitor {
         Ok(())
     }
 
-    /// Settles the task run invalid: either its last attempt reported Invalid, or
-    /// `derive_next_status` could not read it at all — unreachable while it covers every
-    /// attempt status. See `JobRunDispatcher::settle_unclaimed` for why the latter settles
-    /// rather than raises.
     async fn set_to_invalid(&self, task_run: &TaskRun) -> anyhow::Result<()> {
         self.update_task_run_status(task_run, TaskRunStatus::Invalid).await
     }
@@ -145,7 +131,6 @@ impl TaskRunMonitor {
         self.update_task_run_status(task_run, TaskRunStatus::Succeeded).await
     }
 
-    /// Fails the task run once its attempts are used up.
     async fn set_to_failed(&self, task_run: &TaskRun) -> anyhow::Result<()> {
         self.update_task_run_status(task_run, TaskRunStatus::Failed).await
     }
@@ -176,11 +161,8 @@ impl TaskRunMonitor {
 
     }
 
-    /// The attempt the ladder decides from: the task run's last, or a fresh attempt 1 when
-    /// it has none.
-    ///
-    /// Every attempt a task run ever gets is made in this monitor, which is what keeps the
-    /// unique index on (task_run_id, attempt) the concern of one file.
+    /// The attempt to derive from: the task run's last, or a fresh attempt 1. Every attempt
+    /// is made here, keeping the unique index on (task_run_id, attempt) one file's concern.
     async fn get_or_start_task_run_attempt(&self, task_run: &TaskRun) -> anyhow::Result<TaskRunAttempt> {
 
         if let Some(last_task_run_attempt) = self.select_last_task_run_attempt(task_run).await? {
