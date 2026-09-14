@@ -8,9 +8,8 @@ use crate::signals::Signals;
 use chrono::Utc;
 
 
-/// Picks up queued job runs, oldest first, and settles each one as skipped, still
-/// queued or running, deriving which before writing any of it. Hands off to JobRunMonitor
-/// through the job run status only.
+/// Picks up queued job runs, oldest first, and settles each one skipped, still queued or
+/// running. Hands off to JobRunMonitor through the job run status only.
 pub struct JobRunDispatcher {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
@@ -32,25 +31,23 @@ impl JobRunDispatcher {
         }
     }
 
-    /// Settles a queued run as whatever `derive_next_status` decides. Decision and write
-    /// are split on purpose: deriving only reads, and each `set_to_*` just trusts the
-    /// result rather than re-deriving any part of it.
+    /// Dispatches the write for whatever `derive_next_status` decides. Deciding only reads.
     async fn handle_queued_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         match self.derive_next_status(job_run).await {
             Ok(JobRunStatus::Skipped) => self.set_to_skipped(job_run).await,
-            Ok(JobRunStatus::Queued) => self.set_to_queued(),
+            Ok(JobRunStatus::Queued) => Ok(()),
             Ok(JobRunStatus::Running) => self.set_to_running(job_run).await,
             Ok(_) | Err(_) => self.set_to_invalid(job_run).await,
         }
     }
 
-    /// Derives a queued run's next status without writing anything: skipped if stopped,
-    /// running if a slot is free, else left queued behind max_parallel_runs.
+    /// Derives a queued run's next status: skipped if stopped, running if a slot is free,
+    /// else still queued behind max_parallel_runs.
     ///
-    /// Stopped is asked first and returned on early, rather than gathered into a tuple
-    /// alongside max_parallel_runs: unlike a due time, that check is a read, and a stopped
-    /// run's job is never asked about a slot it will not take.
+    /// Stopped is checked first and returned on early rather than gathered into a tuple: it
+    /// is the one of the two that is a read, and a stopped run's job is never asked about a
+    /// slot it will not take.
     async fn derive_next_status(&self, job_run: &JobRun) -> anyhow::Result<JobRunStatus> {
 
         if self.is_job_run_stopped(job_run).await? {
@@ -64,9 +61,9 @@ impl JobRunDispatcher {
         Ok(JobRunStatus::Running)
     }
 
-    /// Settles a run `derive_next_status` failed to decide, invalidating its task runs too.
-    /// Unreachable — `is_stopped`/`is_at_max_parallel_runs` cover every case above. See
-    /// `JobRunMonitor::settle_unclaimed` for why it settles rather than raises.
+    /// Settles a run `derive_next_status` failed to decide. Unreachable — its two checks
+    /// cover every case. See `JobRunMonitor::settle_unclaimed` for why it settles rather
+    /// than raises.
     async fn set_to_invalid(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         eprintln!(
@@ -85,12 +82,11 @@ impl JobRunDispatcher {
         Ok(())
     }
 
-    /// Skips the job run, and with it all of its task runs, none of which ever started.
+    /// Skips the job run and all of its task runs, none of which ever started.
     ///
-    /// `JobRunReleaser::set_to_skipped` is the same outcome one status earlier, for a
-    /// run stopped before it was ever released, and both go through `skip_job_run` so that
-    /// neither can write half the pair. They select on disjoint statuses, so a run is only
-    /// ever skipped by one of them.
+    /// `JobRunReleaser::set_to_skipped` is the same outcome one status earlier, for a run
+    /// stopped before it was released. Both go through `skip_job_run`, and select on
+    /// disjoint statuses, so a run is only ever skipped by one of them.
     async fn set_to_skipped(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         let mut conn = self.conn_pool.acquire().await?;
@@ -102,25 +98,12 @@ impl JobRunDispatcher {
         Ok(())
     }
 
-    /// Leaves the job run queued, writing nothing, while its job is at max_parallel_runs.
+    /// Sets the job run running, which is what makes JobRunMonitor pick it up, and releases
+    /// its task runs to TaskRunDispatcher in the same pass — the only door into `Waiting`.
     ///
-    /// The only place max_parallel_runs is enforced: submitting never rejects a job, so
-    /// every path that creates a job run queues behind this gate without knowing about it.
-    fn set_to_queued(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// Sets the job run to running, which is what makes JobRunMonitor pick it up, and
-    /// releases its task runs to TaskRunDispatcher in the same pass.
-    ///
-    /// The release is the only door into `Waiting`, which is why a run still waiting for
-    /// its due time or for a max_parallel_runs slot has no task run anything will start.
-    ///
-    /// The task runs go first because of what a crash between the two writes leaves: this
-    /// way the job run is still Queued, so the next pass settles it again. The other order
-    /// leaves a Running job run whose task runs are Planned for ever - nothing selects a
-    /// Running job run to release them, and JobRunMonitor holds it open on task runs that
-    /// can never finish.
+    /// The task runs go first: a crash between the two writes then leaves the job run still
+    /// Queued, so the next pass settles it again, rather than Running with task runs stuck
+    /// Planned for ever.
     async fn set_to_running(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         self.crud.update_task_runs(

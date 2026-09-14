@@ -42,7 +42,7 @@ impl JobRunReleaser {
         match self.derive_next_status(job_run).await {
             Ok(JobRunStatus::Skipped) => self.set_to_skipped(job_run).await,
             Ok(JobRunStatus::Queued) => self.set_to_queued(job_run).await,
-            Ok(JobRunStatus::Submitted) => self.set_to_submitted(),
+            Ok(JobRunStatus::Submitted) => Ok(()),
             Ok(_) | Err(_) => self.set_to_invalid(job_run).await,
         }
     }
@@ -96,11 +96,6 @@ impl JobRunReleaser {
 
         self.signals.publish();
 
-        Ok(())
-    }
-
-    /// Leaves the run submitted, writing nothing.
-    fn set_to_submitted(&self) -> anyhow::Result<()> {
         Ok(())
     }
 
