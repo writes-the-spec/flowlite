@@ -18,7 +18,7 @@ The job-run detail web route ([src/router/app/routes/job_runs/job_run_id/route.r
 
 ## Read by
 
-Five of the seven orchestrator services, each on every pass — a signal wake-up or the one-second interval, whichever came first: `JobRunReleaser`, `JobRunDispatcher`, `TaskRunDispatcher`, `TaskRunAttemptDispatcher` and `TaskRunAttemptMonitor`. `JobRunReleaser` reads it only to decide whether to release a `Submitted` run early, never to settle it; the other four each finish only what they own: a row that never started goes `Skipped`, an in-flight process is killed and its attempt goes `Aborted`.
+Five of the seven orchestrator services, each on every pass — a signal wake-up or the one-second interval, whichever came first: `JobRunReleaser`, `JobRunDispatcher`, `TaskRunDispatcher`, `TaskRunAttemptDispatcher` and `TaskRunAttemptMonitor`. `JobRunReleaser` skips a `Submitted` run stopped before it was ever released, and its task runs with it, through the same `CRUD::skip_job_run` `JobRunDispatcher` uses one status later; the other four each finish only what they own: a row that never started goes `Skipped`, an in-flight process is killed and its attempt goes `Aborted`.
 
 The two remaining monitors never read it. **A stopped job run's status is derived like any other** — from its task runs, once they have all settled — so the stop reaches `job_run` only as the statuses it produced. See the [orchestrator skill](../../orchestrator/SKILL.md).
 

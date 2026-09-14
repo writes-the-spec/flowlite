@@ -7,7 +7,12 @@ use crate::crud::CRUD;
 #[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum TaskRunStatus {
-    Queued,
+    /// Written with its job run, which has yet to start. Nothing dispatches a task run in
+    /// this status: `JobRunDispatcher::settle_as_running` is the only thing that moves it
+    /// out, and it only ever moves it to Waiting.
+    Planned,
+    /// Released with its job run, and waiting for the task runs it depends on.
+    Waiting,
     Running,
     Succeeded,
     Failed,
@@ -24,7 +29,8 @@ impl TaskRunStatus {
     /// stops compiling.
     pub fn is_finished(&self) -> bool {
         match self {
-            TaskRunStatus::Queued
+            TaskRunStatus::Planned
+            | TaskRunStatus::Waiting
             | TaskRunStatus::Running => false,
             TaskRunStatus::Succeeded
             | TaskRunStatus::Failed
@@ -50,7 +56,8 @@ impl TaskRunStatus {
         match self {
             TaskRunStatus::Aborted
             | TaskRunStatus::Skipped => true,
-            TaskRunStatus::Queued
+            TaskRunStatus::Planned
+            | TaskRunStatus::Waiting
             | TaskRunStatus::Running
             | TaskRunStatus::Succeeded
             | TaskRunStatus::Failed
@@ -64,7 +71,8 @@ impl TaskRunStatus {
 impl std::fmt::Display for TaskRunStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TaskRunStatus::Queued => write!(f, "queued"),
+            TaskRunStatus::Planned => write!(f, "planned"),
+            TaskRunStatus::Waiting => write!(f, "waiting"),
             TaskRunStatus::Running => write!(f, "running"),
             TaskRunStatus::Succeeded => write!(f, "succeeded"),
             TaskRunStatus::Failed => write!(f, "failed"),
@@ -397,7 +405,7 @@ mod tests {
             created_at: Utc::now(),
             started_at: None,
             finished_at: None,
-            status: TaskRunStatus::Queued,
+            status: TaskRunStatus::Waiting,
         };
 
         let value = serde_json::to_value(&task_run).unwrap();
@@ -431,7 +439,7 @@ mod tests {
                     env: BTreeMap::new(),
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
-                    status: TaskRunStatus::Queued,
+                    status: TaskRunStatus::Waiting,
                 },
             },
         ).await.unwrap();
@@ -449,7 +457,7 @@ mod tests {
         let db = crate::test_support::TestDb::new().await;
 
         let job_run = db.insert_job_run(crate::crud::job_run::JobRunStatus::Running).await;
-        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Queued).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Waiting).await;
 
         assert!(task_run.limits.0.is_empty());
     }

@@ -219,7 +219,10 @@ impl CRUD {
                         env: task.env.clone(),
                         secret_env: task.secret_env.clone(),
                         working_dir: task.working_dir.clone(),
-                        status: TaskRunStatus::Queued,
+                        // Planned, not Waiting: nothing dispatches a task run until
+                        // JobRunDispatcher starts the job run it belongs to, which is what
+                        // keeps a run due tonight from executing on the next poll pass.
+                        status: TaskRunStatus::Planned,
                     }
                 }
             ).await?;

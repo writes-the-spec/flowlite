@@ -49,7 +49,8 @@ pub fn job_run_word(status: JobRunStatus) -> &'static str {
 
 pub fn task_run_word(status: TaskRunStatus) -> &'static str {
     match status {
-        TaskRunStatus::Queued => "queued",
+        TaskRunStatus::Planned => "planned",
+        TaskRunStatus::Waiting => "waiting",
         TaskRunStatus::Running => "running",
         TaskRunStatus::Succeeded => "succeeded",
         TaskRunStatus::Failed => "failed",

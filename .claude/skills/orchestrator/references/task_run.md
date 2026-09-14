@@ -1,35 +1,38 @@
 # Task run
 
-`TaskRunStatus` lives in [src/crud/task_run.rs](../../../../src/crud/task_run.rs). One `task_run` row per task per job run, created `Queued` by `CRUD::submit_job` — for **every** task, not just the ones without dependencies. Ordering is enforced here, at dispatch time.
+`TaskRunStatus` lives in [src/crud/task_run.rs](../../../../src/crud/task_run.rs). One `task_run` row per task per job run, created `Planned` by `CRUD::submit_job` — for **every** task, not just the ones without dependencies. Ordering is enforced here, at dispatch time.
 
 | Status | Meaning |
 |---|---|
-| `Queued` | Waiting. Its dependencies may or may not be resolved yet. |
+| `Planned` | Written with its job run, which has yet to start. **Nothing dispatches it.** The job-run spelling of this is `Submitted`. |
+| `Waiting` | Released by `JobRunDispatcher::settle_as_running`, and waiting for the task runs it depends on. |
 | `Running` | Started, and owned by `TaskRunMonitor`, which decides which attempt runs next. Covers the gaps between attempts, not just the time a process is alive. |
 | `Succeeded` | Its command exited 0. |
 | `Failed` | Its command exited non-zero and no retries were left. |
 | `TimedOut` | It ran past `task_run.timeout` and no retries were left. |
 | `Aborted` | The job run was stopped after this task run started — its process killed mid-flight, or its next attempt skipped before the command began. |
-| `Skipped` | It never started: a dependency didn't succeed, or the job run was stopped while it was still `Queued`. |
+| `Skipped` | It never started: a dependency didn't succeed, or the job run was stopped while it was still `Planned` or `Waiting`. |
 
 `Skipped` also covers the ordinary dependency case, so it is not by itself a sign of a stop. There is no `Cancelled`: a stop finds a task run either not yet started (`Skipped`, written by `TaskRunDispatcher`) or already started (`Aborted`, written by `TaskRunMonitor`). **Which one it is depends on the task run's own lifecycle, not on what its last attempt says** — a task run that already burned an attempt and was waiting to retry is `Aborted`, even though the attempt that never spawned is `Skipped`.
 
-## Dispatcher: Queued → Running / Skipped
+## Dispatcher: Waiting → Running / Skipped
 
-`TaskRunDispatcher` ([src/orchestrator/task_run_dispatcher.rs](../../../../src/orchestrator/task_run_dispatcher.rs)) polls **all** `Queued` task runs, whatever their job run's status, on a signal wake-up or its one-second interval, whichever comes first. It settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened:
+`TaskRunDispatcher` ([src/orchestrator/task_run_dispatcher.rs](../../../../src/orchestrator/task_run_dispatcher.rs)) polls **all** `Waiting` task runs on a signal wake-up or its one-second interval, whichever comes first. It settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened:
+
+**It never sees a `Planned` one, and that is the whole point of the status.** This used to poll `Queued` task runs whatever their job run's status — and since `submit_job` wrote every task run `Queued` the moment the run was submitted, a run scheduled for tonight had its root task started on the next pass, hours before its `scheduled_at`, and a run held at `max_parallel_runs` ran its tasks while its job run sat `Queued` behind the gate. The release is now a status of its own, written only by `JobRunDispatcher::settle_as_running`, so "a `Waiting` task run's job run is `Running`" is an invariant rather than an accident.
 
 1. `settle_as_skipped` → `Skipped` if the **job run was stopped**, or if **any dependency finished but didn't succeed** (`Failed`, `Skipped`, `Aborted`, `TimedOut`, `Invalid`). Either way the task run can never run. `Invalid` has to be in that list: it is finished, so step 2 does not hold the dependent, and it did not succeed, so step 3 does not start it — leaving it out sent every dependent to the bail on every pass, turning one unreadable row into an unreadable subtree.
-2. `settle_as_queued` → **any dependency still `Queued` or `Running`** → the row stays `Queued` for the next tick. **It writes nothing, and exists to say so.**
-3. `settle_as_running` → `Running` with `started_at = now`, once **all dependencies have `Succeeded`**. **One status write and nothing else** — attempts are `TaskRunMonitor`'s, the first as much as the retries. This used to insert attempt 1 here first, so the monitor never saw a `Running` task run without one; the cost was a window between the two writes that a crash could stop inside, leaving an attempt against a `Queued` task run. Every later pass then hit the unique index on `(task_run_id, attempt)` and errored, so the row never started and the job run above it held a parallel slot for ever — while `TaskRunAttemptDispatcher` ran the command anyway and nothing read the result.
+2. `settle_as_waiting` → **any dependency still unfinished** (`Planned`, `Waiting` or `Running`) → the row stays `Waiting` for the next tick. **It writes nothing, and exists to say so.**
+3. `settle_as_running` → `Running` with `started_at = now`, once **all dependencies have `Succeeded`**. **One status write and nothing else** — attempts are `TaskRunMonitor`'s, the first as much as the retries. This used to insert attempt 1 here first, so the monitor never saw a `Running` task run without one; the cost was a window between the two writes that a crash could stop inside, leaving an attempt against a `Waiting` task run. Every later pass then hit the unique index on `(task_run_id, attempt)` and errored, so the row never started and the job run above it held a parallel slot for ever — while `TaskRunAttemptDispatcher` ran the command anyway and nothing read the result.
 4. Past all three → `anyhow::bail!`. **This is the one chain that still bails**, and deliberately: steps 2 and 3 load the dependencies separately, so one failing between the two loads reaches it on an ordinary state that the next pass settles. The other five chains settle `Invalid` there instead — see [SKILL.md](../SKILL.md#the-settle-chain-and-why-its-order-matters).
 
 Step 1's two guards short-circuit in order, so a stopped job run costs one query and never loads the dependencies.
 
-Step 2 is what makes step 4 possible. By the time it is asked, step 1 has ruled out every dependency that finished without succeeding, so each one is succeeded, queued or running — and step 2 claims exactly the rows step 3 will not start. Without it, a task run nobody handled would sit at `Queued` looking exactly like one legitimately waiting on a dependency, which is the one failure this service cannot spot by watching it. Ordering it ahead of step 3 is what all three dispatchers do: skipped, queued, running.
+Step 2 is what makes step 4 possible. By the time it is asked, step 1 has ruled out every dependency that finished without succeeding, so each one is succeeded, waiting or running — and step 2 claims exactly the rows step 3 will not start. Without it, a task run nobody handled would sit at `Waiting` looking exactly like one legitimately held on a dependency, which is the one failure this service cannot spot by watching it. Ordering it ahead of step 3 is what all three dispatchers do: skipped, held, running.
 
 **Unlike the two dispatchers either side of it, step 3 keeps a guard of its own** rather than starting whatever step 2 declined. It is not the same question asked twice: each outcome loads the dependencies for itself, so a dependency that fails between the two loads is caught by "have they all succeeded?" and the task run is not started.
 
-**The price is a false-positive window on the bail.** Those separate snapshots mean a dependency that fails between the first load and the last leaves a set that is neither all-succeeded nor still-running, and the bail fires on an ordinary state. It clears on the next pass, where `settle_as_skipped` sees the failure and claims the row. Loading the dependencies once in `handle_queued_task_run` and passing them down would close the window and drop two queries per row, at the cost of the guards no longer standing on their own.
+**The price is a false-positive window on the bail.** Those separate snapshots mean a dependency that fails between the first load and the last leaves a set that is neither all-succeeded nor still-running, and the bail fires on an ordinary state. It clears on the next pass, where `settle_as_skipped` sees the failure and claims the row. Loading the dependencies once in `handle_waiting_task_run` and passing them down would close the window and drop two queries per row, at the cost of the guards no longer standing on their own.
 
 Dependencies come from `task_run.depends_on` — the list copied off `task.depends_on` when the run was submitted — resolved to the task runs of the same job run by `get_dependent_task_runs`. A task with no dependencies is turned down by step 2 (`any()` over an empty list is false) and started by step 3 (`all()` over one is true).
 
@@ -61,7 +64,8 @@ Because the decision comes from the attempt rows alone, a stop landing *between*
 
 ## Invariants
 
-- **A `Queued` or `Running` task run keeps its job run `Running`.** A task run that is never visited again strands its whole job run — see [job_run.md](job_run.md).
+- **`Waiting` has exactly one writer: `JobRunDispatcher::settle_as_running`.** Every other path into `task_run` writes `Planned` (the two insert paths), a terminal status, or `Running`. That single door is what lets `TaskRunDispatcher` select on status alone without also asking what its job run is doing — add a second writer and the dependency is back, silently.
+- **A `Planned`, `Waiting` or `Running` task run keeps its job run `Running`.** A task run that is never visited again strands its whole job run — see [job_run.md](job_run.md).
 - **A `Running` task run must always have either an unfinished attempt or a finished last attempt to decide on.** An attempt row that never finishes stalls the task run, and through it the job run.
 - **A new `TaskRunAttemptStatus` needs an outcome** in `handle_running_task_run`. This used to be an exhaustive `match`, so the compiler caught the omission; the `settle_for_*` chain replaced that check with `settle_unclaimed`, which catches it at runtime instead — the task run settles `Invalid` with a log line saying it is a bug, rather than staying `Running` for ever. `Invalid` itself is what this guards against: between being added to the enum and being given a rung, it reached exactly this fall-through. `settle_for_failed` and `settle_for_running` split a `Failed` last attempt between them on the same inlined comparison — `last.attempt` against `task_run.max_retries + 1`, in opposite directions — so the two cannot both claim it or both pass it by.
 - **A new terminal `TaskRunStatus` needs three edits**: the failure list in `TaskRunDispatcher::settle_as_skipped` (or downstream task runs wait forever), a transition in `JobRunMonitor::handle_running_job_run`, at the right rank, and a badge arm in `templates/routes/job_runs/job_run_id/route.html`. The exhaustive matches on the enum — `is_finished`, `is_stopped`, `Display`, `format::task_run_word` — force the rest, and `JobRunStatus::ALL` is what the dashboard's filter chips and the CLI's `--status` parser both read.

@@ -85,6 +85,11 @@ impl JobRunDispatcher {
     }
 
     /// Skips the job run, and with it all of its task runs, none of which ever started.
+    ///
+    /// `JobRunReleaser::settle_as_skipped` is the same outcome one status earlier, for a
+    /// run stopped before it was ever released, and both go through `skip_job_run` so that
+    /// neither can write half the pair. They select on disjoint statuses, so a run is only
+    /// ever skipped by one of them.
     async fn settle_as_skipped(&self, job_run: &JobRun) -> anyhow::Result<bool> {
 
         let job_run_stopped = self.is_job_run_stopped(job_run).await?;
@@ -93,33 +98,9 @@ impl JobRunDispatcher {
             return Ok(false);
         }
 
-        self.crud.update_job_runs(
-            &*self.conn_pool,
-            &UpdateJobRunsData {
-                filter: UpdateJobRunsDataFilter { id: Some(job_run.id) },
-                input: UpdateJobRunsDataInput {
-                    status: Some(JobRunStatus::Skipped),
-                    started_at: None,
-                    finished_at: Some(Some(Utc::now())),
-                },
-            }
-        ).await?;
+        let mut conn = self.conn_pool.acquire().await?;
 
-        self.crud.update_task_runs(
-            &*self.conn_pool,
-            &UpdateTaskRunsData {
-                filter: UpdateTaskRunsDataFilter {
-                    id: None,
-                    job_run_id: Some(job_run.id),
-                    status: None,
-                },
-                input: UpdateTaskRunsDataInput {
-                    status: Some(TaskRunStatus::Skipped),
-                    started_at: None,
-                    finished_at: Some(Some(Utc::now())),
-                },
-            }
-        ).await?;
+        self.crud.skip_job_run(&mut conn, job_run.id).await?;
 
         self.signals.publish();
 
@@ -135,8 +116,34 @@ impl JobRunDispatcher {
         self.is_job_at_max_parallel_runs(job_run).await
     }
 
-    /// Sets the job run to running, which is what makes JobRunMonitor pick it up.
+    /// Sets the job run to running, which is what makes JobRunMonitor pick it up, and
+    /// releases its task runs to TaskRunDispatcher in the same pass.
+    ///
+    /// The release is the only door into `Waiting`, which is why a run still waiting for
+    /// its due time or for a max_parallel_runs slot has no task run anything will start.
+    ///
+    /// The task runs go first because of what a crash between the two writes leaves: this
+    /// way the job run is still Queued, so the next pass settles it again. The other order
+    /// leaves a Running job run whose task runs are Planned for ever - nothing selects a
+    /// Running job run to release them, and JobRunMonitor holds it open on task runs that
+    /// can never finish.
     async fn settle_as_running(&self, job_run: &JobRun) -> anyhow::Result<bool> {
+
+        self.crud.update_task_runs(
+            &*self.conn_pool,
+            &UpdateTaskRunsData {
+                filter: UpdateTaskRunsDataFilter {
+                    id: None,
+                    job_run_id: Some(job_run.id),
+                    status: Some(TaskRunStatus::Planned),
+                },
+                input: UpdateTaskRunsDataInput {
+                    status: Some(TaskRunStatus::Waiting),
+                    started_at: None,
+                    finished_at: None,
+                },
+            }
+        ).await?;
 
         self.crud.update_job_runs(
             &*self.conn_pool,
@@ -244,5 +251,55 @@ mod tests {
         db.job_run_dispatcher().settle_unclaimed(&job_run).await.unwrap();
 
         assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Invalid);
+    }
+
+    /// The other half of the skip JobRunReleaser owns for a Submitted run: a Queued one
+    /// that was stopped ends here, and its task runs end with it - left behind they would
+    /// hold the run open for ever.
+    #[tokio::test]
+    async fn a_stopped_job_run_is_skipped_along_with_its_task_runs() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Queued).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
+
+        db.insert_job_run_stop(job_run.id).await;
+
+        db.job_run_dispatcher().handle(&job_run).await.unwrap();
+
+        assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Skipped);
+        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Skipped);
+    }
+
+    /// Starting the job run is what releases its task runs, and the only thing that does:
+    /// left Planned they would never be dispatched, and the run would hold open for ever.
+    #[tokio::test]
+    async fn starting_a_job_run_releases_its_task_runs() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Queued).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
+
+        db.job_run_dispatcher().settle_as_running(&job_run).await.unwrap();
+
+        assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Running);
+        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Waiting);
+    }
+
+    /// A task run that already finished is not dragged back to Waiting by a later start,
+    /// which is why the update filters on Planned rather than on the job run alone.
+    #[tokio::test]
+    async fn starting_a_job_run_leaves_a_finished_task_run_alone() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Queued).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Succeeded).await;
+
+        db.job_run_dispatcher().settle_as_running(&job_run).await.unwrap();
+
+        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Succeeded);
     }
 }

@@ -67,7 +67,8 @@ struct JobRunIdRouteTemplate {
 
 fn idle_label(status: TaskRunStatus) -> &'static str {
     match status {
-        TaskRunStatus::Queued => "waiting",
+        TaskRunStatus::Planned => "planned",
+        TaskRunStatus::Waiting => "waiting",
         TaskRunStatus::Skipped => "skipped",
         TaskRunStatus::Aborted => "aborted",
         _ => "never started",

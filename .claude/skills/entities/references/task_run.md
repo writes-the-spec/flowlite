@@ -23,8 +23,8 @@ The one deliberate exception in the whole orchestrator is `mem.job.max_parallel_
 
 ## Written by
 
-- **Inserted** by `CRUD::submit_job` / `rerun_job`, all `Queued`, in the same call as their `job_run`.
-- **Updated** by `TaskRunDispatcher` (`Queued` → `Running`/`Skipped`), `TaskRunMonitor` (`Running` → terminal), and `JobRunDispatcher::settle_as_skipped`, which skips every task run of a stopped, never-started job run in one bulk update.
+- **Inserted** by `CRUD::submit_job` / `rerun_job`, all `Planned`, in the same call as their `job_run`.
+- **Updated** by `JobRunDispatcher::settle_as_running` (`Planned` → `Waiting`, every task run of the job run it is starting, in one bulk update — the only door into `Waiting`, and so the only thing that makes a task run visible to its dispatcher), `TaskRunDispatcher` (`Waiting` → `Running`/`Skipped`), `TaskRunMonitor` (`Running` → terminal), and `JobRunDispatcher::settle_as_skipped`, which skips every task run of a stopped, never-started job run in one bulk update.
 
 ## Deleted by
 

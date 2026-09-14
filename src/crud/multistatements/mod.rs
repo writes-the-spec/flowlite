@@ -13,4 +13,5 @@ pub mod limits;
 pub mod rerun_job;
 pub mod retention_candidates;
 pub mod secret_env;
+pub mod skip_job_run;
 pub mod submit_job;

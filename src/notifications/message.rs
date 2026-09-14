@@ -403,7 +403,8 @@ fn job_run_emoji(status: JobRunStatus) -> &'static str {
 
 fn task_run_emoji(status: TaskRunStatus) -> &'static str {
     match status {
-        TaskRunStatus::Queued => ":hourglass_flowing_sand:",
+        TaskRunStatus::Planned => ":clock3:",
+        TaskRunStatus::Waiting => ":hourglass_flowing_sand:",
         TaskRunStatus::Running => ":arrows_counterclockwise:",
         TaskRunStatus::Succeeded => ":white_check_mark:",
         TaskRunStatus::Failed => ":x:",
@@ -517,7 +518,8 @@ fn job_run_accent(status: JobRunStatus) -> &'static str {
 
 fn task_run_accent(status: TaskRunStatus) -> &'static str {
     match status {
-        TaskRunStatus::Queued => "#6a737d",
+        TaskRunStatus::Planned => "#8c959f",
+        TaskRunStatus::Waiting => "#6a737d",
         TaskRunStatus::Running => "#0969da",
         TaskRunStatus::Succeeded => "#1a7f37",
         TaskRunStatus::Failed => "#b42318",

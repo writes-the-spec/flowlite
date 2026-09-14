@@ -218,8 +218,8 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
     flex: none;
     background: var(--text-2);
 }
-.mark--queued { background: none; box-shadow: inset 0 0 0 1px var(--text-2); }
-.mark--submitted { background: none; box-shadow: inset 0 0 0 1px var(--text-2); opacity: .55; }
+.mark--queued, .mark--waiting { background: none; box-shadow: inset 0 0 0 1px var(--text-2); }
+.mark--submitted, .mark--planned { background: none; box-shadow: inset 0 0 0 1px var(--text-2); opacity: .55; }
 .mark--running { background: var(--brand); animation: breathe 1.6s ease-in-out infinite; }
 .mark--succeeded { background: var(--ok); }
 .mark--failed, .mark--timedout { background: var(--fail); }

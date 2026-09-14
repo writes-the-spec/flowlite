@@ -660,7 +660,7 @@ impl TestDb {
         self.task_run(id).await
     }
 
-    /// A queued task run waiting on the named task ids, which need not have rows - a
+    /// A waiting task run held on the named task ids, which need not have rows - a
     /// dependency with none is one of the states the dispatcher has to settle.
     pub async fn insert_task_run_depending_on(&self, job_run_id: i64, depends_on: &[&str]) -> TaskRun {
 
@@ -680,7 +680,7 @@ impl TestDb {
                     env: BTreeMap::new(),
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
-                    status: TaskRunStatus::Queued,
+                    status: TaskRunStatus::Waiting,
                 },
             },
         ).await.unwrap();

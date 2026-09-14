@@ -173,7 +173,7 @@ mod tests {
         assert_eq!(task_runs.len(), 1);
         assert_eq!(task_runs[0].env.0.get("PYTHONUNBUFFERED").unwrap(), "1");
         assert_eq!(task_runs[0].working_dir, "/tmp");
-        assert_eq!(task_runs[0].status, TaskRunStatus::Queued);
+        assert_eq!(task_runs[0].status, TaskRunStatus::Planned);
     }
 
     /// A rerun replays the concurrency limits the original run was submitted with, so it

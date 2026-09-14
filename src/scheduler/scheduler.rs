@@ -549,7 +549,7 @@ mod tests {
     }
 
     /// Stopping a single future-dated occurrence has to stick. The stop is honoured by
-    /// `JobRunReleaser` releasing the run early, so the row leaves Submitted while its
+    /// `JobRunReleaser` skipping the run outright, so the row leaves Submitted while its
     /// instant is still in the future - and a reconcile that read outstanding-ness as "a
     /// Submitted row exists" would decide the occurrence was never dealt with and submit it
     /// again, running the very job the user cancelled.
@@ -565,12 +565,12 @@ mod tests {
         assert_eq!(submitted.len(), 1);
         let occurrence = submitted[0].scheduled_at;
 
-        // The stop path, run through the real releaser: a stopped run is released however
+        // The stop path, run through the real releaser: a stopped run is skipped however
         // far off its instant is.
         db.insert_job_run_stop(submitted[0].id).await;
         db.job_run_releaser().handle(&submitted[0]).await.unwrap();
 
-        assert_eq!(db.job_run(submitted[0].id).await.status, JobRunStatus::Queued);
+        assert_eq!(db.job_run(submitted[0].id).await.status, JobRunStatus::Skipped);
 
         db.scheduler().handle(&schedule).await.unwrap();
 

@@ -20,6 +20,7 @@ A method that runs **one** statement lives in its entity's file. A method that r
 | [secret_env.rs](../../../src/crud/multistatements/secret_env.rs) | `check_secret_env_is_satisfied` and the pure policy under it |
 | [job_run_reads.rs](../../../src/crud/multistatements/job_run_reads.rs) | `select_job_run_with_task_runs`, `select_task_run_attempt_logs` |
 | [ad_hoc_job.rs](../../../src/crud/multistatements/ad_hoc_job.rs) | `seed_ad_hoc_job` and `JobIdAlreadyInstalled` |
+| [skip_job_run.rs](../../../src/crud/multistatements/skip_job_run.rs) | `skip_job_run` — the job run and every task run it owns, for a run nobody ever started |
 
 A new operation gets its own file and a `pub mod` line, the way a new MCP tool does. Items only the sibling operations use are `pub(super)`, not `pub`.
 
