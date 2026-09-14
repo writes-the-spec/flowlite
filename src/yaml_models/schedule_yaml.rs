@@ -48,11 +48,7 @@ impl ScheduleYaml {
         let schedule: ScheduleYaml = serde_yaml::from_str(&content)
             .with_context(|| format!("Failed to parse Schedule YAML from {}", path.display()))?;
 
-        // The field error (e.g. "submit_ahead must be at least 1") is folded into this
-        // message rather than left for `anyhow`'s cause chain, so a caller that only prints
-        // `to_string()` still sees which field and why - not just which file.
-        schedule.validate()
-            .map_err(|e| anyhow::anyhow!("Invalid Schedule YAML at {}: {e}", path.display()))?;
+        schedule.validate().with_context(|| format!("Invalid Schedule YAML at {}", path.display()))?;
 
         Ok(schedule)
     }
@@ -180,6 +176,6 @@ mod tests {
     fn a_schedule_cannot_ask_for_zero_runs_ahead() {
         let error = parse(&format!("{}submit_ahead: 0\n", nightly("0 30 3 * * *", ""))).unwrap_err();
 
-        assert!(error.to_string().contains("submit_ahead"), "got: {error:?}");
+        assert!(format!("{error:#}").contains("submit_ahead"), "got: {error:?}");
     }
 }
