@@ -30,153 +30,81 @@ impl JobRunMonitor {
         }
     }
 
-    /// Settles a running job run as exactly one outcome, from its task runs alone.
-    ///
-    /// **Order decides precedence**: an unknown outranks every named verdict, and a real
-    /// failure outranks a stop, so `settle_for_aborted` is the last finished outcome.
-    ///
-    /// `settle_for_running` is asked last and guards nothing of its own, which leaves the
-    /// `all_finished` each failure outcome re-asks as the only thing holding open a job run
-    /// whose work is still going. Finishing is irreversible.
-    ///
+    /// Dispatches the write for whatever `derive_next_status` decides. Deciding only reads.
     /// Nothing here writes Skipped: a Running job run has started, so a stop aborts it.
     async fn handle_running_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         let task_runs = self.get_task_runs(job_run).await?;
 
-        if self.settle_for_invalid(job_run, &task_runs).await? {
-            return Ok(());
+        match self.derive_next_status(job_run, &task_runs) {
+            Ok(JobRunStatus::Succeeded) => self.set_to_succeeded(job_run).await,
+            Ok(JobRunStatus::Failed) => self.set_to_failed(job_run).await,
+            Ok(JobRunStatus::TimedOut) => self.set_to_timed_out(job_run).await,
+            Ok(JobRunStatus::Aborted) => self.set_to_aborted(job_run).await,
+            Ok(JobRunStatus::Running) => Ok(()),
+            Ok(_) | Err(_) => self.set_to_invalid(job_run).await,
         }
-
-        if self.settle_for_succeeded(job_run, &task_runs).await? {
-            return Ok(());
-        }
-
-        if self.settle_for_failed(job_run, &task_runs).await? {
-            return Ok(());
-        }
-
-        if self.settle_for_timed_out(job_run, &task_runs).await? {
-            return Ok(());
-        }
-
-        if self.settle_for_aborted(job_run, &task_runs).await? {
-            return Ok(());
-        }
-
-        if self.settle_for_running(job_run, &task_runs).await? {
-            return Ok(());
-        }
-
-        self.settle_unclaimed(job_run).await
     }
 
-    /// Settles a row no outcome claimed. Unreachable while the ladder covers every
-    /// combination of task run statuses; see `JobRunDispatcher::settle_unclaimed` for why
-    /// it settles rather than raises.
-    async fn settle_unclaimed(&self, job_run: &JobRun) -> anyhow::Result<()> {
+    /// Derives the job run's next status from its task runs' statuses alone. Order decides
+    /// precedence: an unknown outranks every named verdict, and a real failure outranks a
+    /// stop, so Aborted is asked last of the finished outcomes; `all_finished` is computed
+    /// once and reused rather than each outcome re-asking it. Errs, unreachable, if no rung
+    /// claims the combination.
+    fn derive_next_status(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<JobRunStatus> {
 
-        eprintln!(
-            "Job run {} was claimed by no outcome: all of its task runs finished, none of \
-             them timed out, failed, was aborted, was skipped or was invalid, and they did \
-             not all succeed. Settling it invalid. This is a bug.",
+        let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());
+
+        if all_finished && task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Invalid) {
+            return Ok(JobRunStatus::Invalid);
+        }
+
+        // `all` over an empty list is true, so a job run with no task runs succeeds here.
+        if task_runs.iter().all(|task_run| task_run.status == TaskRunStatus::Succeeded) {
+            return Ok(JobRunStatus::Succeeded);
+        }
+
+        if all_finished && task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Failed) {
+            return Ok(JobRunStatus::Failed);
+        }
+
+        if all_finished && task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::TimedOut) {
+            return Ok(JobRunStatus::TimedOut);
+        }
+
+        // A stopped task run: killed mid-flight, or skipped before it could start.
+        if all_finished && task_runs.iter().any(|task_run| task_run.status.is_stopped()) {
+            return Ok(JobRunStatus::Aborted);
+        }
+
+        if !all_finished {
+            return Ok(JobRunStatus::Running);
+        }
+
+        Err(anyhow::anyhow!(
+            "Job run {}'s task runs finished with no outcome claiming them",
             job_run.id,
-        );
+        ))
+    }
 
+    async fn set_to_invalid(&self, job_run: &JobRun) -> anyhow::Result<()> {
         self.update_job_run_status(job_run, JobRunStatus::Invalid).await
     }
 
-    /// An unknown outranks every named verdict: reporting the failure of a run that is
-    /// partly unexplained presents an explained result.
-    ///
-    /// `all_finished` still applies — outranking decides which finished verdict wins, not
-    /// whether the run has finished.
-    async fn settle_for_invalid(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
-
-        let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());
-        let any_invalid = task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Invalid);
-
-        if !all_finished || !any_invalid {
-            return Ok(false);
-        }
-
-        self.update_job_run_status(job_run, JobRunStatus::Invalid).await?;
-
-        Ok(true)
+    async fn set_to_succeeded(&self, job_run: &JobRun) -> anyhow::Result<()> {
+        self.update_job_run_status(job_run, JobRunStatus::Succeeded).await
     }
 
-    /// Succeeds the job run once every task run has succeeded — including a job run with
-    /// no task runs at all, which `all` over an empty list settles here immediately.
-    async fn settle_for_succeeded(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
-
-        let all_succeeded = task_runs.iter().all(|task_run| task_run.status == TaskRunStatus::Succeeded);
-
-        if !all_succeeded {
-            return Ok(false);
-        }
-
-        self.update_job_run_status(job_run, JobRunStatus::Succeeded).await?;
-
-        Ok(true)
+    async fn set_to_failed(&self, job_run: &JobRun) -> anyhow::Result<()> {
+        self.update_job_run_status(job_run, JobRunStatus::Failed).await
     }
 
-    /// Leaves the job run running, writing nothing, while any task run of it is still
-    /// queued or running. Asked last, so it claims every job run the outcomes above
-    /// declined; the bail below it means a task run status none of them knows.
-    async fn settle_for_running(&self, _job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
-
-        Ok(task_runs.iter().any(|task_run| !task_run.status.is_finished()))
+    async fn set_to_timed_out(&self, job_run: &JobRun) -> anyhow::Result<()> {
+        self.update_job_run_status(job_run, JobRunStatus::TimedOut).await
     }
 
-    /// Fails the job run if a task run of it failed with no retry left, once the rest have
-    /// finished too.
-    async fn settle_for_failed(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
-
-        let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());
-        let any_failed = task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Failed);
-
-        if !all_finished || !any_failed {
-            return Ok(false);
-        }
-
-        self.update_job_run_status(job_run, JobRunStatus::Failed).await?;
-
-        Ok(true)
-    }
-
-    /// Times the job run out if a task run of it ran past its timeout with no retry left,
-    /// once the rest have finished too.
-    async fn settle_for_timed_out(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
-
-        let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());
-        let any_timed_out = task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::TimedOut);
-
-        if !all_finished || !any_timed_out {
-            return Ok(false);
-        }
-
-        self.update_job_run_status(job_run, JobRunStatus::TimedOut).await?;
-
-        Ok(true)
-    }
-
-    /// Aborts the job run that was stopped — a task run killed mid-flight, or skipped
-    /// before it could start.
-    ///
-    /// Asked last, so a real failure outranks a stop: a dependency that did not succeed
-    /// would itself be failed or timed out, leaving only a stop by the time this is asked.
-    async fn settle_for_aborted(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
-
-        let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());
-        let any_stopped = task_runs.iter().any(|task_run| task_run.status.is_stopped());
-
-        if !all_finished || !any_stopped {
-            return Ok(false);
-        }
-
-        self.update_job_run_status(job_run, JobRunStatus::Aborted).await?;
-
-        Ok(true)
+    async fn set_to_aborted(&self, job_run: &JobRun) -> anyhow::Result<()> {
+        self.update_job_run_status(job_run, JobRunStatus::Aborted).await
     }
 
     async fn get_task_runs(&self, job_run: &JobRun) -> anyhow::Result<Vec<TaskRun>> {
@@ -418,7 +346,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
 
-        db.job_run_monitor().settle_unclaimed(&job_run).await.unwrap();
+        db.job_run_monitor().set_to_invalid(&job_run).await.unwrap();
 
         assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Invalid);
     }
