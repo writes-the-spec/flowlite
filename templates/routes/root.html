@@ -46,7 +46,6 @@
 
     <link rel="stylesheet" href="/assets/css/app.css">
     <script src="/assets/vendors/htmx/htmx.min.js"></script>
-    <script defer src="/assets/vendors/alpine/alpine.min.js"></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
 
@@ -63,14 +62,25 @@
                 <a href="/schedules" class="masthead__link" {% if current_route == "schedules" %}aria-current="page"{% endif %}>Schedules</a>
             </nav>
 
-            <div
-                class="masthead__live"
-                x-data="{ now: '' }"
-                x-init="now = new Date().toLocaleTimeString(); setInterval(() => now = new Date().toLocaleTimeString(), 1000)"
-                title="This machine's clock, for reading cron schedules against"
-            >
-                <span x-text="now" x-cloak></span>
+            <div class="masthead__live" title="This machine's clock, for reading cron schedules against">
+                <span id="clock"></span>
             </div>
+
+            {# Written from here rather than rendered with the page: the page is the
+               server's clock, and this is the reader's, which is the one a cron expression
+               has to be read against. Empty until the first tick, which is the same second
+               the element is parsed, and empty for good with scripting off - a masthead
+               that is a little barer beats one showing a time that stopped. #}
+            <script>
+                const clock = document.getElementById("clock");
+
+                function showTime() {
+                    clock.textContent = new Date().toLocaleTimeString();
+                }
+
+                showTime();
+                setInterval(showTime, 1000);
+            </script>
         </div>
     </header>
 

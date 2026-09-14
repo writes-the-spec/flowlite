@@ -106,8 +106,6 @@ body {
     flex-direction: column;
 }
 
-[x-cloak] { display: none !important; }
-
 ::selection { background: var(--brand); color: var(--ground); }
 
 :focus-visible {
