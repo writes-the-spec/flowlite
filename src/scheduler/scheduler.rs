@@ -55,12 +55,20 @@ impl Scheduler {
         ).await
     }
 
-    /// The next `submit_ahead` occurrences strictly after now: what ought to exist.
+    /// The next `submit_ahead` occurrences strictly after `now`: what ought to exist.
     ///
     /// Empty for a disabled schedule, and short or empty for one past its end_date, where
     /// `get_next_run` returns None. Both fall out of the same rule rather than needing a
     /// branch of their own.
-    fn desired_occurrences(&self, schedule: &Schedule) -> Vec<DateTime<Utc>> {
+    ///
+    /// `now` is passed in rather than read here, so that this and the past-due guard in
+    /// `delete_surplus_runs` derive from one instant. Reading the clock a second time - even
+    /// only as late as the cron parse - opens a window in which an occurrence falls after
+    /// the first read and before the second: it would then be missing from `desired` while
+    /// still counting as future-dated to every guard, and the reconcile would delete the run
+    /// at the exact moment it came due. Same argument as the one that moved
+    /// `delete_job_runs_with_children`'s id resolution inside its transaction, one level up.
+    fn desired_occurrences(&self, schedule: &Schedule, now: DateTime<Utc>) -> Vec<DateTime<Utc>> {
 
         if schedule.disabled {
             return Vec::new();
@@ -69,7 +77,7 @@ impl Scheduler {
         let cron_trigger = CronTrigger::from_schedule(schedule);
 
         let mut occurrences = Vec::new();
-        let mut from = Some(self.toolkit.get_current_ts());
+        let mut from = Some(now);
 
         for _ in 0..schedule.submit_ahead {
             let Some(next) = cron_trigger.get_next_run(from) else {
@@ -92,8 +100,8 @@ impl Scheduler {
     async fn reconcile_schedule(&self, schedule: &Schedule) -> anyhow::Result<()> {
 
         let now = self.toolkit.get_current_ts();
-        let desired = self.desired_occurrences(schedule);
-        let outstanding = self.outstanding_runs(&schedule.schedule_id).await?;
+        let desired = self.desired_occurrences(schedule, now);
+        let outstanding = self.outstanding_runs(Some(&schedule.schedule_id)).await?;
 
         self.delete_surplus_runs(&outstanding, &desired, schedule, now).await?;
         self.submit_missing_runs(&outstanding, &desired, schedule).await?;
@@ -116,7 +124,7 @@ impl Scheduler {
         Ok(())
     }
 
-    async fn outstanding_runs(&self, schedule_id: &str) -> anyhow::Result<Vec<JobRun>> {
+    async fn outstanding_runs(&self, schedule_id: Option<&str>) -> anyhow::Result<Vec<JobRun>> {
 
         self.crud.select_job_runs(
             &*self.conn_pool,
@@ -127,7 +135,7 @@ impl Scheduler {
                     status: Some(JobRunStatus::Submitted),
                     statuses: None,
                     scheduled_at_lte: None,
-                    schedule_id: Some(schedule_id.to_string()),
+                    schedule_id: schedule_id.map(str::to_string),
                 },
                 sort: Some(SelectJobRunsDataSort::Id),
                 limit: None,
@@ -136,12 +144,63 @@ impl Scheduler {
         ).await
     }
 
+    /// Takes back the runs of schedules that are no longer there.
+    ///
+    /// A schedule deleted from the YAML has no row to reconcile, so no schedule's own pass
+    /// can ever collect its leftovers: `delete_surplus_runs` scopes every delete to the
+    /// schedule it is reconciling. Left alone, those runs would be released and would run,
+    /// which is the one thing deleting a schedule is supposed to stop.
+    ///
+    /// It runs once per pass, at the head of `select`, because that is the shape of the
+    /// question - "is anything outstanding for a schedule that is gone?" is asked of the
+    /// whole set, not of one row - and because `Service::Row` is `Schedule`, so `handle`
+    /// has nothing to be called with.
+    ///
+    /// Same terms as `delete_surplus_runs`: future-dated only, status re-asserted. A run
+    /// carrying no schedule_id is a manual submission and belongs to nobody's reconcile.
+    async fn delete_orphaned_runs(&self, schedules: &[Schedule]) -> anyhow::Result<()> {
+
+        let now = self.toolkit.get_current_ts();
+
+        for run in self.outstanding_runs(None).await? {
+
+            let Some(schedule_id) = run.schedule_id.clone() else {
+                continue;
+            };
+
+            if run.scheduled_at <= now
+                || schedules.iter().any(|schedule| schedule.schedule_id == schedule_id)
+            {
+                continue;
+            }
+
+            let mut conn = self.conn_pool.acquire().await?;
+
+            self.crud.delete_job_runs_with_children(&mut conn, &DeleteJobRunsData {
+                filter: DeleteJobRunsDataFilter {
+                    id: Some(run.id),
+                    job_id: None,
+                    status: Some(JobRunStatus::Submitted),
+                    schedule_id: Some(schedule_id),
+                    scheduled_at_gt: Some(now),
+                },
+            }).await?;
+
+            self.signals.publish();
+        }
+
+        Ok(())
+    }
+
     /// Deletes the outstanding runs the schedule no longer asks for.
     ///
     /// Only ones still in the future: a run whose instant has arrived belongs to
     /// JobRunReleaser, and deleting it here would cancel a run at the moment it came due.
-    /// The delete re-asserts that in SQL as well, because the releaser may have promoted
-    /// the row since it was selected.
+    /// The same conditions are restated on the delete's own filter, because the releaser may
+    /// have promoted the row since this select read it - and the delete re-resolves that
+    /// filter inside its transaction, so the row it checks is the row it removes. The check
+    /// on the run's due time is the weaker half of that: `scheduled_at` is never updated
+    /// after insert, so a stale reading of it is not a thing that can happen.
     ///
     /// Deleted rather than stopped. A run cancelled before it was ever due never happened,
     /// and settling it as skipped would put it in the history beside runs that were
@@ -209,7 +268,7 @@ impl Scheduler {
 
                 let already_submitted = outstanding.iter().any(|run| {
                     run.job_id == schedule_job.job_id
-                        && run.scheduled_at.timestamp() == occurrence.timestamp()
+                        && is_same_instant(run.scheduled_at, std::slice::from_ref(occurrence))
                 });
 
                 if already_submitted {
@@ -251,6 +310,9 @@ impl Scheduler {
 /// has been through the database has been through a string, and an equality that depends on
 /// that round-trip being exact would fail by deleting and resubmitting the same run every
 /// pass — the most expensive way this could go wrong and the least visible.
+///
+/// Both the delete's "is this still wanted?" and the submit's "have I written this already?"
+/// ask through here, so the rule is stated once rather than once per caller.
 fn is_same_instant(at: DateTime<Utc>, occurrences: &[DateTime<Utc>]) -> bool {
     occurrences.iter().any(|occurrence| occurrence.timestamp() == at.timestamp())
 }
@@ -268,7 +330,14 @@ impl Service for Scheduler {
     }
 
     async fn select(&self) -> anyhow::Result<Vec<Schedule>> {
-        self.get_schedules().await
+
+        let schedules = self.get_schedules().await?;
+
+        // Swept here rather than in handle, because a schedule that is gone is not one of
+        // the rows handle will be called with - see `delete_orphaned_runs`.
+        self.delete_orphaned_runs(&schedules).await?;
+
+        Ok(schedules)
     }
 
     async fn handle(&self, schedule: &Schedule) -> anyhow::Result<()> {
@@ -497,6 +566,58 @@ mod tests {
             .any(|run| run.id == past_due.id);
 
         assert!(still_there, "a run that has come due belongs to the releaser, not the reconcile");
+    }
+
+    /// A schedule deleted from the YAML leaves runs no reconcile can reach, because every
+    /// delete in `delete_surplus_runs` is scoped to the schedule being reconciled. The
+    /// sweep at the head of `select` is what collects them - without it, deleting a
+    /// schedule would not stop its next run from being released and executed.
+    #[tokio::test]
+    async fn a_run_of_a_schedule_that_is_gone_is_swept_up() {
+
+        let (db, _mem_conn) = scheduled_db().await;
+
+        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
+        db.scheduler().handle(&schedule).await.unwrap();
+        assert_eq!(outstanding(&db, "nightly").await.len(), 1);
+
+        // A manual run in the same database: it names no schedule, so the sweep must not
+        // read it as one whose schedule has gone missing.
+        let manual = db.insert_job_run_at(
+            JobRunStatus::Submitted,
+            Utc::now() + chrono::TimeDelta::days(365),
+            None,
+        ).await;
+
+        // Exactly what deleting the YAML file does: CRUD::init rebuilds mem without it.
+        // Its jobs go first, because schedule_job's foreign key says so.
+        for statement in [
+            "DELETE FROM mem.schedule_job WHERE schedule_id = ?",
+            "DELETE FROM mem.schedule WHERE schedule_id = ?",
+        ] {
+            sqlx::query(statement)
+                .bind("nightly")
+                .execute(&*db.conn_pool)
+                .await
+                .unwrap();
+        }
+
+        db.scheduler().select().await.unwrap();
+
+        assert_eq!(outstanding(&db, "nightly").await.len(), 0);
+        assert_eq!(db.job_run(manual.id).await.status, JobRunStatus::Submitted);
+    }
+
+    /// The instant comparison is at whole seconds on purpose - see `is_same_instant` - and
+    /// nothing else fails when it is written as a plain equality, because the round trip
+    /// through SQLite happens to be exact today. Pinned here so that stays a decision.
+    #[test]
+    fn an_instant_is_the_same_one_within_the_second() {
+
+        let occurrence: DateTime<Utc> = "2026-06-10T03:00:00Z".parse().unwrap();
+
+        assert!(is_same_instant(occurrence + chrono::TimeDelta::milliseconds(400), &[occurrence]));
+        assert!(!is_same_instant(occurrence + chrono::TimeDelta::seconds(2), &[occurrence]));
     }
 
     /// A manual run carries no schedule_id, so no schedule's reconcile can see it — which

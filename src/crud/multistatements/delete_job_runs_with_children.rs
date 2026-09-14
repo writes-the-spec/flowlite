@@ -1,9 +1,12 @@
 //! `delete_job_runs_with_children`: the cascade that deletes a run's rows for good, across
 //! every one of the six tables a job run can own rows in.
 //!
-//! The filter is resolved to matching job run ids first, with `select_job_runs` and the
-//! equivalent `SelectJobRunsDataFilter` - then each of the six per-entity deletes is called
-//! once per id, keyed on its own column (`job_run_id`, or `id` for `job_run` itself). That is
+//! The filter is resolved to matching job run ids inside the transaction, with
+//! `select_job_runs` and the equivalent `SelectJobRunsDataFilter` - then each of the six
+//! per-entity deletes is called once per id, keyed on its own column (`job_run_id`, or `id`
+//! for `job_run` itself). Resolving and deleting under one transaction is what lets a caller
+//! read the filter as a guard rather than as a hint; see the method's own doc comment.
+//! Keying each delete on one column is
 //! what lets every child delete stay a plain single-statement filter on one column, rather
 //! than each of the six having to match its rows against a subquery over `job_run` - and so
 //! lets this file, like every multistatement, compose entity methods without writing a
@@ -40,6 +43,13 @@ impl CRUD {
     /// window in which the releaser promotes a run between the check and the delete, and
     /// the reconcile would then cancel a run at the exact instant it came due, along with
     /// its task runs.
+    ///
+    /// `status`, `job_id`, `id` and `schedule_id` are `AND` clauses the database applies;
+    /// `scheduled_at_gt` is applied in Rust over the rows that select returned, since
+    /// `SelectJobRunsDataFilter` has no counterpart for it. That is equivalent here only
+    /// because the rows were fetched inside the transaction and `scheduled_at` is never
+    /// updated after insert - so it is not a guard the database enforces, and a column that
+    /// could change under it would need a clause of its own.
     ///
     /// Child-first is enforced by the database, not just convention: sqlx's
     /// `SqliteConnectOptions` turns `PRAGMA foreign_keys` on by default, so deleting a
