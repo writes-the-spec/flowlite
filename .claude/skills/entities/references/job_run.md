@@ -8,7 +8,8 @@ One execution of a [`job`](job.md). Created `Pending`, driven to a terminal stat
 | `job_id` | The job this run is of. **No foreign key** — the job lives in the attached `mem` database, so one is impossible. |
 | `job_name`, `job_description` | **Snapshot copies** of `job.name`/`job.description` at submit time, so a finished run still displays as it was submitted however the YAML has moved. |
 | `parameters` | `NOT NULL`. The **resolved** set — `job.parameters`' defaults with the caller's overrides applied by `resolve_job_parameters` — not the declaration itself. |
-| `scheduled_at` | Nullable `DATETIME`. The instant a schedule fired for, `NULL` for a manual `job submit`. Injected onto the command as `FLOWLITE_SCHEDULED_AT` — omitted entirely, not empty, when it is `NULL` — by [`build_task_run_attempt_env`](../../../../src/orchestrator/task_run_attempt_env.rs). |
+| `scheduled_at` | `NOT NULL DATETIME`. The instant this run is due — the schedule's own `next_run` for a scheduled fire, or the submit instant for a manual `job submit`. Every run has one, so it is always injected onto the command as `FLOWLITE_SCHEDULED_AT` by [`build_task_run_attempt_env`](../../../../src/orchestrator/task_run_attempt_env.rs), overwriting anything a task's own `env:` (or the inherited process environment) tried to put there. |
+| `schedule_id` | Nullable `TEXT`. The schedule that asked for this run, or `NULL` for a run nobody scheduled — a manual `job submit`, or a rerun of any run. **No foreign key** — the schedule lives in the attached `mem` database, same reason as `job_id`. |
 | `created_at` | Bound from `Toolkit::get_current_ts()`, like every timestamp here. |
 | `started_at` | Nullable. Written exactly once, by `JobRunDispatcher::settle_as_running`. Task run retries never touch it. |
 | `finished_at` | Nullable. Written with every terminal status. |
@@ -16,7 +17,7 @@ One execution of a [`job`](job.md). Created `Pending`, driven to a terminal stat
 
 ## Written by
 
-- **Inserted** by `CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/](../../../../src/crud/multistatements/)), always `Pending`, together with one [`task_run`](task_run.md) per task and one [`job_run_notification`](job_run_notification.md) per channel the job named, in the same call. `rerun_job` reads an existing run and its task runs and reproduces the snapshot rather than re-reading the YAML, so a rerun executes what the original did — including copying `parameters` and `scheduled_at` verbatim, not the job's current defaults or a fresh `NULL`. A rerun of a scheduled run therefore still runs for the day it was originally scheduled for.
+- **Inserted** by `CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/](../../../../src/crud/multistatements/)), always `Pending`, together with one [`task_run`](task_run.md) per task and one [`job_run_notification`](job_run_notification.md) per channel the job named, in the same call. `rerun_job` reads an existing run and its task runs and reproduces the snapshot rather than re-reading the YAML, so a rerun executes what the original did — including copying `parameters` and `scheduled_at` verbatim, not the job's current defaults or a fresh instant. A rerun of a scheduled run therefore still runs for the day it was originally scheduled for. `schedule_id` is the one field `rerun_job` deliberately does **not** copy: it always writes `NULL`, because the schedule asked for the original run, not for the rerun — copying it would make the rerun count as that schedule's own outstanding run.
 - **Updated** by `JobRunDispatcher` (`Pending` → `Running`/`Skipped`) and `JobRunMonitor` (`Running` → terminal), and by nothing else. No request handler and no CLI command writes a run status.
 
 ## Deleted by

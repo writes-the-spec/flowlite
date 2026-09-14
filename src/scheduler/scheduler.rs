@@ -69,6 +69,17 @@ impl Scheduler {
             }
         ).await?;
 
+        // Guaranteed Some by the next_run_lt filter that selected this schedule, but a
+        // poll loop does not panic on a row: a schedule that somehow has no next run is
+        // reported and skipped, and the next pass sees it again.
+        let Some(next_run) = schedule.next_run else {
+            eprintln!(
+                "Scheduler selected schedule {} as due, but it has no next run. Skipping it.",
+                schedule.schedule_id,
+            );
+            return Ok(());
+        };
+
         // A job still busy with an earlier run is submitted anyway and queues as a pending
         // job run: JobRunDispatcher is the one place max_parallel_runs is enforced.
         for schedule_job in schedule_jobs.iter() {
@@ -82,7 +93,8 @@ impl Scheduler {
                 &mut conn,
                 &schedule_job.job_id,
                 &schedule_job.parameters.0,
-                schedule.next_run,
+                next_run,
+                Some(&schedule.schedule_id),
             ).await {
                 eprintln!(
                     "Scheduler could not submit job {} of schedule {}: {e:?}",

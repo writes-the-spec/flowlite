@@ -80,7 +80,8 @@ pub struct InsertJobRunDataInput {
     pub job_name: String,
     pub job_description: String,
     pub parameters: BTreeMap<String, String>,
-    pub scheduled_at: Option<DateTime<Utc>>,
+    pub scheduled_at: DateTime<Utc>,
+    pub schedule_id: Option<String>,
     pub status: JobRunStatus,
 }
 
@@ -170,7 +171,8 @@ pub struct JobRun {
     pub job_description: String,
     pub parameters: sqlx::types::Json<BTreeMap<String, String>>,
     pub created_at: DateTime<Utc>,
-    pub scheduled_at: Option<DateTime<Utc>>,
+    pub scheduled_at: DateTime<Utc>,
+    pub schedule_id: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub status: JobRunStatus,
@@ -182,7 +184,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO job_run (job_id, job_name, job_description, parameters, created_at, scheduled_at, status) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO job_run (job_id, job_name, job_description, parameters, created_at, scheduled_at, schedule_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(&data.input.job_id)
             .bind(&data.input.job_name)
@@ -190,6 +192,7 @@ impl CRUD {
             .bind(sqlx::types::Json(&data.input.parameters))
             .bind(self.toolkit.get_current_ts())
             .bind(&data.input.scheduled_at)
+            .bind(&data.input.schedule_id)
             .bind(&data.input.status)
             .execute(executor)
             .await?;
@@ -210,7 +213,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, job_id, job_name, job_description, parameters, created_at, scheduled_at, started_at, finished_at, status FROM job_run WHERE 1=1"
+            "SELECT id, job_id, job_name, job_description, parameters, created_at, scheduled_at, schedule_id, started_at, finished_at, status FROM job_run WHERE 1=1"
         );
 
         push_job_run_filter(&mut query_builder, &data.filter);
@@ -497,7 +500,8 @@ mod tests {
                     job_name: "Job".to_string(),
                     job_description: String::new(),
                     parameters: BTreeMap::new(),
-                    scheduled_at: None,
+                    scheduled_at: Utc::now(),
+                    schedule_id: None,
                     status,
                 },
             },

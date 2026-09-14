@@ -21,7 +21,7 @@ pub struct JobRunDisplay {
     pub status: JobRunStatus,
     pub status_word: &'static str,
     pub created_at: String,
-    pub scheduled_at: Option<String>,
+    pub scheduled_at: String,
     /// Name and value, sorted, for a table rather than a debug-formatted map.
     pub parameters: Vec<(String, String)>,
     pub started_at: Option<String>,
@@ -212,7 +212,7 @@ pub async fn job_run_id_route(
             status: job_run.status,
             status_word: format::job_run_word(job_run.status),
             created_at: format::timestamp(job_run.created_at),
-            scheduled_at: job_run.scheduled_at.map(format::timestamp),
+            scheduled_at: format::timestamp(job_run.scheduled_at),
             parameters: job_run.parameters.0.clone().into_iter().collect(),
             started_at: job_run.started_at.map(format::timestamp),
             finished_at: job_run.finished_at.map(format::timestamp),

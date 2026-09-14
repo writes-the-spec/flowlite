@@ -136,6 +136,7 @@ impl JobSubmitCmd {
             &mut conn,
             &job_id,
             &overrides,
+            chrono::Utc::now(),
             None,
         ).await?;
 

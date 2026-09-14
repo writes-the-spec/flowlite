@@ -25,7 +25,8 @@ pub(super) struct JobRunDefinition {
     pub(super) job_name: String,
     pub(super) job_description: String,
     pub(super) parameters: BTreeMap<String, String>,
-    pub(super) scheduled_at: Option<DateTime<Utc>>,
+    pub(super) scheduled_at: DateTime<Utc>,
+    pub(super) schedule_id: Option<String>,
     pub(super) tasks: Vec<JobRunTaskDefinition>,
     pub(super) notifications: Vec<JobRunNotificationDefinition>,
 }
@@ -192,6 +193,7 @@ impl CRUD {
                     job_description: definition.job_description.clone(),
                     parameters: definition.parameters.clone(),
                     scheduled_at: definition.scheduled_at,
+                    schedule_id: definition.schedule_id.clone(),
                     status: JobRunStatus::Pending,
                 }
             }
@@ -568,7 +570,8 @@ mod tests {
             job_name: "Job".to_string(),
             job_description: String::new(),
             parameters: BTreeMap::new(),
-            scheduled_at: None,
+            scheduled_at: Utc::now(),
+            schedule_id: None,
             tasks: vec![task_definition],
             notifications: Vec::new(),
         };
@@ -608,7 +611,8 @@ mod tests {
             job_name: "Job".to_string(),
             job_description: String::new(),
             parameters: BTreeMap::new(),
-            scheduled_at: None,
+            scheduled_at: Utc::now(),
+            schedule_id: None,
             tasks: vec![task_definition],
             notifications: Vec::new(),
         };

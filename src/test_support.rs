@@ -341,6 +341,17 @@ impl TestDb {
     }
 
     pub async fn insert_job_run(&self, status: JobRunStatus) -> JobRun {
+        self.insert_job_run_at(status, Utc::now(), None).await
+    }
+
+    /// A job run with a chosen due time and schedule, for the tests that care when a run
+    /// is due rather than only what state it is in.
+    pub async fn insert_job_run_at(
+        &self,
+        status: JobRunStatus,
+        scheduled_at: DateTime<Utc>,
+        schedule_id: Option<&str>,
+    ) -> JobRun {
 
         let id = self.crud.insert_job_run(
             &*self.conn_pool,
@@ -350,7 +361,8 @@ impl TestDb {
                     job_name: "Job".to_string(),
                     job_description: String::new(),
                     parameters: BTreeMap::new(),
-                    scheduled_at: None,
+                    scheduled_at,
+                    schedule_id: schedule_id.map(str::to_string),
                     status,
                 },
             },
@@ -364,7 +376,7 @@ impl TestDb {
         &self,
         status: JobRunStatus,
         parameters: BTreeMap<String, String>,
-        scheduled_at: Option<DateTime<Utc>>,
+        scheduled_at: DateTime<Utc>,
     ) -> JobRun {
 
         let id = self.crud.insert_job_run(
@@ -376,6 +388,7 @@ impl TestDb {
                     job_description: String::new(),
                     parameters,
                     scheduled_at,
+                    schedule_id: None,
                     status,
                 },
             },

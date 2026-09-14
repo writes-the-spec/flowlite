@@ -219,6 +219,7 @@ impl Service for RetentionService {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
     use crate::app_config::{AppConfig, AppConfigJobDefaults, AppConfigRetention};
     use crate::crud::job_run::{JobRun, JobRunStatus};
     use crate::crud::job_run_notification::{NotificationChannel, NotifyOn};
@@ -253,7 +254,8 @@ mod tests {
                     job_name: "Job".to_string(),
                     job_description: String::new(),
                     parameters: BTreeMap::new(),
-                    scheduled_at: None,
+                    scheduled_at: Utc::now(),
+                    schedule_id: None,
                     status,
                 },
             },

@@ -164,7 +164,7 @@ async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(J
         }
     };
 
-    let job_run_id = crud.submit_job(&mut conn, &job_id, &overrides, None).await?;
+    let job_run_id = crud.submit_job(&mut conn, &job_id, &overrides, chrono::Utc::now(), None).await?;
     let job_run = wait_for_settled_job_run(&crud, &mut conn, job_run_id, wait_seconds).await?;
 
     // A lookup failure here is not a failure to submit - the run is already written by

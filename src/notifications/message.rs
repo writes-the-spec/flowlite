@@ -424,9 +424,7 @@ fn summary_rows(job_run: &JobRun) -> Vec<(&'static str, String)> {
         ("Status", format::job_run_word(job_run.status).to_string()),
     ];
 
-    if let Some(scheduled_at) = job_run.scheduled_at {
-        rows.push(("Scheduled", format::timestamp(scheduled_at)));
-    }
+    rows.push(("Scheduled", format::timestamp(job_run.scheduled_at)));
 
     if let Some(started_at) = job_run.started_at {
         rows.push(("Started", format::timestamp(started_at)));
@@ -575,7 +573,8 @@ mod tests {
             job_description: String::new(),
             parameters: sqlx::types::Json(BTreeMap::new()),
             created_at: Utc::now(),
-            scheduled_at: None,
+            scheduled_at: Utc::now(),
+            schedule_id: None,
             started_at: Some(Utc::now()),
             finished_at: Some(Utc::now()),
             status,

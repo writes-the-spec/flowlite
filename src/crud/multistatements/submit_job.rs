@@ -104,9 +104,9 @@ impl CRUD {
     /// not when the YAML is edited, and not when the process restarts mid-run.
     ///
     /// `overrides` are the caller's parameter values, checked against what the job
-    /// declares. `scheduled_at` is the instant a schedule fired for, and None for a
-    /// manual submission - a manual run has no scheduled instant, and the spawned command
-    /// gets no FLOWLITE_SCHEDULED_AT rather than a misleading copy of created_at.
+    /// declares. `scheduled_at` is the instant this run is due — now, for a submission
+    /// that named no time — and `schedule_id` names the schedule that asked for it, or
+    /// None for a submission nobody scheduled.
     ///
     /// A job with no config is an error rather than an empty run: the caller asked for a
     /// job that isn't there.
@@ -115,7 +115,8 @@ impl CRUD {
         conn: &mut SqliteConnection,
         job_id: &str,
         overrides: &BTreeMap<String, String>,
-        scheduled_at: Option<DateTime<Utc>>,
+        scheduled_at: DateTime<Utc>,
+        schedule_id: Option<&str>,
     ) -> anyhow::Result<i64> {
 
         let job = self.select_job(&mut *conn, &SelectJobsData {
@@ -152,6 +153,7 @@ impl CRUD {
             job_description: job.description.clone(),
             parameters,
             scheduled_at,
+            schedule_id: schedule_id.map(str::to_string),
             tasks: tasks
                 .iter()
                 .map(|task| job_run_task_definition(task, &job))

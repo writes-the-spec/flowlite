@@ -86,14 +86,9 @@ pub fn build_task_run_attempt_env(
     env.insert("FLOWLITE_TASK_RUN_ATTEMPT_ID".to_string(), task_run_attempt.id.to_string());
     env.insert("FLOWLITE_ATTEMPT".to_string(), task_run_attempt.attempt.to_string());
 
-    // A BTreeMap can't express "unset", so a manual run (no scheduled_at) removes the key
-    // rather than leaving it absent from this map - otherwise a task env: value for this
-    // exact name would survive into the composed map untouched.
-    if let Some(scheduled_at) = job_run.scheduled_at {
-        env.insert("FLOWLITE_SCHEDULED_AT".to_string(), scheduled_at.to_rfc3339());
-    } else {
-        env.remove("FLOWLITE_SCHEDULED_AT");
-    }
+    // Inserted unconditionally, which is also what stops a task's own `env:` forging it:
+    // this write lands after the task's values and overwrites whatever was there.
+    env.insert("FLOWLITE_SCHEDULED_AT".to_string(), job_run.scheduled_at.to_rfc3339());
 
     Ok(env)
 }
@@ -117,7 +112,7 @@ mod tests {
             .collect()
     }
 
-    fn job_run(parameters: BTreeMap<String, String>, scheduled_at: Option<DateTime<Utc>>) -> JobRun {
+    fn job_run(parameters: BTreeMap<String, String>, scheduled_at: DateTime<Utc>) -> JobRun {
         JobRun {
             id: 7,
             job_id: "daily-etl".to_string(),
@@ -126,10 +121,17 @@ mod tests {
             parameters: sqlx::types::Json(parameters),
             created_at: Utc::now(),
             scheduled_at,
+            schedule_id: None,
             started_at: None,
             finished_at: None,
             status: JobRunStatus::Running,
         }
+    }
+
+    /// A due time for the tests that only need `job_run` to carry one, not care what it
+    /// is.
+    fn fixed_scheduled_at() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-09-08T03:00:00Z").unwrap().with_timezone(&Utc)
     }
 
     fn task_run(env: BTreeMap<String, String>) -> TaskRun {
@@ -182,7 +184,7 @@ mod tests {
     fn a_task_env_value_is_carried() {
         let env = build_task_run_attempt_env(
             &task_run(map(&[("PYTHONUNBUFFERED", "1")])),
-            &job_run(map(&[]), None),
+            &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
             &BTreeMap::new(),
@@ -198,7 +200,7 @@ mod tests {
     fn the_data_dir_is_injected() {
         let env = build_task_run_attempt_env(
             &task_run(map(&[])),
-            &job_run(map(&[]), None),
+            &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
             &BTreeMap::new(),
@@ -211,7 +213,7 @@ mod tests {
     fn a_parameter_is_prefixed_and_upcased() {
         let env = build_task_run_attempt_env(
             &task_run(map(&[])),
-            &job_run(map(&[("region", "us")]), None),
+            &job_run(map(&[("region", "us")]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
             &BTreeMap::new(),
@@ -226,7 +228,7 @@ mod tests {
     fn a_parameter_wins_over_a_colliding_task_env_value() {
         let env = build_task_run_attempt_env(
             &task_run(map(&[("FLOWLITE_PARAM_REGION", "eu")])),
-            &job_run(map(&[("region", "us")]), None),
+            &job_run(map(&[("region", "us")]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
             &BTreeMap::new(),
@@ -241,7 +243,7 @@ mod tests {
     fn injected_metadata_wins_over_a_task_env_value() {
         let env = build_task_run_attempt_env(
             &task_run(map(&[("FLOWLITE_JOB_RUN_ID", "999")])),
-            &job_run(map(&[]), None),
+            &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
             &BTreeMap::new(),
@@ -257,7 +259,7 @@ mod tests {
     fn a_parameter_cannot_collide_with_injected_metadata() {
         let env = build_task_run_attempt_env(
             &task_run(map(&[])),
-            &job_run(map(&[("job_run_id", "999")]), None),
+            &job_run(map(&[("job_run_id", "999")]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
             &BTreeMap::new(),
@@ -271,7 +273,7 @@ mod tests {
     fn every_id_and_the_attempt_are_injected() {
         let env = build_task_run_attempt_env(
             &task_run(map(&[])),
-            &job_run(map(&[]), None),
+            &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
             &BTreeMap::new(),
@@ -293,7 +295,7 @@ mod tests {
 
         let env = build_task_run_attempt_env(
             &task_run(map(&[])),
-            &job_run(map(&[]), Some(scheduled_at)),
+            &job_run(map(&[]), scheduled_at),
             &task_run_attempt(),
             "/srv/flowlite",
             &BTreeMap::new(),
@@ -302,42 +304,55 @@ mod tests {
         assert!(env.get("FLOWLITE_SCHEDULED_AT").unwrap().starts_with("2026-09-08T03:00:00"));
     }
 
-    /// Absent, not empty: a manual run has no scheduled instant, and a command that needs
-    /// one should fail on an unset variable rather than process the wrong day.
+    /// Every run has a due time now, so every spawned command gets the variable. This
+    /// inverts a rule that held while `scheduled_at` was nullable: back then a manual run
+    /// had nothing honest to put here, and the key was removed rather than filled in.
     #[test]
-    fn a_manual_run_carries_no_scheduled_at_at_all() {
+    fn a_manual_run_carries_its_own_due_time() {
+        let scheduled_at = DateTime::parse_from_rfc3339("2026-09-08T03:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
         let env = build_task_run_attempt_env(
             &task_run(map(&[])),
-            &job_run(map(&[]), None),
+            &job_run(map(&[]), scheduled_at),
             &task_run_attempt(),
             "/srv/flowlite",
             &BTreeMap::new(),
         ).unwrap();
 
-        assert!(!env.contains_key("FLOWLITE_SCHEDULED_AT"));
+        assert_eq!(
+            env.get("FLOWLITE_SCHEDULED_AT").unwrap(),
+            &scheduled_at.to_rfc3339(),
+        );
     }
 
-    /// A forged FLOWLITE_SCHEDULED_AT in a task's own env: must not survive a manual run -
-    /// otherwise a command reading it would silently process whatever date the task
-    /// definition claims instead of failing on an unset variable.
+    /// A forged FLOWLITE_SCHEDULED_AT in a task's own env: does not survive - the metadata
+    /// write lands after the task's own values and overwrites whatever was there, the same
+    /// guarantee every other injected key already carries.
     #[test]
-    fn a_task_env_value_for_scheduled_at_does_not_survive_a_manual_run() {
+    fn a_task_env_value_for_scheduled_at_is_overwritten_by_the_runs_own_due_time() {
+        let scheduled_at = fixed_scheduled_at();
+
         let env = build_task_run_attempt_env(
             &task_run(map(&[("FLOWLITE_SCHEDULED_AT", "1999-01-01T00:00:00Z")])),
-            &job_run(map(&[]), None),
+            &job_run(map(&[]), scheduled_at),
             &task_run_attempt(),
             "/srv/flowlite",
             &BTreeMap::new(),
         ).unwrap();
 
-        assert!(!env.contains_key("FLOWLITE_SCHEDULED_AT"));
+        assert_eq!(
+            env.get("FLOWLITE_SCHEDULED_AT").unwrap(),
+            &scheduled_at.to_rfc3339(),
+        );
     }
 
     #[test]
     fn a_secret_is_resolved_into_the_environment() {
         let env = build_task_run_attempt_env(
             &task_run_with_secret_env(map(&[]), map(&[("WAREHOUSE_PW", "warehouse_pw")])),
-            &job_run(map(&[]), None),
+            &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
             &map(&[("warehouse_pw", "hunter2")]),
@@ -363,7 +378,7 @@ mod tests {
                 map(&[("WAREHOUSE_PW", "not_a_secret")]),
                 map(&[("WAREHOUSE_PW", "warehouse_pw")]),
             ),
-            &job_run(map(&[]), None),
+            &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
             &map(&[("warehouse_pw", "hunter2")]),
@@ -379,7 +394,7 @@ mod tests {
     fn injected_metadata_still_wins_a_colliding_secret() {
         let env = build_task_run_attempt_env(
             &task_run_with_secret_env(map(&[]), map(&[("FLOWLITE_JOB_RUN_ID", "warehouse_pw")])),
-            &job_run(map(&[]), None),
+            &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
             &map(&[("warehouse_pw", "hunter2")]),
@@ -400,7 +415,7 @@ mod tests {
     fn a_secret_with_no_value_names_the_job_the_task_the_variable_the_secret_and_the_remedy() {
         let error = build_task_run_attempt_env(
             &task_run_with_secret_env(map(&[]), map(&[("WAREHOUSE_PW", "warehouse_pw")])),
-            &job_run(map(&[]), None),
+            &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
             &BTreeMap::new(),

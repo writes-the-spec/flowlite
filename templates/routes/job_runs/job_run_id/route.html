@@ -55,7 +55,7 @@
         <div class="meta__item">
             <div class="meta__label">Scheduled for</div>
             <div class="meta__value">
-                {% if let Some(scheduled_at) = job_run.scheduled_at %}{{ scheduled_at }}{% else %}<span class="none">submitted manually</span>{% endif %}
+                {{ job_run.scheduled_at }}
             </div>
         </div>
 

@@ -333,9 +333,7 @@ fn print_job_run(job_run: &JobRun, task_runs: &[TaskRun]) {
 
     println!("{:<10} {}", "created", format::timestamp(job_run.created_at));
 
-    if let Some(scheduled_at) = job_run.scheduled_at {
-        println!("{:<10} {}", "scheduled", format::timestamp(scheduled_at));
-    }
+    println!("{:<10} {}", "scheduled", format::timestamp(job_run.scheduled_at));
 
     println!("{:<10} {}", "started", optional_timestamp(job_run.started_at));
     println!("{:<10} {}", "finished", optional_timestamp(job_run.finished_at));

@@ -901,7 +901,7 @@ mod tests {
         let job_run = db.insert_job_run_with_parameters(
             JobRunStatus::Running,
             [("region".to_string(), "us".to_string())].into_iter().collect(),
-            None,
+            chrono::Utc::now(),
         ).await;
 
         let seen_path = db.data_dir().join("seen.txt");
@@ -1123,10 +1123,11 @@ mod tests {
     }
 
     /// The behaviour the `env_remove("FLOWLITE_SCHEDULED_AT")` special case used to carry
-    /// on its own, kept honest while the strip takes it over: a manual run must not read a
-    /// scheduled instant out of flowlite's own environment.
+    /// on its own, kept honest while the strip takes it over: a run must not read a
+    /// scheduled instant out of flowlite's own inherited environment, forged or not - the
+    /// metadata layer overwrites it with the run's own due time regardless.
     #[tokio::test]
-    async fn a_manual_run_ignores_a_forged_scheduled_at_in_the_environment() {
+    async fn a_forged_scheduled_at_in_the_inherited_environment_does_not_survive() {
 
         let _environment = writing_the_environment();
 
@@ -1141,9 +1142,7 @@ mod tests {
         let task_run = db.insert_task_run_for_command_with_env(
             job_run.id,
             &format!(
-                // Bracketed because read_command_file waits for a non-empty file, and
-                // what this test asserts is that the value is empty.
-                "printf '[%s]' \"$FLOWLITE_SCHEDULED_AT\" > {}",
+                "printf '%s' \"$FLOWLITE_SCHEDULED_AT\" > {}",
                 seen_path.display(),
             ),
             std::collections::BTreeMap::new(),
@@ -1165,7 +1164,7 @@ mod tests {
 
         unsafe { std::env::remove_var("FLOWLITE_SCHEDULED_AT") };
 
-        assert_eq!(seen, "[]");
+        assert_eq!(seen, job_run.scheduled_at.to_rfc3339());
     }
 
     /// working_dir is where the command runs, not a prefix on it.

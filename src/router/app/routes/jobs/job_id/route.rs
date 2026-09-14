@@ -138,7 +138,7 @@ pub async fn submit_job_route(
         }
     };
 
-    match crud.submit_job(&mut conn, &job_id, &overrides, None).await {
+    match crud.submit_job(&mut conn, &job_id, &overrides, chrono::Utc::now(), None).await {
         Ok(job_run_id) => {
             state.signals.publish();
             Redirect::to(&format!("/job-runs/{}", job_run_id)).into_response()

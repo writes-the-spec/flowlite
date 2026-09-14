@@ -78,6 +78,12 @@ impl CRUD {
             job_description: job_run.job_description,
             parameters: job_run.parameters.0.clone(),
             scheduled_at: job_run.scheduled_at,
+            // Deliberately not copied. A rerun is a manual re-submission of a definition:
+            // the schedule asked for the original, not for this one. Copying it would make
+            // the rerun count as that schedule's outstanding run, which would both block
+            // the real next occurrence and get the rerun deleted by the Scheduler's
+            // reconcile, since its due time is not one of the schedule's occurrences.
+            schedule_id: None,
             tasks: task_runs
                 .into_iter()
                 .map(|task_run| JobRunTaskDefinition {
@@ -128,7 +134,7 @@ mod tests {
         let job_run = db.insert_job_run_with_parameters(
             JobRunStatus::Failed,
             map(&[("region", "us")]),
-            Some(scheduled_at),
+            scheduled_at,
         ).await;
 
         db.insert_task_run_for_command_with_env(
@@ -145,7 +151,7 @@ mod tests {
 
         assert_eq!(rerun.parameters.0.get("region").unwrap(), "us");
         assert_eq!(
-            rerun.scheduled_at.unwrap().timestamp_millis(),
+            rerun.scheduled_at.timestamp_millis(),
             scheduled_at.timestamp_millis(),
         );
 

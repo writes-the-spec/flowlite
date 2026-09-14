@@ -204,6 +204,7 @@ fn finished_job_runs_filter(job_id: Option<String>) -> SelectJobRunsDataFilter {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use chrono::Utc;
 
     use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRun, JobRunStatus};
     use crate::crud::job_run_notification::{
@@ -227,7 +228,8 @@ mod tests {
                     job_name: "Job".to_string(),
                     job_description: String::new(),
                     parameters: BTreeMap::new(),
-                    scheduled_at: None,
+                    scheduled_at: Utc::now(),
+                    schedule_id: None,
                     status,
                 },
             },
