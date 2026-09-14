@@ -121,7 +121,7 @@ impl JobRunMonitor {
     }
 
     /// Leaves the job run running, writing nothing, while any task run of it is still
-    /// pending or running. Asked last, so it claims every job run the outcomes above
+    /// queued or running. Asked last, so it claims every job run the outcomes above
     /// declined; the bail below it means a task run status none of them knows.
     async fn settle_for_running(&self, _job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 

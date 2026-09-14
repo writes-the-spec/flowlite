@@ -67,7 +67,7 @@ struct JobRunIdRouteTemplate {
 
 fn idle_label(status: TaskRunStatus) -> &'static str {
     match status {
-        TaskRunStatus::Pending => "waiting",
+        TaskRunStatus::Queued => "waiting",
         TaskRunStatus::Skipped => "skipped",
         TaskRunStatus::Aborted => "aborted",
         _ => "never started",
@@ -223,7 +223,7 @@ pub async fn job_run_id_route(
         lanes,
         ticks: build_ticks(window_seconds),
         task_count: format!("{} task{}", lane_count, if lane_count == 1 { "" } else { "s" }),
-        polling: matches!(job_run.status, JobRunStatus::Pending | JobRunStatus::Running),
+        polling: matches!(job_run.status, JobRunStatus::Queued | JobRunStatus::Running),
         refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
         stoppable: matches!(job_run.status, JobRunStatus::Running),
     };

@@ -5,15 +5,15 @@ use crate::crud::job_run::JobRunStatus;
 
 /// Where one notification has got to.
 ///
-/// It is written Pending when the run is submitted, long before anyone knows whether it
-/// will be needed — so Pending means "open", not "ready to send". `NotificationService`
+/// It is written Queued when the run is submitted, long before anyone knows whether it
+/// will be needed — so Queued means "open", not "ready to send". `NotificationService`
 /// is what decides: Skipped once the run ends in a way not worth telling anyone about,
 /// otherwise Sent or Failed once it has tried.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, sqlx::Type)]
 #[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum JobRunNotificationStatus {
-    Pending,
+    Queued,
     Sent,
     Failed,
     Skipped,
@@ -22,7 +22,7 @@ pub enum JobRunNotificationStatus {
 impl std::fmt::Display for JobRunNotificationStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            JobRunNotificationStatus::Pending => write!(f, "pending"),
+            JobRunNotificationStatus::Queued => write!(f, "queued"),
             JobRunNotificationStatus::Sent => write!(f, "sent"),
             JobRunNotificationStatus::Failed => write!(f, "failed"),
             JobRunNotificationStatus::Skipped => write!(f, "skipped"),
@@ -64,7 +64,7 @@ impl NotifyOn {
                 | JobRunStatus::TimedOut
                 | JobRunStatus::Invalid => true,
                 JobRunStatus::Submitted
-                | JobRunStatus::Pending
+                | JobRunStatus::Queued
                 | JobRunStatus::Running
                 | JobRunStatus::Succeeded
                 | JobRunStatus::Skipped
@@ -73,7 +73,7 @@ impl NotifyOn {
             NotifyOn::Success => match status {
                 JobRunStatus::Succeeded => true,
                 JobRunStatus::Submitted
-                | JobRunStatus::Pending
+                | JobRunStatus::Queued
                 | JobRunStatus::Running
                 | JobRunStatus::Failed
                 | JobRunStatus::Skipped

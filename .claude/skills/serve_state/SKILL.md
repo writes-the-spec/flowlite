@@ -36,6 +36,6 @@ A data directory answers for itself. `.flowlite/` inside it holds `serve.lock` a
 | [serve.rs](../../../src/cli/commands/serve.rs) | one server per directory; a second is refused naming the pid and URL that holds it |
 | [status.rs](../../../src/cli/commands/status.rs) | `flowlite status` is this question |
 | [shared/wait.rs](../../../src/shared/wait.rs) | a wait against an unserved directory would poll a row with no writer, for ever — see the [frontends skill](../frontends/SKILL.md) for how each frontend words that refusal |
-| [mcp/tools/result.rs](../../../src/mcp/tools/result.rs) | a submitted run comes back `pending`, and against an unserved directory that status will never change, so the result carries a warning |
+| [mcp/tools/result.rs](../../../src/mcp/tools/result.rs) | a submitted run comes back `queued`, and against an unserved directory that status will never change, so the result carries a warning |
 
 Two things follow for anything new that asks. A *check* belongs before the work, once — `ensure_data_dir_is_served` reads it once before a wait rather than on every pass, so a wait may span a deliberate restart of `serve`. And `Starting` counts as served: that server holds the lock and will reach the row.

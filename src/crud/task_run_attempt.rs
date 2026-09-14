@@ -6,7 +6,7 @@ use crate::crud::CRUD;
 #[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum TaskRunAttemptStatus {
-    Pending,
+    Queued,
     Running,
     Succeeded,
     Failed,
@@ -22,7 +22,7 @@ impl TaskRunAttemptStatus {
     /// a new status has to declare which side of this line it falls on.
     pub fn is_finished(&self) -> bool {
         match self {
-            TaskRunAttemptStatus::Pending
+            TaskRunAttemptStatus::Queued
             | TaskRunAttemptStatus::Running => false,
             TaskRunAttemptStatus::Succeeded
             | TaskRunAttemptStatus::Failed
@@ -46,7 +46,7 @@ impl TaskRunAttemptStatus {
         match self {
             TaskRunAttemptStatus::Aborted
             | TaskRunAttemptStatus::Skipped => true,
-            TaskRunAttemptStatus::Pending
+            TaskRunAttemptStatus::Queued
             | TaskRunAttemptStatus::Running
             | TaskRunAttemptStatus::Succeeded
             | TaskRunAttemptStatus::Failed
@@ -60,7 +60,7 @@ impl TaskRunAttemptStatus {
 impl std::fmt::Display for TaskRunAttemptStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TaskRunAttemptStatus::Pending => write!(f, "pending"),
+            TaskRunAttemptStatus::Queued => write!(f, "queued"),
             TaskRunAttemptStatus::Running => write!(f, "running"),
             TaskRunAttemptStatus::Succeeded => write!(f, "succeeded"),
             TaskRunAttemptStatus::Failed => write!(f, "failed"),

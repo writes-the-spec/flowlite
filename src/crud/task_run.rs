@@ -7,7 +7,7 @@ use crate::crud::CRUD;
 #[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum TaskRunStatus {
-    Pending,
+    Queued,
     Running,
     Succeeded,
     Failed,
@@ -24,7 +24,7 @@ impl TaskRunStatus {
     /// stops compiling.
     pub fn is_finished(&self) -> bool {
         match self {
-            TaskRunStatus::Pending
+            TaskRunStatus::Queued
             | TaskRunStatus::Running => false,
             TaskRunStatus::Succeeded
             | TaskRunStatus::Failed
@@ -50,7 +50,7 @@ impl TaskRunStatus {
         match self {
             TaskRunStatus::Aborted
             | TaskRunStatus::Skipped => true,
-            TaskRunStatus::Pending
+            TaskRunStatus::Queued
             | TaskRunStatus::Running
             | TaskRunStatus::Succeeded
             | TaskRunStatus::Failed
@@ -64,7 +64,7 @@ impl TaskRunStatus {
 impl std::fmt::Display for TaskRunStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TaskRunStatus::Pending => write!(f, "pending"),
+            TaskRunStatus::Queued => write!(f, "queued"),
             TaskRunStatus::Running => write!(f, "running"),
             TaskRunStatus::Succeeded => write!(f, "succeeded"),
             TaskRunStatus::Failed => write!(f, "failed"),
@@ -397,7 +397,7 @@ mod tests {
             created_at: Utc::now(),
             started_at: None,
             finished_at: None,
-            status: TaskRunStatus::Pending,
+            status: TaskRunStatus::Queued,
         };
 
         let value = serde_json::to_value(&task_run).unwrap();
@@ -431,7 +431,7 @@ mod tests {
                     env: BTreeMap::new(),
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
-                    status: TaskRunStatus::Pending,
+                    status: TaskRunStatus::Queued,
                 },
             },
         ).await.unwrap();
@@ -449,7 +449,7 @@ mod tests {
         let db = crate::test_support::TestDb::new().await;
 
         let job_run = db.insert_job_run(crate::crud::job_run::JobRunStatus::Running).await;
-        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Pending).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Queued).await;
 
         assert!(task_run.limits.0.is_empty());
     }

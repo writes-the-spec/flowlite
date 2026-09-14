@@ -13,7 +13,7 @@ use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAtte
 impl CRUD {
 
     /// Whether the job already has as many runs in flight as it allows. Only a running
-    /// job run holds a slot — a pending one is waiting for exactly this answer — and a
+    /// job run holds a slot — a queued one is waiting for exactly this answer — and a
     /// max_parallel_runs of 0 means the job has no limit at all.
     pub async fn is_job_at_max_parallel_runs(
         &self,
@@ -57,7 +57,7 @@ impl CRUD {
     }
 
     /// How many task run attempts are Running right now, across every job - what
-    /// `settle_as_pending`'s global cap counts against. Running is the only status that
+    /// `settle_as_queued`'s global cap counts against. Running is the only status that
     /// holds a slot, the same way `is_job_at_max_parallel_runs` counts only running job
     /// runs.
     pub async fn count_running_attempts(&self, conn: &mut SqliteConnection) -> anyhow::Result<u32> {
@@ -76,7 +76,7 @@ impl CRUD {
     }
 
     /// How many running task run attempts currently claim each named limit - what
-    /// `settle_as_pending`'s named-limit gate counts against. A name claimed by three
+    /// `settle_as_queued`'s named-limit gate counts against. A name claimed by three
     /// Running attempts' task runs maps to `3`; a name nothing running claims is absent
     /// rather than `0`. Tallied from Running attempts only, the same as
     /// `count_running_attempts`.

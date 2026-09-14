@@ -145,7 +145,7 @@ impl TaskRunMonitor {
                     job_id: task_run.job_id.clone(),
                     task_id: task_run.task_id.clone(),
                     attempt: last_task_run_attempt.attempt + 1,
-                    status: TaskRunAttemptStatus::Pending,
+                    status: TaskRunAttemptStatus::Queued,
                 },
             },
         ).await?;
@@ -255,7 +255,7 @@ impl TaskRunMonitor {
                     job_id: task_run.job_id.clone(),
                     task_id: task_run.task_id.clone(),
                     attempt: 1,
-                    status: TaskRunAttemptStatus::Pending,
+                    status: TaskRunAttemptStatus::Queued,
                 },
             },
         ).await?;
@@ -450,7 +450,7 @@ mod tests {
 
         assert_eq!(attempts.len(), 1);
         assert_eq!(attempts[0].attempt, 1);
-        assert_eq!(attempts[0].status, TaskRunAttemptStatus::Pending);
+        assert_eq!(attempts[0].status, TaskRunAttemptStatus::Queued);
     }
 
     /// And only one: a second pass reads the attempt it made rather than colliding with

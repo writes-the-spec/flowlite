@@ -1,10 +1,10 @@
 # Job run
 
-`JobRunStatus` lives in [src/crud/job_run.rs](../../../../src/crud/job_run.rs). A `job_run` row is created `Pending` by `CRUD::submit_job`, together with one `Pending` task run per task of the job.
+`JobRunStatus` lives in [src/crud/job_run.rs](../../../../src/crud/job_run.rs). A `job_run` row is created `Queued` by `CRUD::submit_job`, together with one `Queued` task run per task of the job.
 
 | Status | Meaning |
 |---|---|
-| `Pending` | Submitted, waiting. Nothing has run; `started_at` is NULL. |
+| `Queued` | Submitted, waiting. Nothing has run; `started_at` is NULL. |
 | `Running` | Started. Its task runs are being dispatched, executed and retried. |
 | `Succeeded` | Every task run succeeded — also the status of a job with no tasks. |
 | `Failed` | A task run failed with retries exhausted. |
@@ -14,25 +14,25 @@
 
 `Aborted` vs `Skipped` is the "stopped" pair, and **the row's own lifecycle decides which**, not what its task runs report: a job run with `started_at` set is `Aborted`, one that never started is `Skipped`. So `JobRunDispatcher` writes `Skipped` and never `Aborted`, `JobRunMonitor` writes `Aborted` and never `Skipped`. There is deliberately no `Cancelled`.
 
-## Dispatcher: Pending → Running / Skipped
+## Dispatcher: Queued → Running / Skipped
 
-`JobRunDispatcher` ([src/orchestrator/job_run_dispatcher.rs](../../../../src/orchestrator/job_run_dispatcher.rs)) polls `Pending` job runs **oldest id first** — on a signal wake-up or its one-second interval, whichever comes first — and settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened:
+`JobRunDispatcher` ([src/orchestrator/job_run_dispatcher.rs](../../../../src/orchestrator/job_run_dispatcher.rs)) polls `Queued` job runs **oldest id first** — on a signal wake-up or its one-second interval, whichever comes first — and settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened:
 
 1. `settle_as_skipped` — **stopped?** (a `job_run_stop` row exists) → the job run goes `Skipped`, and so do all of its task runs in one update. It never runs.
-2. `settle_as_pending` — **is its job at `max_parallel_runs`?** (`CRUD::is_job_at_max_parallel_runs`, counting that job's `Running` job runs) → the row stays `Pending`, to be reconsidered next pass. **It writes nothing, and exists to say so.**
+2. `settle_as_queued` — **is its job at `max_parallel_runs`?** (`CRUD::is_job_at_max_parallel_runs`, counting that job's `Running` job runs) → the row stays `Queued`, to be reconsidered next pass. **It writes nothing, and exists to say so.**
 3. `settle_as_running` — otherwise → `status = Running`, `started_at = now`.
 4. Past all three → `settle_unclaimed` → `Invalid`. Unreachable while step 3 claims unconditionally; see [SKILL.md](../SKILL.md#the-settle-chain-and-why-its-order-matters).
 4. Past all three → `anyhow::bail!`.
 
-Step 4 is the point of step 2. A pending job run left alone on purpose and one left alone because nobody handled it look identical from the outside — the row just sits there, indistinguishable from a job legitimately queued behind its limit. Naming the deliberate case makes the accidental one an error the `Poller` logs with the row id, instead of a run that never moves and never explains why. It is unreachable today: step 3 starts whatever step 2 declined, unconditionally. Give it a guard of its own without adding an outcome and the bail is what tells you.
+Step 4 is the point of step 2. A queued job run left alone on purpose and one left alone because nobody handled it look identical from the outside — the row just sits there, indistinguishable from a job legitimately queued behind its limit. Naming the deliberate case makes the accidental one an error the `Poller` logs with the row id, instead of a run that never moves and never explains why. It is unreachable today: step 3 starts whatever step 2 declined, unconditionally. Give it a guard of its own without adding an outcome and the bail is what tells you.
 
-**Step 2 has to come before step 3 for that reason**, and it is why the limit is asked once per row rather than twice: the earlier order asked step 3 first, so step 2 had to re-count the job's running runs to claim the rows it turned down. All three dispatchers read skipped, pending, running.
+**Step 2 has to come before step 3 for that reason**, and it is why the limit is asked once per row rather than twice: the earlier order asked step 3 first, so step 2 had to re-count the job's running runs to claim the rows it turned down. All three dispatchers read skipped, queued, running.
 
 They are named `settle_as_*` rather than `transition_to_*` because one of them deliberately writes no status, and calling a no-op a transition would be a lie. Every one of the six services now settles a row this way; the dispatchers use `settle_as_*` and the monitors `settle_for_*`.
 
-**`settle_as_pending` is the only place `max_parallel_runs` is enforced.** Nothing rejects a submission for being over the limit — not `job submit`, not a rerun, not the [scheduler](../../scheduler/SKILL.md) — so an over-limit run is created `Pending` like any other and queues here until a slot frees. Two things follow: the oldest-first sort is what makes the queue fair, and a job that takes longer than its schedule interval accumulates pending runs rather than losing them.
+**`settle_as_queued` is the only place `max_parallel_runs` is enforced.** Nothing rejects a submission for being over the limit — not `job submit`, not a rerun, not the [scheduler](../../scheduler/SKILL.md) — so an over-limit run is created `Queued` like any other and queues here until a slot frees. Two things follow: the oldest-first sort is what makes the queue fair, and a job that takes longer than its schedule interval accumulates queued runs rather than losing them.
 
-Only `Running` runs count against the limit. Counting `Pending` ones too would deadlock the gate, since the row being considered is itself `Pending`.
+Only `Running` runs count against the limit. Counting `Queued` ones too would deadlock the gate, since the row being considered is itself `Queued`.
 
 `started_at` is written exactly once, here; task run retries never touch it.
 

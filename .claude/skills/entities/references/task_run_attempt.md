@@ -19,8 +19,8 @@ One execution of a [`task_run`](task_run.md)'s command. **This is the only level
 
 ## Written by
 
-- **Inserted** by `TaskRunDispatcher` for attempt 1, before it writes the task run `Running`, and by `TaskRunMonitor` for every retry. Two services, but never the same row: the dispatcher only visits `Pending` task runs and the monitor only `Running` ones, and each insert is part of a transition that service already owns — attempt 1 *is* the task run starting, a retry *is* the task run not finishing.
-- **Updated** by `TaskRunAttemptDispatcher` (`Pending` → `Running`/`Skipped`) and `TaskRunAttemptMonitor` (`Running` → terminal). Every transition after the insert belongs to the attempt services alone. Both can also write `Invalid`, which is the one status reached from `Pending` and `Running` alike — see [Rows flowlite cannot read](../../orchestrator/SKILL.md#rows-flowlite-cannot-read).
+- **Inserted** by `TaskRunDispatcher` for attempt 1, before it writes the task run `Running`, and by `TaskRunMonitor` for every retry. Two services, but never the same row: the dispatcher only visits `Queued` task runs and the monitor only `Running` ones, and each insert is part of a transition that service already owns — attempt 1 *is* the task run starting, a retry *is* the task run not finishing.
+- **Updated** by `TaskRunAttemptDispatcher` (`Queued` → `Running`/`Skipped`) and `TaskRunAttemptMonitor` (`Running` → terminal). Every transition after the insert belongs to the attempt services alone. Both can also write `Invalid`, which is the one status reached from `Queued` and `Running` alike — see [Rows flowlite cannot read](../../orchestrator/SKILL.md#rows-flowlite-cannot-read).
 
 **The attempt's output does not live here.** It is appended to [`task_run_attempt_output`](task_run_attempt_output.md) in chunks, one row per stream per poll pass. It used to be two `TEXT NOT NULL` columns on this table, rewritten whole on every pass, which cost the square of the output size — see that reference for why the chunks replaced them and for the 1 MiB per-stream cap.
 

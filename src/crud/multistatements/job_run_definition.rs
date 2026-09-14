@@ -175,7 +175,7 @@ pub(super) fn job_run_notification_definitions(
 
 impl CRUD {
 
-    /// Inserts a pending job run, one pending task run per task, and one open notification
+    /// Inserts a queued job run, one queued task run per task, and one open notification
     /// per channel each of the job's notify blocks named. This is the only place a run's
     /// config is written.
     pub(super) async fn insert_job_run_definition(
@@ -194,7 +194,7 @@ impl CRUD {
                     parameters: definition.parameters.clone(),
                     scheduled_at: definition.scheduled_at,
                     schedule_id: definition.schedule_id.clone(),
-                    status: JobRunStatus::Pending,
+                    status: JobRunStatus::Queued,
                 }
             }
         ).await?;
@@ -216,7 +216,7 @@ impl CRUD {
                         env: task.env.clone(),
                         secret_env: task.secret_env.clone(),
                         working_dir: task.working_dir.clone(),
-                        status: TaskRunStatus::Pending,
+                        status: TaskRunStatus::Queued,
                     }
                 }
             ).await?;
@@ -232,7 +232,7 @@ impl CRUD {
                         notify_on: notification.notify_on,
                         channel: notification.channel,
                         recipients: notification.recipients.clone(),
-                        status: JobRunNotificationStatus::Pending,
+                        status: JobRunNotificationStatus::Queued,
                         error: String::new(),
                     }
                 }

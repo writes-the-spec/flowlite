@@ -80,7 +80,7 @@ impl Scheduler {
             return Ok(());
         };
 
-        // A job still busy with an earlier run is submitted anyway and queues as a pending
+        // A job still busy with an earlier run is submitted anyway and lands as a queued
         // job run: JobRunDispatcher is the one place max_parallel_runs is enforced.
         for schedule_job in schedule_jobs.iter() {
 

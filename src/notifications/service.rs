@@ -250,7 +250,7 @@ impl NotificationService {
                     job_run_id: None,
                     notify_on: None,
                     channel: None,
-                    status: Some(JobRunNotificationStatus::Pending),
+                    status: Some(JobRunNotificationStatus::Queued),
                 },
                 sort: Some(SelectJobRunNotificationsDataSort::Id),
                 limit: None,
@@ -398,7 +398,7 @@ mod tests {
 
         service.handle(&notification).await.unwrap();
 
-        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Pending);
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Queued);
         assert_eq!(service.select().await.unwrap().len(), 1);
     }
 
@@ -413,7 +413,7 @@ mod tests {
 
         db.notification_service().handle(&notification).await.unwrap();
 
-        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Pending);
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Queued);
     }
 
     /// The whole point of the loop: a run that ended the way its notification was written

@@ -174,7 +174,7 @@ mod tests {
         assert_eq!(task_runs.len(), 1);
         assert_eq!(task_runs[0].env.0.get("PYTHONUNBUFFERED").unwrap(), "1");
         assert_eq!(task_runs[0].working_dir, "/tmp");
-        assert_eq!(task_runs[0].status, TaskRunStatus::Pending);
+        assert_eq!(task_runs[0].status, TaskRunStatus::Queued);
     }
 
     /// A rerun replays the concurrency limits the original run was submitted with, so it
@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(notifications[1].recipients.0, vec!["#oncall"]);
 
         // Open again, so the rerun is judged on its own outcome rather than inheriting one.
-        assert_eq!(notifications[0].status, JobRunNotificationStatus::Pending);
+        assert_eq!(notifications[0].status, JobRunNotificationStatus::Queued);
         assert_eq!(notifications[0].sent_at, None);
     }
 }

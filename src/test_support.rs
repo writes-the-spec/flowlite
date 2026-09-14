@@ -502,7 +502,7 @@ impl TestDb {
         self.task_run(id).await
     }
 
-    /// A pending task run waiting on the named task ids, which need not have rows - a
+    /// A queued task run waiting on the named task ids, which need not have rows - a
     /// dependency with none is one of the states the dispatcher has to settle.
     pub async fn insert_task_run_depending_on(&self, job_run_id: i64, depends_on: &[&str]) -> TaskRun {
 
@@ -522,7 +522,7 @@ impl TestDb {
                     env: BTreeMap::new(),
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
-                    status: TaskRunStatus::Pending,
+                    status: TaskRunStatus::Queued,
                 },
             },
         ).await.unwrap();
@@ -658,7 +658,7 @@ impl TestDb {
             .unwrap();
     }
 
-    /// Marks a pending attempt as one a spawn was begun for, which is what a crash between
+    /// Marks a queued attempt as one a spawn was begun for, which is what a crash between
     /// the spawn and the Running write leaves behind. No CRUD update writes `started_at`
     /// without a status, so this reaches past CRUD for a state only a crash produces.
     pub async fn begin_spawn_of_task_run_attempt(&self, task_run_attempt_id: i64) {
@@ -703,7 +703,7 @@ impl TestDb {
                     notify_on,
                     channel,
                     recipients: recipients.iter().map(|r| r.to_string()).collect(),
-                    status: JobRunNotificationStatus::Pending,
+                    status: JobRunNotificationStatus::Queued,
                     error: String::new(),
                 },
             },

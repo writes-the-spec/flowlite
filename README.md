@@ -495,7 +495,7 @@ the runs themselves.
 ## Overlapping runs
 
 A job runs one at a time by default. A run created while another is still going is not
-rejected — it waits as a pending job run and starts as soon as the earlier one finishes,
+rejected — it waits as a queued job run and starts as soon as the earlier one finishes,
 oldest waiting run first.
 
 Raise or lift the limit per job:
@@ -509,9 +509,9 @@ tasks:
     command: ./sync.sh
 ```
 
-The limit is enforced in one place, when a pending run is picked up to start, so every way
+The limit is enforced in one place, when a queued run is picked up to start, so every way
 of creating a run is held to it alike — `job submit`, a rerun, and the scheduler. A job
-that takes longer than its schedule interval will therefore queue pending runs and work
+that takes longer than its schedule interval will therefore queue up runs and work
 through them back to back.
 
 ## Concurrency limits
@@ -756,7 +756,7 @@ flowlite job submit hello-world
 A long-lived data directory accumulates job runs forever unless something prunes them.
 `RetentionService` does, on the same poller every other background service runs on, inside
 `flowlite serve`. A run becomes a candidate for deletion once it is **finished**, and never
-before — never `Pending` or `Running`, and never one that still owes an undelivered
+before — never `Queued` or `Running`, and never one that still owes an undelivered
 notification (see [Run notifications](#run-notifications)).
 
 Each job keeps its own newest runs:
@@ -964,7 +964,7 @@ sent — the same reason `job submit --json` reads the run back and prints it wi
 `--wait`.
 
 `get_serve_status` and `list_limits` are the pair an agent reaches for when a submitted run
-sits at `pending`: the first says whether anything is serving the directory at all, the
+sits at `queued`: the first says whether anything is serving the directory at all, the
 second what the run is waiting behind. `submit_job` warns about an unserved directory once,
 at the moment it writes; these are how the agent checks for itself at any point after.
 

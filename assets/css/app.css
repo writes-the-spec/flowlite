@@ -218,7 +218,7 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
     flex: none;
     background: var(--text-2);
 }
-.mark--pending { background: none; box-shadow: inset 0 0 0 1px var(--text-2); }
+.mark--queued { background: none; box-shadow: inset 0 0 0 1px var(--text-2); }
 .mark--submitted { background: none; box-shadow: inset 0 0 0 1px var(--text-2); opacity: .55; }
 .mark--running { background: var(--brand); animation: breathe 1.6s ease-in-out infinite; }
 .mark--succeeded { background: var(--ok); }
@@ -609,7 +609,7 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
 }
 .lane__span--succeeded { background: var(--ok); }
 .lane__span--failed, .lane__span--timedout { background: var(--fail); }
-.lane__span--pending { background: none; box-shadow: inset 0 0 0 1px var(--rule); }
+.lane__span--queued { background: none; box-shadow: inset 0 0 0 1px var(--rule); }
 .lane__span--submitted { background: none; box-shadow: inset 0 0 0 1px var(--rule); opacity: .55; }
 .lane__span--invalid { background: var(--invalid); }
 

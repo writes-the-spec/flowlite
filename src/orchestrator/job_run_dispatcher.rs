@@ -8,8 +8,8 @@ use crate::signals::Signals;
 use chrono::Utc;
 
 
-/// Picks up pending job runs, oldest first, and settles each one as skipped, still
-/// pending or running. Hands off to JobRunMonitor through the job run status only.
+/// Picks up queued job runs, oldest first, and settles each one as skipped, still
+/// queued or running. Hands off to JobRunMonitor through the job run status only.
 pub struct JobRunDispatcher {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
@@ -31,19 +31,19 @@ impl JobRunDispatcher {
         }
     }
 
-    /// Settles a pending job run as exactly one outcome. Falling past all three bails
+    /// Settles a queued job run as exactly one outcome. Falling past all three bails
     /// rather than returning quietly: a row nobody handled looks exactly like one
     /// legitimately queued, so silence is the one failure this service cannot spot.
     ///
-    /// `settle_as_pending` has to precede `settle_as_running`, which starts the run
+    /// `settle_as_queued` has to precede `settle_as_running`, which starts the run
     /// unconditionally and would take a slot the job does not have.
-    async fn handle_pending_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
+    async fn handle_queued_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         if self.settle_as_skipped(job_run).await? {
             return Ok(());
         }
 
-        if self.settle_as_pending(job_run).await? {
+        if self.settle_as_queued(job_run).await? {
             return Ok(());
         }
 
@@ -126,11 +126,11 @@ impl JobRunDispatcher {
         Ok(true)
     }
 
-    /// Leaves the job run pending, writing nothing, while its job is at max_parallel_runs.
+    /// Leaves the job run queued, writing nothing, while its job is at max_parallel_runs.
     ///
     /// The only place max_parallel_runs is enforced: submitting never rejects a job, so
     /// every path that creates a job run queues behind this gate without knowing about it.
-    async fn settle_as_pending(&self, job_run: &JobRun) -> anyhow::Result<bool> {
+    async fn settle_as_queued(&self, job_run: &JobRun) -> anyhow::Result<bool> {
 
         self.is_job_at_max_parallel_runs(job_run).await
     }
@@ -155,7 +155,7 @@ impl JobRunDispatcher {
         Ok(true)
     }
 
-    async fn get_pending_job_runs(&self) -> anyhow::Result<Vec<JobRun>> {
+    async fn get_queued_job_runs(&self) -> anyhow::Result<Vec<JobRun>> {
 
         self.crud.select_job_runs(
             &*self.conn_pool,
@@ -163,7 +163,7 @@ impl JobRunDispatcher {
                 filter: SelectJobRunsDataFilter {
                     id: None,
                     job_id: None,
-                    status: Some(JobRunStatus::Pending),
+                    status: Some(JobRunStatus::Queued),
                     statuses: None,
                     scheduled_at_lte: None,
                     schedule_id: None,
@@ -218,11 +218,11 @@ impl Service for JobRunDispatcher {
     }
 
     async fn select(&self) -> anyhow::Result<Vec<JobRun>> {
-        self.get_pending_job_runs().await
+        self.get_queued_job_runs().await
     }
 
     async fn handle(&self, job_run: &JobRun) -> anyhow::Result<()> {
-        self.handle_pending_job_run(job_run).await
+        self.handle_queued_job_run(job_run).await
     }
 }
 
@@ -240,7 +240,7 @@ mod tests {
 
         let db = TestDb::new().await;
 
-        let job_run = db.insert_job_run(JobRunStatus::Pending).await;
+        let job_run = db.insert_job_run(JobRunStatus::Queued).await;
 
         db.job_run_dispatcher().settle_unclaimed(&job_run).await.unwrap();
 

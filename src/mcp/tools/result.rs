@@ -45,12 +45,12 @@ pub(super) fn error_result(err: &anyhow::Error) -> CallToolResult {
 /// The result `submit_job` and `stop_job_run` both return: the same JSON `--json` prints,
 /// as the first content block so a client reading only that one still gets valid JSON, with
 /// a second block appended only when nothing is serving the directory the run is in - an
-/// agent that got back `pending` with no warning would poll a status that cannot change.
+/// agent that got back `queued` with no warning would poll a status that cannot change.
 ///
 /// A warned result carries no `structured_content` at all. The alternative was to add the
 /// warning beside the run in the structured value, and that is worse: a client that reads
 /// `structured_content` and ignores the text would otherwise be handed `{"status":
-/// "pending"}` with nothing saying it will never move, which is the exact failure the
+/// "queued"}` with nothing saying it will never move, which is the exact failure the
 /// warning exists to prevent, and giving that field one shape when warned and another when
 /// not is a trap of its own. Dropping it leaves such a client with the text blocks, which
 /// carry both facts - the shape every MCP client is required to read.
@@ -68,7 +68,7 @@ pub(super) fn job_run_result(job_run: JobRun, warning: Option<String>) -> CallTo
 /// `Some` naming the directory only when nothing at all is serving it - `Starting` counts
 /// as served, the same way `ensure_data_dir_is_served` treats it, since that server has the
 /// lock and will reach the row. Writing to a directory whose server is not up yet is
-/// legitimate; an agent that got back `pending` with no warning would poll a status that
+/// legitimate; an agent that got back `queued` with no warning would poll a status that
 /// cannot change until something else does.
 ///
 /// One sentence for both writing tools: the serve process is what would start the run
@@ -147,7 +147,7 @@ mod tests {
 
     /// A warned result drops `structured_content` rather than carrying a run whose status
     /// the warning contradicts - a client that reads only the structured value would
-    /// otherwise be handed `pending` with nothing saying it will never move.
+    /// otherwise be handed `queued` with nothing saying it will never move.
     #[test]
     fn a_warned_result_carries_no_structured_content_and_still_leads_with_json() {
         let result = job_run_result(job_run_fixture(), Some("nothing is serving it".to_string()));
@@ -157,7 +157,7 @@ mod tests {
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         let parsed: serde_json::Value = serde_json::from_str(text).expect(text);
-        assert_eq!(parsed["status"], serde_json::json!("pending"));
+        assert_eq!(parsed["status"], serde_json::json!("queued"));
 
         assert_eq!(result.content[1].as_text().unwrap().text, "nothing is serving it");
     }
@@ -169,7 +169,7 @@ mod tests {
         let result = job_run_result(job_run_fixture(), None);
 
         assert_eq!(result.content.len(), 1);
-        assert_eq!(result.structured_content.unwrap()["status"], serde_json::json!("pending"));
+        assert_eq!(result.structured_content.unwrap()["status"], serde_json::json!("queued"));
     }
 
     /// `success_json`'s text must serialize the value directly, not by way of a
@@ -190,7 +190,7 @@ mod tests {
         assert!(text.find("zebra").unwrap() < text.find("apple").unwrap(), "{text}");
     }
 
-    /// A pending `JobRun` with everything but its status filled with filler - what
+    /// A queued `JobRun` with everything but its status filled with filler - what
     /// `job_run_result`'s tests build against, standing in for a row `submit_job` would
     /// otherwise have to seed a whole data directory to produce.
     fn job_run_fixture() -> JobRun {
@@ -205,7 +205,7 @@ mod tests {
             schedule_id: None,
             started_at: None,
             finished_at: None,
-            status: JobRunStatus::Pending,
+            status: JobRunStatus::Queued,
         }
     }
 }

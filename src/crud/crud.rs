@@ -367,7 +367,7 @@ impl CRUD {
     /// Rejects a task graph the orchestrator could never finish. TaskRunDispatcher only
     /// starts a task run once every task run it depends on has succeeded, so a dependency
     /// on a task that isn't part of the job, or a cycle between tasks, would leave the
-    /// task runs pending - and their job run running - forever.
+    /// task runs queued - and their job run running - forever.
     fn validate_job_tasks(job_yaml: &JobYaml) -> anyhow::Result<()> {
 
         let mut task_ids: HashSet<&str> = HashSet::new();

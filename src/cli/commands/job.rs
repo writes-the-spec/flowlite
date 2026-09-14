@@ -148,7 +148,7 @@ impl JobSubmitCmd {
         };
 
         // Only a run that was waited for has an outcome worth an exit code: without --wait
-        // it is pending by construction, which is not a failure.
+        // it is queued by construction, which is not a failure.
         let outcome_error = match self.wait {
             true => run_outcome_error(job_run.id, job_run.status),
             false => None,
@@ -231,7 +231,7 @@ fn run_outcome_error(job_run_id: i64, status: JobRunStatus) -> Option<String> {
     match status {
         JobRunStatus::Succeeded => None,
         JobRunStatus::Submitted
-        | JobRunStatus::Pending
+        | JobRunStatus::Queued
         | JobRunStatus::Running
         | JobRunStatus::Failed
         | JobRunStatus::Skipped

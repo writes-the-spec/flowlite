@@ -16,7 +16,7 @@ use anyhow::Context;
 use chrono::{TimeDelta, Utc};
 
 
-/// Picks up pending task run attempts and settles each one as skipped, or as running by
+/// Picks up queued task run attempts and settles each one as skipped, or as running by
 /// spawning its command. Hands the child process to TaskRunAttemptMonitor through
 /// TaskRunAttemptChildren, and the attempt itself through its status, never by calling
 /// it.
@@ -47,10 +47,10 @@ impl TaskRunAttemptDispatcher {
         }
     }
 
-    /// Settles a pending attempt as exactly one outcome. `settle_as_pending` has to precede
+    /// Settles a queued attempt as exactly one outcome. `settle_as_queued` has to precede
     /// `settle_as_running`, which spawns unconditionally and would start a retry the moment
     /// it was inserted.
-    async fn handle_pending_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
+    async fn handle_queued_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         if self.settle_as_invalid(task_run_attempt).await? {
             return Ok(());
@@ -60,7 +60,7 @@ impl TaskRunAttemptDispatcher {
             return Ok(());
         }
 
-        if self.settle_as_pending(task_run_attempt).await? {
+        if self.settle_as_queued(task_run_attempt).await? {
             return Ok(());
         }
 
@@ -104,7 +104,7 @@ impl TaskRunAttemptDispatcher {
         Ok(())
     }
 
-    /// Settles a pending attempt a spawn was already begun for, which only a crash between
+    /// Settles a queued attempt a spawn was already begun for, which only a crash between
     /// the spawn and the Running write leaves behind. Its command may be running, so
     /// starting it again would run the command twice — worse than an unknown outcome.
     ///
@@ -173,7 +173,7 @@ impl TaskRunAttemptDispatcher {
         Ok(true)
     }
 
-    /// Leaves the attempt pending for any of three reasons: its retry_delay has yet to
+    /// Leaves the attempt queued for any of three reasons: its retry_delay has yet to
     /// pass since it was created — which is when TaskRunMonitor decided to retry — the
     /// global cap on running attempts is already full, or a named limit its task run
     /// claims is already full.
@@ -183,7 +183,7 @@ impl TaskRunAttemptDispatcher {
     /// for the common case of a first attempt. The cap, once reached, applies to every
     /// attempt regardless of retry state. The named-limit check runs last, in
     /// `a_claimed_limit_is_full`.
-    async fn settle_as_pending(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
+    async fn settle_as_queued(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
 
         if task_run_attempt.attempt > 1 {
             let task_run = self.get_task_run(task_run_attempt).await?;
@@ -208,7 +208,7 @@ impl TaskRunAttemptDispatcher {
         self.a_claimed_limit_is_full(task_run_attempt).await
     }
 
-    /// The third and last reason `settle_as_pending` leaves a row pending: one of the
+    /// The third and last reason `settle_as_queued` leaves a row queued: one of the
     /// named limits its task run claims (`task_run.limits`, the job+task union `submit_job`
     /// snapshotted) is already at its configured maximum.
     ///
@@ -331,7 +331,7 @@ impl TaskRunAttemptDispatcher {
 
         let started_at = Utc::now();
 
-        // Recorded before the spawn, not after: a crash between the two leaves a pending
+        // Recorded before the spawn, not after: a crash between the two leaves a queued
         // attempt whose command is running, and `settle_as_invalid` reads this to refuse to
         // start it again.
         self.crud.update_task_run_attempts(
@@ -444,7 +444,7 @@ impl TaskRunAttemptDispatcher {
         Ok(true)
     }
 
-    async fn get_pending_task_run_attempts(&self) -> anyhow::Result<Vec<TaskRunAttempt>> {
+    async fn get_queued_task_run_attempts(&self) -> anyhow::Result<Vec<TaskRunAttempt>> {
 
         self.crud.select_task_run_attempts(
             &*self.conn_pool,
@@ -453,7 +453,7 @@ impl TaskRunAttemptDispatcher {
                     task_run_id: None,
                     job_run_id: None,
                     task_id: None,
-                    status: Some(TaskRunAttemptStatus::Pending),
+                    status: Some(TaskRunAttemptStatus::Queued),
                 },
                 sort: Some(SelectTaskRunAttemptsDataSort::Id),
             }
@@ -546,11 +546,11 @@ impl Service for TaskRunAttemptDispatcher {
     }
 
     async fn select(&self) -> anyhow::Result<Vec<TaskRunAttempt>> {
-        self.get_pending_task_run_attempts().await
+        self.get_queued_task_run_attempts().await
     }
 
     async fn handle(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
-        self.handle_pending_task_run_attempt(task_run_attempt).await
+        self.handle_queued_task_run_attempt(task_run_attempt).await
     }
 }
 
@@ -565,7 +565,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::os::unix::ffi::OsStringExt;
 
-    /// Calls `settle_as_pending` rather than the whole chain on purpose: falling through it
+    /// Calls `settle_as_queued` rather than the whole chain on purpose: falling through it
     /// spawns a real process, which is what these tests are about avoiding.
     async fn is_waiting_to_retry(attempt: u32, retry_delay: u32, created_ago: i64) -> bool {
 
@@ -577,7 +577,7 @@ mod tests {
         let task_run_attempt = db.insert_task_run_attempt(
             &task_run,
             attempt,
-            TaskRunAttemptStatus::Pending,
+            TaskRunAttemptStatus::Queued,
         ).await;
 
         db.backdate_task_run_attempt(
@@ -588,7 +588,7 @@ mod tests {
         let task_run_attempt = db.task_run_attempts(task_run.id).await.pop().unwrap();
 
         db.task_run_attempt_dispatcher()
-            .settle_as_pending(&task_run_attempt)
+            .settle_as_queued(&task_run_attempt)
             .await
             .unwrap()
     }
@@ -615,7 +615,7 @@ mod tests {
         assert!(!is_waiting_to_retry(2, 0, 0).await);
     }
 
-    /// Runs the whole chain over a pending attempt and reports what it settled it as.
+    /// Runs the whole chain over a queued attempt and reports what it settled it as.
     ///
     /// Unlike `is_waiting_to_retry` this lets `settle_as_running` spawn, which is the
     /// point: the order of the chain is only observable when the outcome that starts a
@@ -640,7 +640,7 @@ mod tests {
         let task_run_attempt = db.insert_task_run_attempt(
             &task_run,
             attempt,
-            TaskRunAttemptStatus::Pending,
+            TaskRunAttemptStatus::Queued,
         ).await;
 
         db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
@@ -648,13 +648,13 @@ mod tests {
         db.task_run_attempt(task_run_attempt.id).await.status
     }
 
-    /// Pins `settle_as_pending` ahead of `settle_as_running`. Swap them and the retry is
+    /// Pins `settle_as_queued` ahead of `settle_as_running`. Swap them and the retry is
     /// spawned the moment TaskRunMonitor inserts it, and the retry_delay never applies.
     #[tokio::test]
-    async fn a_retry_inside_its_delay_is_left_pending_rather_than_started() {
+    async fn a_retry_inside_its_delay_is_left_queued_rather_than_started() {
         let status = settled_attempt_status(2, 60, false).await;
 
-        assert_eq!(status, TaskRunAttemptStatus::Pending);
+        assert_eq!(status, TaskRunAttemptStatus::Queued);
     }
 
     /// Pins `settle_as_skipped` ahead of `settle_as_running`. Swap them and a stopped job
@@ -666,8 +666,8 @@ mod tests {
         assert_eq!(status, TaskRunAttemptStatus::Skipped);
     }
 
-    /// Pins `settle_as_skipped` ahead of `settle_as_pending`. Swap them and a retry still
-    /// inside its delay is held pending by a job run that was stopped, instead of skipped,
+    /// Pins `settle_as_skipped` ahead of `settle_as_queued`. Swap them and a retry still
+    /// inside its delay is held queued by a job run that was stopped, instead of skipped,
     /// so the stop does not take effect until the delay expires.
     #[tokio::test]
     async fn a_stopped_job_run_skips_a_retry_that_is_still_inside_its_delay() {
@@ -683,8 +683,8 @@ mod tests {
         assert_eq!(status, TaskRunAttemptStatus::Running);
     }
 
-    /// Runs the chain over a pending attempt on its own task run while a second task
-    /// run's attempt already sits Running, and reports what the pending one settled as -
+    /// Runs the chain over a queued attempt on its own task run while a second task
+    /// run's attempt already sits Running, and reports what the queued one settled as -
     /// the global cap counts across every job, so the two task runs are unrelated on
     /// purpose.
     async fn settled_attempt_status_with_one_running(max_running_attempts: u32) -> TaskRunAttemptStatus {
@@ -699,7 +699,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_retryable_task_run(job_run.id, 0, 0).await;
-        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
 
         db.task_run_attempt_dispatcher_with_max_running_attempts(max_running_attempts)
             .handle(&task_run_attempt)
@@ -710,12 +710,12 @@ mod tests {
     }
 
     /// The gate this task adds: a cap of 1 is already spent by the other task run's
-    /// Running attempt, so this one is left pending rather than spawned.
+    /// Running attempt, so this one is left queued rather than spawned.
     #[tokio::test]
-    async fn a_pending_attempt_stays_pending_while_the_global_cap_is_full() {
+    async fn a_queued_attempt_stays_queued_while_the_global_cap_is_full() {
         let status = settled_attempt_status_with_one_running(1).await;
 
-        assert_eq!(status, TaskRunAttemptStatus::Pending);
+        assert_eq!(status, TaskRunAttemptStatus::Queued);
     }
 
     /// 0 is "no limit" - the same Running attempt that fills a cap of 1 does not hold
@@ -728,10 +728,10 @@ mod tests {
     }
 
     /// The retry-delay check does not regress now that a second reason keeps a row
-    /// pending: a retry still inside its delay stays pending even with no cap at all to
+    /// queued: a retry still inside its delay stays queued even with no cap at all to
     /// blame it on.
     #[tokio::test]
-    async fn a_retry_inside_its_delay_stays_pending_even_with_no_cap() {
+    async fn a_retry_inside_its_delay_stays_queued_even_with_no_cap() {
 
         let _environment = reading_the_environment();
 
@@ -743,7 +743,7 @@ mod tests {
         let task_run_attempt = db.insert_task_run_attempt(
             &task_run,
             2,
-            TaskRunAttemptStatus::Pending,
+            TaskRunAttemptStatus::Queued,
         ).await;
 
         db.task_run_attempt_dispatcher_with_max_running_attempts(0)
@@ -753,13 +753,13 @@ mod tests {
 
         assert_eq!(
             db.task_run_attempt(task_run_attempt.id).await.status,
-            TaskRunAttemptStatus::Pending,
+            TaskRunAttemptStatus::Queued,
         );
     }
 
-    /// Runs the chain over a pending attempt claiming "warehouse", with `running_claimants`
+    /// Runs the chain over a queued attempt claiming "warehouse", with `running_claimants`
     /// other task runs' attempts already Running and also claiming "warehouse", and
-    /// reports what the pending one settled as. `configured_max` of `None` leaves
+    /// reports what the queued one settled as. `configured_max` of `None` leaves
     /// "warehouse" out of `[concurrency_limits]` entirely - the unconfigured-name case.
     async fn settled_attempt_status_with_a_claimed_limit(
         running_claimants: u32,
@@ -778,7 +778,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run_with_limits(job_run.id, vec!["warehouse".to_string()]).await;
-        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
 
         let concurrency_limits = match configured_max {
             Some(max) => BTreeMap::from([("warehouse".to_string(), max)]),
@@ -795,10 +795,10 @@ mod tests {
 
     /// The gate this task adds: a named limit configured to 1 is already spent by another
     /// task run's Running attempt claiming the same name, so a claimant of it is left
-    /// pending - while a task run claiming nothing at all still starts in the same pass,
+    /// queued - while a task run claiming nothing at all still starts in the same pass,
     /// proving the check is per-attempt rather than a pass-wide freeze.
     #[tokio::test]
-    async fn a_claimant_of_a_full_limit_stays_pending_while_a_non_claimant_starts() {
+    async fn a_claimant_of_a_full_limit_stays_queued_while_a_non_claimant_starts() {
 
         let _environment = reading_the_environment();
 
@@ -810,10 +810,10 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let claimant_task_run = db.insert_task_run_with_limits(job_run.id, vec!["warehouse".to_string()]).await;
-        let claimant_attempt = db.insert_task_run_attempt(&claimant_task_run, 1, TaskRunAttemptStatus::Pending).await;
+        let claimant_attempt = db.insert_task_run_attempt(&claimant_task_run, 1, TaskRunAttemptStatus::Queued).await;
 
         let non_claimant_task_run = db.insert_task_run_with_limits(job_run.id, Vec::new()).await;
-        let non_claimant_attempt = db.insert_task_run_attempt(&non_claimant_task_run, 1, TaskRunAttemptStatus::Pending).await;
+        let non_claimant_attempt = db.insert_task_run_attempt(&non_claimant_task_run, 1, TaskRunAttemptStatus::Queued).await;
 
         let dispatcher = db.task_run_attempt_dispatcher_with_concurrency_limits(
             BTreeMap::from([("warehouse".to_string(), 1)]),
@@ -822,7 +822,7 @@ mod tests {
         dispatcher.handle(&claimant_attempt).await.unwrap();
         dispatcher.handle(&non_claimant_attempt).await.unwrap();
 
-        assert_eq!(db.task_run_attempt(claimant_attempt.id).await.status, TaskRunAttemptStatus::Pending);
+        assert_eq!(db.task_run_attempt(claimant_attempt.id).await.status, TaskRunAttemptStatus::Queued);
         assert_eq!(db.task_run_attempt(non_claimant_attempt.id).await.status, TaskRunAttemptStatus::Running);
     }
 
@@ -849,7 +849,7 @@ mod tests {
             job_run.id,
             vec!["openai_api".to_string(), "warehouse".to_string()],
         ).await;
-        let claimant_attempt = db.insert_task_run_attempt(&claimant_task_run, 1, TaskRunAttemptStatus::Pending).await;
+        let claimant_attempt = db.insert_task_run_attempt(&claimant_task_run, 1, TaskRunAttemptStatus::Queued).await;
 
         let dispatcher = db.task_run_attempt_dispatcher_with_concurrency_limits(
             BTreeMap::from([
@@ -860,7 +860,7 @@ mod tests {
 
         dispatcher.handle(&claimant_attempt).await.unwrap();
 
-        assert_eq!(db.task_run_attempt(claimant_attempt.id).await.status, TaskRunAttemptStatus::Pending);
+        assert_eq!(db.task_run_attempt(claimant_attempt.id).await.status, TaskRunAttemptStatus::Queued);
     }
 
     /// 0 is "no limit" for a named limit too, the same as the global cap.
@@ -921,7 +921,7 @@ mod tests {
         let task_run_attempt = db.insert_task_run_attempt(
             &task_run,
             1,
-            TaskRunAttemptStatus::Pending,
+            TaskRunAttemptStatus::Queued,
         ).await;
 
         db.task_run_attempt_dispatcher()
@@ -964,7 +964,7 @@ mod tests {
         let task_run_attempt = db.insert_task_run_attempt(
             &task_run,
             1,
-            TaskRunAttemptStatus::Pending,
+            TaskRunAttemptStatus::Queued,
         ).await;
 
         db.task_run_attempt_dispatcher_with_secrets(
@@ -1019,7 +1019,7 @@ mod tests {
         let task_run_attempt = db.insert_task_run_attempt(
             &task_run,
             1,
-            TaskRunAttemptStatus::Pending,
+            TaskRunAttemptStatus::Queued,
         ).await;
 
         db.task_run_attempt_dispatcher()
@@ -1070,7 +1070,7 @@ mod tests {
         let task_run_attempt = db.insert_task_run_attempt(
             &task_run,
             1,
-            TaskRunAttemptStatus::Pending,
+            TaskRunAttemptStatus::Queued,
         ).await;
 
         let handled = db.task_run_attempt_dispatcher().handle(&task_run_attempt).await;
@@ -1110,7 +1110,7 @@ mod tests {
         let task_run_attempt = db.insert_task_run_attempt(
             &task_run,
             1,
-            TaskRunAttemptStatus::Pending,
+            TaskRunAttemptStatus::Queued,
         ).await;
 
         db.task_run_attempt_dispatcher()
@@ -1154,7 +1154,7 @@ mod tests {
         let task_run_attempt = db.insert_task_run_attempt(
             &task_run,
             1,
-            TaskRunAttemptStatus::Pending,
+            TaskRunAttemptStatus::Queued,
         ).await;
 
         db.task_run_attempt_dispatcher()
@@ -1192,7 +1192,7 @@ mod tests {
         let task_run_attempt = db.insert_task_run_attempt(
             &task_run,
             1,
-            TaskRunAttemptStatus::Pending,
+            TaskRunAttemptStatus::Queued,
         ).await;
 
         db.task_run_attempt_dispatcher()
@@ -1229,7 +1229,7 @@ mod tests {
         let task_run_attempt = db.insert_task_run_attempt(
             &task_run,
             1,
-            TaskRunAttemptStatus::Pending,
+            TaskRunAttemptStatus::Queued,
         ).await;
 
         let error = db.task_run_attempt_dispatcher()
@@ -1254,7 +1254,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run(job_run.id, crate::crud::task_run::TaskRunStatus::Running).await;
-        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
 
         db.task_run_attempt_dispatcher().settle_unclaimed(&task_run_attempt).await.unwrap();
 
@@ -1264,12 +1264,12 @@ mod tests {
         );
     }
 
-    /// A crash between `spawn()` and the Running write leaves a pending attempt whose
+    /// A crash between `spawn()` and the Running write leaves a queued attempt whose
     /// command is already running. Starting it again runs the command twice, which is
-    /// worse than any unknown — so a pending attempt that was already spawned for is
+    /// worse than any unknown — so a queued attempt that was already spawned for is
     /// settled rather than started.
     #[tokio::test]
-    async fn a_pending_attempt_already_spawned_for_is_invalid() {
+    async fn a_queued_attempt_already_spawned_for_is_invalid() {
 
         let _environment = reading_the_environment();
 
@@ -1277,7 +1277,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run_for_command(job_run.id, "echo hi", 3600).await;
-        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
 
         db.begin_spawn_of_task_run_attempt(task_run_attempt.id).await;
 
@@ -1297,7 +1297,7 @@ mod tests {
     /// running twice. Asserted on the children map rather than on a side effect of the
     /// command, which a just-spawned process may not have reached yet.
     #[tokio::test]
-    async fn a_pending_attempt_already_spawned_for_is_not_spawned_again() {
+    async fn a_queued_attempt_already_spawned_for_is_not_spawned_again() {
 
         let _environment = reading_the_environment();
 
@@ -1305,7 +1305,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run_for_command(job_run.id, "echo hi", 3600).await;
-        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
 
         db.begin_spawn_of_task_run_attempt(task_run_attempt.id).await;
 
@@ -1320,7 +1320,7 @@ mod tests {
 
     /// The ordinary path: an attempt nothing has spawned for still starts.
     #[tokio::test]
-    async fn a_fresh_pending_attempt_still_starts() {
+    async fn a_fresh_queued_attempt_still_starts() {
 
         let _environment = reading_the_environment();
 
@@ -1328,7 +1328,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run_for_command(job_run.id, "echo hi", 3600).await;
-        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
 
         db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
 
@@ -1354,13 +1354,13 @@ mod tests {
             std::collections::BTreeMap::new(),
             "/no/such/working/directory",
         ).await;
-        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
 
         assert!(db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.is_err());
 
         let after = db.task_run_attempt(task_run_attempt.id).await;
 
-        assert_eq!(after.status, TaskRunAttemptStatus::Pending);
+        assert_eq!(after.status, TaskRunAttemptStatus::Queued);
         assert!(after.started_at.is_none(), "a failed spawn left the attempt looking spawned");
     }
 
@@ -1375,7 +1375,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run_for_command(job_run.id, "exec sleep 30", 3600).await;
-        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Pending).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
 
         db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
 

@@ -324,15 +324,15 @@ mod tests {
         assert_eq!(ids, expected);
     }
 
-    /// Test 2: Pending and Running runs are never selected, including when they are the
+    /// Test 2: Queued and Running runs are never selected, including when they are the
     /// oldest rows and the ceiling is exceeded.
     #[tokio::test]
-    async fn pending_and_running_runs_are_never_selected() {
+    async fn queued_and_running_runs_are_never_selected() {
 
         let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
         db.insert_job("job", 1).await;
 
-        let pending = db.insert_job_run(JobRunStatus::Pending).await;
+        let queued = db.insert_job_run(JobRunStatus::Queued).await;
         let running = db.insert_job_run(JobRunStatus::Running).await;
         let f1 = db.insert_job_run(JobRunStatus::Succeeded).await;
         let f2 = db.insert_job_run(JobRunStatus::Succeeded).await;
@@ -346,15 +346,15 @@ mod tests {
         expected.sort();
 
         assert_eq!(ids, expected);
-        assert!(!ids.contains(&pending.id));
+        assert!(!ids.contains(&queued.id));
         assert!(!ids.contains(&running.id));
         assert!(!ids.contains(&f3.id));
     }
 
-    /// Test 3: a finished run with a Pending notification survives; once the row is Sent
+    /// Test 3: a finished run with a Queued notification survives; once the row is Sent
     /// it is selected on a later pass.
     #[tokio::test]
-    async fn a_pending_notification_survives_until_sent() {
+    async fn a_queued_notification_survives_until_sent() {
 
         let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
         db.insert_job("job", 1).await;

@@ -8,9 +8,9 @@ use crate::crud::CRUD;
 #[serde(rename_all = "lowercase")]
 pub enum JobRunStatus {
     /// Written, but not yet due. `JobRunReleaser` is the only thing that moves a run out
-    /// of this status, and it only ever moves it to Pending.
+    /// of this status, and it only ever moves it to Queued.
     Submitted,
-    Pending,
+    Queued,
     Running,
     Succeeded,
     Failed,
@@ -29,7 +29,7 @@ impl JobRunStatus {
     /// keeping its own copy to forget to update.
     pub const ALL: [JobRunStatus; 9] = [
         JobRunStatus::Submitted,
-        JobRunStatus::Pending,
+        JobRunStatus::Queued,
         JobRunStatus::Running,
         JobRunStatus::Succeeded,
         JobRunStatus::Failed,
@@ -45,7 +45,7 @@ impl JobRunStatus {
     pub fn is_finished(&self) -> bool {
         match self {
             JobRunStatus::Submitted
-            | JobRunStatus::Pending
+            | JobRunStatus::Queued
             | JobRunStatus::Running => false,
             JobRunStatus::Succeeded
             | JobRunStatus::Failed
@@ -62,7 +62,7 @@ impl std::fmt::Display for JobRunStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             JobRunStatus::Submitted => write!(f, "submitted"),
-            JobRunStatus::Pending => write!(f, "pending"),
+            JobRunStatus::Queued => write!(f, "queued"),
             JobRunStatus::Running => write!(f, "running"),
             JobRunStatus::Succeeded => write!(f, "succeeded"),
             JobRunStatus::Failed => write!(f, "failed"),
@@ -579,7 +579,7 @@ mod tests {
         three_runs(&db).await;
 
         assert_eq!(count(&db, SelectJobRunsDataFilter { status: Some(JobRunStatus::Failed), ..empty_filter() }).await, 1);
-        assert_eq!(count(&db, SelectJobRunsDataFilter { status: Some(JobRunStatus::Pending), ..empty_filter() }).await, 0);
+        assert_eq!(count(&db, SelectJobRunsDataFilter { status: Some(JobRunStatus::Queued), ..empty_filter() }).await, 0);
     }
 
     #[tokio::test]
@@ -742,7 +742,7 @@ mod tests {
         let db = crate::test_support::TestDb::new().await;
 
         let written = db.insert_job_run_at(
-            JobRunStatus::Pending,
+            JobRunStatus::Queued,
             chrono::Utc::now(),
             Some("nightly"),
         ).await;
@@ -822,7 +822,7 @@ mod tests {
         let db = TestDb::new().await;
 
         let now = chrono::Utc::now();
-        let released = db.insert_job_run_at(JobRunStatus::Pending, now + chrono::TimeDelta::hours(1), Some("nightly")).await;
+        let released = db.insert_job_run_at(JobRunStatus::Queued, now + chrono::TimeDelta::hours(1), Some("nightly")).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
         db.crud.delete_job_runs_with_children(&mut conn, &DeleteJobRunsData {

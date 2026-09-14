@@ -11,7 +11,7 @@ It is **not part of the [orchestrator](../orchestrator/SKILL.md)**, but it is dr
 
 `ServeCmd::run` starts the scheduler and the orchestrator side by side, and they share no state: the scheduler's entire output is a `CRUD::submit_job` call, and everything after that — dispatching, executing, retrying, finishing — is the orchestrator's business. Keep it that way: the scheduler must never read a job run's status or touch a task run.
 
-That is why it submits a job **unconditionally**, even one whose earlier run is still going: `max_parallel_runs` is enforced in `JobRunDispatcher::settle_as_pending` and nowhere else, so the over-limit run queues there as a `Pending` job run instead of being dropped here. A concurrency check in this loop would have to count job runs by status, which is exactly the coupling the paragraph above rules out.
+That is why it submits a job **unconditionally**, even one whose earlier run is still going: `max_parallel_runs` is enforced in `JobRunDispatcher::settle_as_queued` and nowhere else, so the over-limit run queues there as a `Queued` job run instead of being dropped here. A concurrency check in this loop would have to count job runs by status, which is exactly the coupling the paragraph above rules out.
 
 ## Definition (YAML → in-memory `mem.schedule` + `mem.schedule_job`)
 
@@ -36,7 +36,7 @@ jobs:
 `Scheduler::select` (called by its `Poller` once a second) fetches every schedule with `next_run < now` and `disabled = false`, ordered by `row_id`; `Scheduler::handle` hands each to `handle_due_schedule`, which:
 
 1. selects the schedule's `schedule_job` rows,
-2. calls `CRUD::submit_job` for each — one `job_run` and its `Pending` task runs, exactly as `job submit` does — and publishes, since that insert is what `JobRunDispatcher` is waiting to see. **A submit that fails is logged and skipped with `continue`, and step 3 still advances the schedule**, so that job loses this occurrence rather than being retried on the next tick,
+2. calls `CRUD::submit_job` for each — one `job_run` and its `Queued` task runs, exactly as `job submit` does — and publishes, since that insert is what `JobRunDispatcher` is waiting to see. **A submit that fails is logged and skipped with `continue`, and step 3 still advances the schedule**, so that job loses this occurrence rather than being retried on the next tick,
 3. advances the schedule: `CronTrigger::from_schedule(schedule).get_next_run(schedule.next_run)`.
 
 Step 3 measures from the schedule's **own** `next_run`, not from now, so a tick that arrives late still advances by one cron step rather than skipping ahead.

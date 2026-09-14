@@ -42,7 +42,7 @@ Each history is a separate `sqlx::migrate!` with its own checksums, which is why
 
 **Updated after insert?** Disk tables are; that is what `update_*` methods are for. `mem` tables are re-seeded fresh every startup and are mostly insert-only — **except `schedule.next_run`**, which the [Scheduler](../scheduler/SKILL.md) advances on every fire. It is the one config column that carries live state.
 
-**Deleted from, on the disk side only.** `RetentionService` ([src/retention/service.rs](../../../src/retention/service.rs)) deletes finished job runs old enough that nothing needs them — never one still `Pending` or `Running`, and never one still owing an undelivered notification — and with each one, every row across the other five disk tables that carries its `job_run_id`. Each reference file below says so under its own **Deleted by**. A job overrides how many of its own runs survive on `mem.job.keep_runs` (see [job.md](references/job.md)); `mem` tables are never deleted this way, since there is nothing to prune in a schema rebuilt fresh on every start.
+**Deleted from, on the disk side only.** `RetentionService` ([src/retention/service.rs](../../../src/retention/service.rs)) deletes finished job runs old enough that nothing needs them — never one still `Queued` or `Running`, and never one still owing an undelivered notification — and with each one, every row across the other five disk tables that carries its `job_run_id`. Each reference file below says so under its own **Deleted by**. A job overrides how many of its own runs survive on `mem.job.keep_runs` (see [job.md](references/job.md)); `mem` tables are never deleted this way, since there is nothing to prune in a schema rebuilt fresh on every start.
 
 ## Adding a new table
 

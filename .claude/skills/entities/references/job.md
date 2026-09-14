@@ -34,5 +34,5 @@ In-memory config, re-seeded on every startup, so nothing here survives a restart
 ## Gotchas
 
 - **`job submit <arg>` matches `job_id`, not `name`,** despite the argument's name. Don't copy the CLI arg naming as a model without checking which column it filters on.
-- `max_parallel_runs` is enforced in exactly one place, `JobRunDispatcher::settle_as_pending`. Nothing rejects a submission for being over it — the run is created `Pending` and queues. See the [orchestrator skill](../../orchestrator/references/job_run.md).
+- `max_parallel_runs` is enforced in exactly one place, `JobRunDispatcher::settle_as_queued`. Nothing rejects a submission for being over it — the run is created `Queued` and queues. See the [orchestrator skill](../../orchestrator/references/job_run.md).
 - **A job run whose job is no longer in the config is never gated.** `is_job_at_max_parallel_runs` returns `false` when the row is missing, so a run left over from a deleted or renamed job starts on the next pass rather than queueing forever.

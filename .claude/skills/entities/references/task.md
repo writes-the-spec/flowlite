@@ -19,7 +19,7 @@ One row per task of a job, declared inline under the job YAML's `tasks:` list. L
 
 ## Written by
 
-`CRUD::init` only, from `JobYamlTask`. `CRUD::validate_job_tasks` rejects the job at startup if a task id is declared twice, if a `depends_on` id is not a task of the same job, or if the dependencies form a cycle — `TaskRunDispatcher` waits for every dependency to succeed, so any of those would leave the task runs pending and their job run running forever.
+`CRUD::init` only, from `JobYamlTask`. `CRUD::validate_job_tasks` rejects the job at startup if a task id is declared twice, if a `depends_on` id is not a task of the same job, or if the dependencies form a cycle — `TaskRunDispatcher` waits for every dependency to succeed, so any of those would leave the task runs queued and their job run running forever.
 
 Each task's dependency list is written to **two** places from the same source: `depends_on` here, and one normalized row per edge in [`task_dependent`](task_dependent.md).
 

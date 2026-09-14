@@ -1,6 +1,6 @@
 # `job_run` (disk)
 
-One execution of a [`job`](job.md). Created `Pending`, driven to a terminal status by `JobRunDispatcher` and `JobRunMonitor`, and kept forever — this is the history.
+One execution of a [`job`](job.md). Created `Queued`, driven to a terminal status by `JobRunDispatcher` and `JobRunMonitor`, and kept forever — this is the history.
 
 | Column | Meaning |
 |---|---|
@@ -17,12 +17,12 @@ One execution of a [`job`](job.md). Created `Pending`, driven to a terminal stat
 
 ## Written by
 
-- **Inserted** by `CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/](../../../../src/crud/multistatements/)), always `Pending`, together with one [`task_run`](task_run.md) per task and one [`job_run_notification`](job_run_notification.md) per channel the job named, in the same call. `rerun_job` reads an existing run and its task runs and reproduces the snapshot rather than re-reading the YAML, so a rerun executes what the original did — including copying `parameters` and `scheduled_at` verbatim, not the job's current defaults or a fresh instant. A rerun of a scheduled run therefore still runs for the day it was originally scheduled for. `schedule_id` is the one field `rerun_job` deliberately does **not** copy: it always writes `NULL`, because the schedule asked for the original run, not for the rerun — copying it would make the rerun count as that schedule's own outstanding run.
-- **Updated** by `JobRunDispatcher` (`Pending` → `Running`/`Skipped`) and `JobRunMonitor` (`Running` → terminal), and by nothing else. No request handler and no CLI command writes a run status.
+- **Inserted** by `CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/](../../../../src/crud/multistatements/)), always `Queued`, together with one [`task_run`](task_run.md) per task and one [`job_run_notification`](job_run_notification.md) per channel the job named, in the same call. `rerun_job` reads an existing run and its task runs and reproduces the snapshot rather than re-reading the YAML, so a rerun executes what the original did — including copying `parameters` and `scheduled_at` verbatim, not the job's current defaults or a fresh instant. A rerun of a scheduled run therefore still runs for the day it was originally scheduled for. `schedule_id` is the one field `rerun_job` deliberately does **not** copy: it always writes `NULL`, because the schedule asked for the original run, not for the rerun — copying it would make the rerun count as that schedule's own outstanding run.
+- **Updated** by `JobRunDispatcher` (`Queued` → `Running`/`Skipped`) and `JobRunMonitor` (`Running` → terminal), and by nothing else. No request handler and no CLI command writes a run status.
 
 ## Deleted by
 
-`RetentionService` ([src/retention/service.rs](../../../../src/retention/service.rs)), through `CRUD::delete_job_runs_with_children` ([src/crud/multistatements/](../../../../src/crud/multistatements/delete_job_runs_with_children.rs)) — never a run still `Pending` or `Running`, and never one still owing a `Pending` row in [`job_run_notification`](job_run_notification.md). Deleting a run deletes this row and, in the same transaction, every row across the other five tables here that carries its `job_run_id`.
+`RetentionService` ([src/retention/service.rs](../../../../src/retention/service.rs)), through `CRUD::delete_job_runs_with_children` ([src/crud/multistatements/](../../../../src/crud/multistatements/delete_job_runs_with_children.rs)) — never a run still `Queued` or `Running`, and never one still owing a `Queued` row in [`job_run_notification`](job_run_notification.md). Deleting a run deletes this row and, in the same transaction, every row across the other five tables here that carries its `job_run_id`.
 
 `[job_defaults] keep_runs` (or a job's own `keep_runs` override on [`mem.job`](job.md)) bounds how many of a job's newest finished runs survive; `[retention] keep_runs_total` is the ceiling across every job, oldest first, enforced after each job's own number. See [Retention](../../../../README.md#retention).
 

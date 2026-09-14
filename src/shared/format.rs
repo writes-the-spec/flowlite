@@ -36,7 +36,7 @@ pub fn duration(seconds: i64) -> String {
 pub fn job_run_word(status: JobRunStatus) -> &'static str {
     match status {
         JobRunStatus::Submitted => "scheduled",
-        JobRunStatus::Pending => "queued",
+        JobRunStatus::Queued => "queued",
         JobRunStatus::Running => "running",
         JobRunStatus::Succeeded => "succeeded",
         JobRunStatus::Failed => "failed",
@@ -49,7 +49,7 @@ pub fn job_run_word(status: JobRunStatus) -> &'static str {
 
 pub fn task_run_word(status: TaskRunStatus) -> &'static str {
     match status {
-        TaskRunStatus::Pending => "queued",
+        TaskRunStatus::Queued => "queued",
         TaskRunStatus::Running => "running",
         TaskRunStatus::Succeeded => "succeeded",
         TaskRunStatus::Failed => "failed",
@@ -62,7 +62,7 @@ pub fn task_run_word(status: TaskRunStatus) -> &'static str {
 
 pub fn task_run_attempt_word(status: TaskRunAttemptStatus) -> &'static str {
     match status {
-        TaskRunAttemptStatus::Pending => "queued",
+        TaskRunAttemptStatus::Queued => "queued",
         TaskRunAttemptStatus::Running => "running",
         TaskRunAttemptStatus::Succeeded => "succeeded",
         TaskRunAttemptStatus::Failed => "failed",

@@ -134,7 +134,7 @@ mod tests {
         let task_run_attempt = db.insert_task_run_attempt(
             &task_run,
             1,
-            TaskRunAttemptStatus::Pending,
+            TaskRunAttemptStatus::Queued,
         ).await;
 
         db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();

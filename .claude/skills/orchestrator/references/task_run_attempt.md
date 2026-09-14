@@ -1,12 +1,12 @@
 # Task run attempt
 
-`TaskRunAttemptStatus` lives in [src/crud/task_run_attempt.rs](../../../../src/crud/task_run_attempt.rs). One `task_run_attempt` row per execution of a task run's command, inserted `Pending` by `TaskRunDispatcher` for attempt 1 and by `TaskRunMonitor` for every retry — this is the only level that runs a process.
+`TaskRunAttemptStatus` lives in [src/crud/task_run_attempt.rs](../../../../src/crud/task_run_attempt.rs). One `task_run_attempt` row per execution of a task run's command, inserted `Queued` by `TaskRunDispatcher` for attempt 1 and by `TaskRunMonitor` for every retry — this is the only level that runs a process.
 
-Two services insert these rows, but never the same one: the dispatcher only visits `Pending` task runs and the monitor only `Running` ones, and each insert is part of the transition that service already owns — attempt 1 *is* the task run starting, a retry *is* the task run not finishing. Every transition on the row afterwards belongs to the attempt services alone. `attempt` itself is computed (`1`, then `last.attempt + 1`), so a `UNIQUE (task_run_id, attempt)` index is what turns a second process racing the first into a failed insert instead of a task run quietly executed twice.
+Two services insert these rows, but never the same one: the dispatcher only visits `Queued` task runs and the monitor only `Running` ones, and each insert is part of the transition that service already owns — attempt 1 *is* the task run starting, a retry *is* the task run not finishing. Every transition on the row afterwards belongs to the attempt services alone. `attempt` itself is computed (`1`, then `last.attempt + 1`), so a `UNIQUE (task_run_id, attempt)` index is what turns a second process racing the first into a failed insert instead of a task run quietly executed twice.
 
 | Status | Meaning |
 |---|---|
-| `Pending` | Inserted, waiting for the dispatcher. |
+| `Queued` | Inserted, waiting for the dispatcher. |
 | `Running` | Its command was spawned; the monitor owns the process. |
 | `Succeeded` | The process exited 0. |
 | `Failed` | The process exited non-zero. |
@@ -14,17 +14,17 @@ Two services insert these rows, but never the same one: the dispatcher only visi
 | `Aborted` | The process was killed because the job run was stopped — or there was no process left to wait for. |
 | `Skipped` | The job run was stopped between the insert and the dispatch, so the command never started. |
 
-Same eight variants as `TaskRunStatus`, because both levels have the same dispatcher/monitor shape — but a separate enum, and `TaskRunMonitor` maps one onto the other explicitly. The `Pending` state is what makes an attempt skippable: a stop arriving in the one tick before it is cleared to run finds nothing to kill.
+Same eight variants as `TaskRunStatus`, because both levels have the same dispatcher/monitor shape — but a separate enum, and `TaskRunMonitor` maps one onto the other explicitly. The `Queued` state is what makes an attempt skippable: a stop arriving in the one tick before it is cleared to run finds nothing to kill.
 
-## Dispatcher: Pending → Running / Skipped
+## Dispatcher: Queued → Running / Skipped
 
-`TaskRunAttemptDispatcher` ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../../src/orchestrator/task_run_attempt_dispatcher.rs)) polls **all** `Pending` attempts, on a signal wake-up or its one-second interval, whichever comes first. It settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened:
+`TaskRunAttemptDispatcher` ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../../src/orchestrator/task_run_attempt_dispatcher.rs)) polls **all** `Queued` attempts, on a signal wake-up or its one-second interval, whichever comes first. It settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened:
 
 1. `settle_as_skipped` — **job run stopped?** → `Skipped`, `finished_at` set, `started_at` left NULL: the command never ran.
-2. `settle_as_pending` — **a retry whose delay has not passed?** (`attempt > 1` and `now < created_at + task_run.retry_delay`) → writes nothing, the row waits for a later pass. This is where `retry_delay` is enforced, and it has to precede step 3, which spawns unconditionally.
+2. `settle_as_queued` — **a retry whose delay has not passed?** (`attempt > 1` and `now < created_at + task_run.retry_delay`) → writes nothing, the row waits for a later pass. This is where `retry_delay` is enforced, and it has to precede step 3, which spawns unconditionally.
 3. `settle_as_running` — otherwise: load the attempt's `task_run` and `job_run` rows, build the environment with [`build_task_run_attempt_env`](../../../../src/orchestrator/task_run_attempt_env.rs) (the task's `env:`, then `FLOWLITE_PARAM_*` from `job_run.parameters`, then injected metadata — see the [entities skill](../../entities/references/job_run.md)), spawn `sh -c <command>` with that environment, piped stdout/stderr, and `task_run.working_dir` as its working directory when it isn't empty, **spawn one reader task per stream** over an mpsc, insert the child into `TaskRunAttemptChildren`, then write `Running` and `started_at = now`. This is the one outcome that does work outside the database, so a spawn failure propagates as the row's error and `Poller::run` logs it and moves to the next attempt.
 
-Step 1 before step 2 is what makes a stop beat a waiting retry: a job run stopped mid-delay skips the pending retry rather than spawning it when the delay runs out. Attempt 1 never reaches step 2 — it is inserted by `TaskRunDispatcher` as it starts the task run and has nothing to wait for, so the `attempt > 1` check spares it the task run query as well.
+Step 1 before step 2 is what makes a stop beat a waiting retry: a job run stopped mid-delay skips the queued retry rather than spawning it when the delay runs out. Attempt 1 never reaches step 2 — it is inserted by `TaskRunDispatcher` as it starts the task run and has nothing to wait for, so the `attempt > 1` check spares it the task run query as well.
 
 **The child goes into the map before the status is written.** In the other order the monitor can see a `Running` attempt whose process isn't in the map yet and abort it.
 

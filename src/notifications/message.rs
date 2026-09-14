@@ -390,7 +390,7 @@ fn context_block(mrkdwn: &str) -> serde_json::Value {
 fn job_run_emoji(status: JobRunStatus) -> &'static str {
     match status {
         JobRunStatus::Submitted => ":clock3:",
-        JobRunStatus::Pending => ":hourglass_flowing_sand:",
+        JobRunStatus::Queued => ":hourglass_flowing_sand:",
         JobRunStatus::Running => ":arrows_counterclockwise:",
         JobRunStatus::Succeeded => ":white_check_mark:",
         JobRunStatus::Failed => ":x:",
@@ -403,7 +403,7 @@ fn job_run_emoji(status: JobRunStatus) -> &'static str {
 
 fn task_run_emoji(status: TaskRunStatus) -> &'static str {
     match status {
-        TaskRunStatus::Pending => ":hourglass_flowing_sand:",
+        TaskRunStatus::Queued => ":hourglass_flowing_sand:",
         TaskRunStatus::Running => ":arrows_counterclockwise:",
         TaskRunStatus::Succeeded => ":white_check_mark:",
         TaskRunStatus::Failed => ":x:",
@@ -504,7 +504,7 @@ fn failure_output(failure: &JobRunFailureTask, max_output_bytes: usize) -> Strin
 fn job_run_accent(status: JobRunStatus) -> &'static str {
     match status {
         JobRunStatus::Submitted => "#8c959f",
-        JobRunStatus::Pending => "#6a737d",
+        JobRunStatus::Queued => "#6a737d",
         JobRunStatus::Running => "#0969da",
         JobRunStatus::Succeeded => "#1a7f37",
         JobRunStatus::Failed => "#b42318",
@@ -517,7 +517,7 @@ fn job_run_accent(status: JobRunStatus) -> &'static str {
 
 fn task_run_accent(status: TaskRunStatus) -> &'static str {
     match status {
-        TaskRunStatus::Pending => "#6a737d",
+        TaskRunStatus::Queued => "#6a737d",
         TaskRunStatus::Running => "#0969da",
         TaskRunStatus::Succeeded => "#1a7f37",
         TaskRunStatus::Failed => "#b42318",

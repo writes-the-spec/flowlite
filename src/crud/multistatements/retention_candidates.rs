@@ -72,7 +72,7 @@ impl CRUD {
         Ok(job_ids)
     }
 
-    /// Finished runs matching `data.filter`, minus any that still owe a `Pending`
+    /// Finished runs matching `data.filter`, minus any that still owe a `Queued`
     /// notification, windowed by `data.sort`/`data.offset` and capped at `data.limit`.
     ///
     /// **The result is always ordered oldest-first**, whatever `sort` says, because
@@ -102,7 +102,7 @@ impl CRUD {
     ///
     /// **The ranking happens before the notification exclusion**, on purpose: the window is
     /// taken from `job_run` alone, and only the runs it hands back are then checked against
-    /// the `Pending` notifications. A run awaiting delivery still occupies its ranked slot,
+    /// the `Queued` notifications. A run awaiting delivery still occupies its ranked slot,
     /// so excluding it must never pull a neighbour across the `offset` line to compensate.
     ///
     /// **`limit` bounds the window, not the result**, which is the one thing that differs
@@ -155,13 +155,13 @@ impl CRUD {
             offset,
         }).await?;
 
-        let pending = self.select_job_run_notifications(&mut *conn, &SelectJobRunNotificationsData {
+        let queued = self.select_job_run_notifications(&mut *conn, &SelectJobRunNotificationsData {
             filter: SelectJobRunNotificationsDataFilter {
                 id: None,
                 job_run_id: None,
                 notify_on: None,
                 channel: None,
-                status: Some(JobRunNotificationStatus::Pending),
+                status: Some(JobRunNotificationStatus::Queued),
             },
             sort: None,
             limit: None,
@@ -169,9 +169,9 @@ impl CRUD {
         }).await?;
 
         // Every open notification in the database, rather than one lookup per candidate:
-        // Pending is a transient state a row leaves as soon as its run settles, so this set
+        // Queued is a transient state a row leaves as soon as its run settles, so this set
         // is a handful of rows however long the history is.
-        let owing: HashSet<i64> = pending.into_iter()
+        let owing: HashSet<i64> = queued.into_iter()
             .map(|notification| notification.job_run_id)
             .collect();
 
@@ -272,14 +272,14 @@ mod tests {
     }
 
     /// The run at rank position `keep_runs` — the oldest run *inside* the kept window, not
-    /// the globally oldest run — still counts toward that window even though a `Pending`
+    /// the globally oldest run — still counts toward that window even though a `Queued`
     /// notification keeps it out of the result, so excluding it must not pull the next run
     /// into the result to compensate. Filtering before ranking would do exactly that: with
     /// the notification on `runs[2]` (rank 3 of 5, `keep_runs = 3`), a filter-then-rank
     /// query would re-rank the surviving four runs and wrongly protect `runs[1]` (which
     /// would shift from rank 4 to rank 3); this is the regression that rules it out.
     #[tokio::test]
-    async fn a_pending_notification_excludes_a_run_without_shifting_the_others_rank() {
+    async fn a_queued_notification_excludes_a_run_without_shifting_the_others_rank() {
 
         let db = TestDb::new().await;
 
@@ -303,7 +303,7 @@ mod tests {
     }
 
     /// A `Sent` notification is done owing anything, so the run behind it is a candidate
-    /// again — only a `Pending` row excludes a run.
+    /// again — only a `Queued` row excludes a run.
     #[tokio::test]
     async fn a_sent_notification_does_not_exclude_its_run() {
 
@@ -337,14 +337,14 @@ mod tests {
         assert_eq!(candidates, vec![runs[0].id, runs[1].id]);
     }
 
-    /// `Pending` and `Running` runs are never candidates, even when they are the oldest
+    /// `Queued` and `Running` runs are never candidates, even when they are the oldest
     /// rows and an offset of `0` would otherwise put them past the kept window.
     #[tokio::test]
-    async fn pending_and_running_runs_are_never_returned() {
+    async fn queued_and_running_runs_are_never_returned() {
 
         let db = TestDb::new().await;
 
-        let pending = db.insert_job_run(JobRunStatus::Pending).await;
+        let queued = db.insert_job_run(JobRunStatus::Queued).await;
         let running = db.insert_job_run(JobRunStatus::Running).await;
         let finished = db.insert_job_run(JobRunStatus::Failed).await;
 
@@ -356,7 +356,7 @@ mod tests {
             offset: None,
         }).await.unwrap();
 
-        assert!(!candidates.contains(&pending.id));
+        assert!(!candidates.contains(&queued.id));
         assert!(!candidates.contains(&running.id));
         assert_eq!(candidates, vec![finished.id]);
     }
@@ -412,12 +412,12 @@ mod tests {
     }
 
     /// The documented under-delete: `limit` bounds the ranked window, and a run owing a
-    /// `Pending` notification *inside* that window is dropped from it rather than replaced,
+    /// `Queued` notification *inside* that window is dropped from it rather than replaced,
     /// so the pass hands back fewer ids than `limit`.
     ///
     /// Six finished runs with `keep_runs = 3` leave three candidates, and a `limit` of two
     /// takes the oldest two of them — one of which owes a notification, so only one id comes
-    /// back. Nothing is lost by it: once the notification is no longer `Pending` the next
+    /// back. Nothing is lost by it: once the notification is no longer `Queued` the next
     /// pass takes that run too. Fetching the window under its limit and then excluding is
     /// the only ordering that keeps the limit a bound on the *query*; deleting less than the
     /// budget allows is the safe direction this whole design takes.
@@ -464,7 +464,7 @@ mod tests {
     /// where a `max_deletes_per_pass` budget actually binds, and the two shapes reach the
     /// window through different arms of the `sort` match.
     ///
-    /// Five runs across two jobs with a `Pending` notification on the second-oldest and a
+    /// Five runs across two jobs with a `Queued` notification on the second-oldest and a
     /// `limit` of 3: the window is the oldest three, the owing run is dropped from it rather
     /// than replaced, and two ids come back for a budget of three.
     ///
@@ -534,10 +534,10 @@ mod tests {
         assert_eq!(oldest, vec![a1.id, b1.id, a2.id]);
     }
 
-    /// `Pending`, `Running` and notification-owing runs are excluded here exactly as they
+    /// `Queued`, `Running` and notification-owing runs are excluded here exactly as they
     /// are from the per-job window.
     #[tokio::test]
-    async fn oldest_first_excludes_unfinished_and_pending_notification_runs() {
+    async fn oldest_first_excludes_unfinished_and_queued_notification_runs() {
 
         let db = TestDb::new().await;
 
@@ -627,14 +627,14 @@ mod tests {
         assert_eq!(oldest_first, newest_first);
     }
 
-    /// Counts settled runs across every job, and leaves `Pending`/`Running` out — what the
+    /// Counts settled runs across every job, and leaves `Queued`/`Running` out — what the
     /// global `keep_runs_total` ceiling is compared against.
     #[tokio::test]
     async fn count_finished_job_runs_counts_only_settled_runs() {
 
         let db = TestDb::new().await;
 
-        db.insert_job_run(JobRunStatus::Pending).await;
+        db.insert_job_run(JobRunStatus::Queued).await;
         db.insert_job_run(JobRunStatus::Running).await;
         insert_finished_run_for(&db, "job-a", JobRunStatus::Succeeded).await;
         insert_finished_run_for(&db, "job-b", JobRunStatus::Failed).await;

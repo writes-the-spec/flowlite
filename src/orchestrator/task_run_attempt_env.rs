@@ -44,7 +44,7 @@ pub fn build_task_run_attempt_env(
         // unknown to the running server's app_config.
         //
         // Nothing leaks either way: this returns before the spawn, so `settle_as_running`
-        // never writes started_at and the attempt stays Pending. But Pending is
+        // never writes started_at and the attempt stays Queued. But Queued is
         // re-selected on every poll pass, so this message is what an operator sees
         // repeating in the log until somebody acts on it - which is why it names the job
         // and the task rather than only the attempt, and carries the same remedy the
@@ -175,7 +175,7 @@ mod tests {
             created_at: Utc::now(),
             started_at: None,
             finished_at: None,
-            status: TaskRunAttemptStatus::Pending,
+            status: TaskRunAttemptStatus::Queued,
             process_group_id: None,
         }
     }
@@ -406,7 +406,7 @@ mod tests {
     /// A backstop for what the startup check in `serve` did not see: a rerun of a row
     /// whose YAML has since dropped the entry, or a run another process submitted from a
     /// YAML this server has not read. Neither leaks - `settle_as_running` bails before
-    /// writing `started_at` - but the attempt stays Pending and is re-selected every poll
+    /// writing `started_at` - but the attempt stays Queued and is re-selected every poll
     /// pass, so this message is printed for ever until somebody acts on it. It therefore
     /// has to carry everything acting on it needs: which job and task, which variable and
     /// secret, and what to do about it. The same argument
