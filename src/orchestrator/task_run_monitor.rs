@@ -7,6 +7,22 @@ use crate::signals::Signals;
 use chrono::Utc;
 
 
+/// A running task run's next outcome, as `derive_next_status` reads it off its last
+/// attempt. `Running` and `Retry` both leave the task run's own status untouched — the
+/// first because the attempt is still going, the second because a new attempt starting
+/// is not a task run status — which is why this is its own type rather than a reuse of
+/// `TaskRunStatus`.
+enum TaskRunOutcome {
+    Invalid,
+    Succeeded,
+    Failed,
+    TimedOut,
+    Aborted,
+    Retry,
+    Running,
+}
+
+
 /// Watches running task runs and drives them through their attempts: it starts the
 /// first one, retries a failed one while the task has retries left, and finishes the
 /// task run with the status of its last attempt otherwise. Hands off to the attempt
@@ -33,42 +49,73 @@ impl TaskRunMonitor {
         }
     }
 
-    /// Settles a running task run as exactly one outcome, from its last attempt.
-    ///
-    /// The guards are exclusive — the last attempt has one status — so the order carries
-    /// nothing and follows the other two monitors only so all three read alike.
+    /// Dispatches the write for whatever `derive_next_status` decides. Deciding only reads.
     async fn handle_running_task_run(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         let last_task_run_attempt = self.get_or_start_task_run_attempt(task_run).await?;
 
-        if self.settle_for_invalid(task_run, &last_task_run_attempt).await? {
-            return Ok(());
+        match Self::derive_next_status(task_run, &last_task_run_attempt) {
+            Some(TaskRunOutcome::Invalid) => self.set_to_invalid(task_run).await,
+            Some(TaskRunOutcome::Succeeded) => self.set_to_succeeded(task_run).await,
+            Some(TaskRunOutcome::Failed) => self.set_to_failed(task_run).await,
+            Some(TaskRunOutcome::TimedOut) => self.set_to_timed_out(task_run).await,
+            Some(TaskRunOutcome::Aborted) => self.set_to_aborted(task_run).await,
+            Some(TaskRunOutcome::Retry) => self.set_to_retry(task_run, &last_task_run_attempt).await,
+            Some(TaskRunOutcome::Running) => Ok(()),
+            None => self.settle_unclaimed(task_run).await,
         }
-
-        if self.settle_for_succeeded(task_run, &last_task_run_attempt).await? {
-            return Ok(());
-        }
-
-        if self.settle_for_failed(task_run, &last_task_run_attempt).await? {
-            return Ok(());
-        }
-
-        if self.settle_for_timed_out(task_run, &last_task_run_attempt).await? {
-            return Ok(());
-        }
-
-        if self.settle_for_aborted(task_run, &last_task_run_attempt).await? {
-            return Ok(());
-        }
-
-        if self.settle_for_running(task_run, &last_task_run_attempt).await? {
-            return Ok(());
-        }
-
-        self.settle_unclaimed(task_run).await
     }
 
-    /// Unreachable while the ladder claims every attempt status. See
+    /// Derives a running task run's next outcome from its last attempt alone: the guards
+    /// are exclusive — the last attempt has one status — so the order carries nothing and
+    /// follows the other two monitors only so all three read alike.
+    ///
+    /// An attempt set none of these claims reaches `None`, unreachable while this covers
+    /// every attempt status.
+    fn derive_next_status(
+        task_run: &TaskRun,
+        last_task_run_attempt: &TaskRunAttempt,
+    ) -> Option<TaskRunOutcome> {
+
+        // An unknown outranks every named outcome: the task run cannot claim an ending it
+        // does not know. Never retried — flowlite has no idea what that attempt did.
+        if last_task_run_attempt.status == TaskRunAttemptStatus::Invalid {
+            return Some(TaskRunOutcome::Invalid);
+        }
+
+        if last_task_run_attempt.status == TaskRunAttemptStatus::Succeeded {
+            return Some(TaskRunOutcome::Succeeded);
+        }
+
+        // The attempt services still own the attempt.
+        if !last_task_run_attempt.status.is_finished() {
+            return Some(TaskRunOutcome::Running);
+        }
+
+        if last_task_run_attempt.status == TaskRunAttemptStatus::Failed {
+            // Attempts count from 1, so the task run gets max_retries + 1 of them.
+            return Some(if last_task_run_attempt.attempt < task_run.max_retries + 1 {
+                TaskRunOutcome::Retry
+            } else {
+                TaskRunOutcome::Failed
+            });
+        }
+
+        if last_task_run_attempt.status == TaskRunAttemptStatus::TimedOut {
+            return Some(TaskRunOutcome::TimedOut);
+        }
+
+        // Both stop outcomes land here: killed mid-flight, or skipped before the command
+        // started. A skipped attempt does **not** make the task run Skipped — it had
+        // started and may have left output, so Skipped would claim nothing ran.
+        if last_task_run_attempt.status.is_stopped() {
+            return Some(TaskRunOutcome::Aborted);
+        }
+
+        None
+    }
+
+    /// Unreachable while `derive_next_status` claims every attempt status. See
     /// `JobRunDispatcher::settle_unclaimed` for why it settles rather than raises.
     async fn settle_unclaimed(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
@@ -81,60 +128,35 @@ impl TaskRunMonitor {
         self.update_task_run_status(task_run, TaskRunStatus::Invalid).await
     }
 
-    /// An unknown outranks every named outcome: the task run cannot claim an ending it
-    /// does not know. Never retried — flowlite has no idea what that attempt did.
-    async fn settle_for_invalid(
-        &self,
-        task_run: &TaskRun,
-        last_task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<bool> {
-
-        if last_task_run_attempt.status != TaskRunAttemptStatus::Invalid {
-            return Ok(false);
-        }
-
-        self.update_task_run_status(task_run, TaskRunStatus::Invalid).await?;
-
-        Ok(true)
+    async fn set_to_invalid(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+        self.update_task_run_status(task_run, TaskRunStatus::Invalid).await
     }
 
-    async fn settle_for_succeeded(
-        &self,
-        task_run: &TaskRun,
-        last_task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<bool> {
-
-        if last_task_run_attempt.status != TaskRunAttemptStatus::Succeeded {
-            return Ok(false);
-        }
-
-        self.update_task_run_status(task_run, TaskRunStatus::Succeeded).await?;
-
-        Ok(true)
+    async fn set_to_succeeded(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+        self.update_task_run_status(task_run, TaskRunStatus::Succeeded).await
     }
 
-    /// Keeps the task run running: waits while an attempt is in flight, or inserts the next
-    /// one. Writes no status — it stays Running for the whole retry loop, and the retry row
-    /// goes in immediately for `TaskRunAttemptDispatcher` to hold until `retry_delay` passes.
-    async fn settle_for_running(
+    /// Fails the task run once its attempts are used up.
+    async fn set_to_failed(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+        self.update_task_run_status(task_run, TaskRunStatus::Failed).await
+    }
+
+    async fn set_to_timed_out(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+        self.update_task_run_status(task_run, TaskRunStatus::TimedOut).await
+    }
+
+    async fn set_to_aborted(&self, task_run: &TaskRun) -> anyhow::Result<()> {
+        self.update_task_run_status(task_run, TaskRunStatus::Aborted).await
+    }
+
+    /// Inserts the next attempt and leaves the task run Running: it stays Running for the
+    /// whole retry loop, and the retry row goes in immediately for
+    /// `TaskRunAttemptDispatcher` to hold until `retry_delay` passes.
+    async fn set_to_retry(
         &self,
         task_run: &TaskRun,
         last_task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<bool> {
-
-        // The attempt services still own the attempt.
-        if !last_task_run_attempt.status.is_finished() {
-            return Ok(true);
-        }
-
-        if last_task_run_attempt.status != TaskRunAttemptStatus::Failed {
-            return Ok(false);
-        }
-
-        // Attempts count from 1, so the task run gets max_retries + 1 of them.
-        if last_task_run_attempt.attempt >= task_run.max_retries + 1 {
-            return Ok(false);
-        }
+    ) -> anyhow::Result<()> {
 
         self.crud.insert_task_run_attempt(
             &*self.conn_pool,
@@ -152,69 +174,7 @@ impl TaskRunMonitor {
 
         self.signals.publish();
 
-        Ok(true)
-    }
-
-    /// Fails the task run once its attempts are used up. Attempts count from 1, so the
-    /// task run gets `max_retries + 1` of them.
-    async fn settle_for_failed(
-        &self,
-        task_run: &TaskRun,
-        last_task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<bool> {
-
-        if last_task_run_attempt.status != TaskRunAttemptStatus::Failed {
-            return Ok(false);
-        }
-
-        if last_task_run_attempt.attempt < task_run.max_retries + 1 {
-            return Ok(false);
-        }
-
-        self.update_task_run_status(task_run, TaskRunStatus::Failed).await?;
-
-        Ok(true)
-    }
-
-    /// Re-asks whether the attempt has finished, which TimedOut already implies: a second
-    /// lock on the same door, so `settle_for_running` being last is not the only guard.
-    async fn settle_for_timed_out(
-        &self,
-        task_run: &TaskRun,
-        last_task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<bool> {
-
-        let attempt_finished = last_task_run_attempt.status.is_finished();
-        let timed_out = last_task_run_attempt.status == TaskRunAttemptStatus::TimedOut;
-
-        if !attempt_finished || !timed_out {
-            return Ok(false);
-        }
-
-        self.update_task_run_status(task_run, TaskRunStatus::TimedOut).await?;
-
-        Ok(true)
-    }
-
-    /// Aborts the task run, where both stop outcomes land: killed mid-flight, or skipped
-    /// before the command started. A skipped attempt does **not** make the task run
-    /// Skipped — it had started and may have left output, so Skipped would claim nothing ran.
-    async fn settle_for_aborted(
-        &self,
-        task_run: &TaskRun,
-        last_task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<bool> {
-
-        let attempt_finished = last_task_run_attempt.status.is_finished();
-        let stopped = last_task_run_attempt.status.is_stopped();
-
-        if !attempt_finished || !stopped {
-            return Ok(false);
-        }
-
-        self.update_task_run_status(task_run, TaskRunStatus::Aborted).await?;
-
-        Ok(true)
+        Ok(())
     }
 
     async fn get_running_task_runs(&self) -> anyhow::Result<Vec<TaskRun>> {
