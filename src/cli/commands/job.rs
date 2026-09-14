@@ -119,13 +119,22 @@ impl JobSubmitCmd {
         let poll_interval = toolkit.app_config.orchestrator.poll_interval();
         let scheduled_at = self.schedule_at.unwrap_or_else(Utc::now);
 
-        // Before the run is written, so a wait that cannot be serviced leaves no queued
-        // run behind for a server that is not there to run it.
+        // Both checked before the run is written, so a wait that cannot be serviced leaves
+        // no queued run behind for a server that is not there to run it - but in this
+        // order, and not the other one. Whether a run is due is a fact about the arguments
+        // and the clock: it reads the same regardless of which machine runs this command or
+        // where a server's up/down cycle happens to be at that moment. Whether the
+        // directory is served is a fact about right now, which can flip a moment later. Ask
+        // the environment-dependent question first and a caller's diagnosis becomes a race
+        // against whether a server happens to be running when they hit enter; ask the
+        // argument-only question first and the answer is stable - and it is the more
+        // fundamental of the two anyway, since starting a server does nothing to fix a
+        // request asking to wait on a run that is not due yet.
         if self.wait {
+            refuse_waiting_for_a_future_run(scheduled_at, Utc::now())?;
+
             ensure_data_dir_is_served(&toolkit.app_config.data_dir)
                 .map_err(describe_unserved_data_dir)?;
-
-            refuse_waiting_for_a_future_run(scheduled_at, Utc::now())?;
         }
 
         let mut conn = toolkit.get_conn().await?;
@@ -442,5 +451,39 @@ mod tests {
         let error = submit_from(&["flowlite", "job", "submit", "etl", "--schedule-at", "tomorrow"]).unwrap_err();
 
         assert!(error.to_string().contains("RFC3339"), "got: {error}");
+    }
+
+    /// Pins the fix for the cross-frontend inconsistency review caught: a wait tripping
+    /// both checks at once used to report "not served" here while the MCP tool reported
+    /// "not due" for the identical mistake. The due-check reads the same regardless of
+    /// whether a server happens to be running, so it is the one a caller should see -
+    /// starting a server would not have fixed a request asking to wait on a run that is
+    /// not due yet. `job_name` need not exist: both checks run before the job is looked up.
+    #[tokio::test]
+    async fn a_wait_on_a_run_that_is_both_not_due_and_unserved_reports_not_due() {
+
+        let data_dir = std::env::temp_dir()
+            .join(format!("flowlite-job-unserved-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(data_dir.join("jobs")).unwrap();
+
+        let toolkit = Toolkit::new(crate::app_config::AppConfig {
+            data_dir: data_dir.to_string_lossy().into_owned(),
+            ..crate::app_config::AppConfig::default()
+        });
+
+        let cmd = JobSubmitCmd {
+            job_name: Some("nonexistent".to_string()),
+            file: None,
+            params: vec![],
+            schedule_at: Some(Utc::now() + chrono::TimeDelta::hours(1)),
+            wait: true,
+        };
+
+        let error = cmd.run(toolkit, false).await.unwrap_err().to_string();
+
+        assert!(error.contains("not due"), "{error}");
+        assert!(!error.contains("not being served"), "{error}");
+
+        let _ = std::fs::remove_dir_all(&data_dir);
     }
 }
