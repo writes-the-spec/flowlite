@@ -207,7 +207,7 @@
     {% if deletable %}
     <dialog id="delete_run">
         <h2 class="dialog__title">Delete run {{ job_run.id }}?</h2>
-        <p class="dialog__body">Nothing of it has run yet. The run is kept as a record, and its schedule submits the occurrence again under the job as it now stands. To call the occurrence off for good, skip it instead.</p>
+        <p class="dialog__body">The run will not run. Its schedule submits the occurrence again on its next pass, under the job as it now stands.</p>
 
         <div class="dialog__actions">
             <form method="dialog">
@@ -225,7 +225,7 @@
         <h2 class="dialog__title">Skip run {{ job_run.id }}?</h2>
         {# A stop on a still-scheduled run is what skips it: JobRunReleaser reads the stop
            row before it reads the clock, so the occurrence never comes due. #}
-        <p class="dialog__body">The occurrence is called off for good — its schedule will not submit it again. Nothing of the run has started, and it is kept as a record, marked skipped.</p>
+        <p class="dialog__body">The run will not run. Its schedule will not submit the occurrence again.</p>
 
         <div class="dialog__actions">
             <form method="dialog">
