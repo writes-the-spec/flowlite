@@ -152,6 +152,29 @@ An edit therefore takes effect only for occurrences submitted after the restart.
 was already written keeps the definition it was submitted with, and nothing replaces or
 deletes it, so an occurrence written under the old YAML runs under the old YAML.
 
+### Replacing an outstanding run with the edited definition
+
+`job-run rerun` replays the run's own snapshot, so it is no help here: it is the old
+definition again. To get an occurrence back under the edited YAML, replace the run:
+
+```bash
+# Edit the job's YAML first, and restart flowlite serve so it re-reads the file.
+flowlite job-run list --job nightly --status submitted  # find the outstanding run
+flowlite job-run stop 42                                # settles skipped, not queued
+flowlite job submit nightly --schedule-at 2026-09-16T03:00:00+02:00
+```
+
+Stopping a run that is still dated in the future settles it `skipped` immediately, without
+passing through `queued` and without waiting for its instant. The new run is written by the
+`job submit` process, which reads the job files itself, so it carries the YAML as it stands
+now even if that differs from what the server read at startup.
+
+Both steps are needed, and in this order. The stop is what stops the old definition running;
+it does not free the occurrence, because the scheduler asks whether *any* run exists for that
+`(schedule, job, instant)` **whatever its status** — deliberately, so that cancelling an
+occurrence is not undone on the next pass. That is also why the replacement has to be
+submitted by hand: the scheduler will never write that occurrence again.
+
 ## Command inputs
 
 A command is configured four ways — parameters declared on the job, environment variables
