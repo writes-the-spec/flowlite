@@ -1,6 +1,6 @@
 # `schedule` (mem)
 
-One row per schedule YAML file under `<data_dir>/schedules/*.yml`. The [Scheduler](../../scheduler/SKILL.md) reconciles every row once a second, keeping its `submit_ahead` next occurrences submitted as [`job_run`](job_run.md) rows — it does not decide when a run becomes due, only which runs ought to exist.
+One row per schedule YAML file under `<data_dir>/schedules/*.yml`. The [Scheduler](../../scheduler/SKILL.md) reconciles every row once a second, submitting a [`job_run`](job_run.md) for whichever of its `submit_ahead` next occurrences has none yet — it does not decide when a run becomes due, only which runs ought to exist, and it never takes one back.
 
 | Column | Meaning |
 |---|---|
@@ -21,4 +21,4 @@ One row per schedule YAML file under `<data_dir>/schedules/*.yml`. The [Schedule
 
 ## Read by
 
-`Scheduler::select`, which now reads every row — enabled or not, due or not, ordered by `row_id` — because "is anything due?" is a question the reconcile puts to the [`job_run`](job_run.md) rows it already holds, not to this table. And the schedules web routes, which read `cron`, `timezone` and the bounds to derive a next run for display.
+`Scheduler::select`, which reads every row — enabled or not, due or not, ordered by `row_id` — because "is anything due?" is a question the reconcile puts to the [`job_run`](job_run.md) table, one lookup per occurrence and job, not to this table. And the schedules web routes, which read `cron`, `timezone` and the bounds to derive a next run for display.
