@@ -130,7 +130,7 @@ mod tests {
 
         let db = TestDb::new().await;
 
-        let job_run = db.insert_job_run(JobRunStatus::Submitted).await;
+        let job_run = db.insert_job_run(JobRunStatus::Scheduled).await;
         db.insert_task_run_for_command(job_run.id, "echo hi", 60).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
@@ -138,7 +138,7 @@ mod tests {
 
         let rerun_id = db.crud.rerun_job(&mut conn, job_run.id).await.unwrap();
 
-        assert_eq!(db.job_run(rerun_id).await.status, JobRunStatus::Submitted);
+        assert_eq!(db.job_run(rerun_id).await.status, JobRunStatus::Scheduled);
     }
 
     /// A rerun replays the run's own inputs. Nothing here reads config, so the rerun of a

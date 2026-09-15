@@ -135,7 +135,7 @@ parameters, and a job id may appear only once. `timezone` left out falls back to
 `submit_ahead` writes upcoming occurrences as runs before they are due, so the next run of
 every schedule is visible in `job-run list` and on the dashboard ahead of time. A larger
 number shows more of the future, at the cost of that many standing rows per schedule. Runs
-written ahead sit in the `submitted` status and start at their own instant. The reconcile
+written ahead sit in the `scheduled` status and start at their own instant. The reconcile
 only ever adds: taking a schedule's YAML away, disabling it, lowering `submit_ahead` or
 editing its cron leaves the runs already written in place, and they will be released and
 executed at their instant like any other. `flowlite job-run stop <id>` calls one off, and
@@ -160,12 +160,12 @@ definition again. Delete the run instead, and let the schedule write the occurre
 
 ```bash
 # Edit the job's YAML first, and restart flowlite serve so it re-reads the file.
-flowlite job-run list --job nightly --status submitted  # find the outstanding run
+flowlite job-run list --job nightly --status scheduled  # find the outstanding run
 flowlite job-run delete 42
 ```
 
 The next scheduler pass finds no run standing for that occurrence and submits it again,
-carrying the job as the restarted server now reads it. Only a run still `submitted` can be
+carrying the job as the restarted server now reads it. Only a run still `scheduled` can be
 deleted — one already queued or running is the dispatcher's, and `job-run stop` is what
 calls that off.
 
@@ -553,7 +553,7 @@ with an explicit offset, and a bare `2026-09-15 09:00` is refused rather than gu
 flowlite job submit nightly --schedule-at 2026-09-15T09:00:00+02:00
 ```
 
-The run is written straight away and sits in the `submitted` status until its instant
+The run is written straight away and sits in the `scheduled` status until its instant
 arrives, which is also what a schedule's own runs do. An instant in the past is due
 immediately, so it may be combined with `--wait`; one in the future may not, since the wait
 could only burn its whole timeout and then report a perfectly healthy run.
@@ -915,7 +915,7 @@ error, since its id is what lets the agent ask again. A value above 300 clamps t
 
 **A submit into a directory nothing is serving writes a run that will not start.** It is
 allowed, as on the command line, and the tool result says so beside the JSON: the run stays
-`submitted` however far past its due time, and is picked up once `flowlite serve` runs
+`scheduled` however far past its due time, and is picked up once `flowlite serve` runs
 against that directory. A `wait_seconds` above 0 is refused there outright, since nothing
 would ever settle the row it would poll.
 

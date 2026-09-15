@@ -7,7 +7,7 @@ use crate::poller::Service;
 use crate::signals::Signals;
 
 
-/// Moves a job run from Submitted to Queued once its time has come, skipping it instead if
+/// Moves a job run from Scheduled to Queued once its time has come, skipping it instead if
 /// it was stopped first. The only place that writes that transition, so "not due yet" is a
 /// fact readable off the table rather than inferred from control flow.
 ///
@@ -42,7 +42,7 @@ impl JobRunReleaser {
         match self.derive_next_status(job_run).await {
             Ok(JobRunStatus::Skipped) => self.set_to_skipped(job_run).await,
             Ok(JobRunStatus::Queued) => self.set_to_queued(job_run).await,
-            Ok(JobRunStatus::Submitted) => Ok(()),
+            Ok(JobRunStatus::Scheduled) => Ok(()),
             Ok(_) | Err(_) => self.set_to_invalid(job_run).await,
         }
     }
@@ -57,7 +57,7 @@ impl JobRunReleaser {
         Ok(match (is_stopped, is_due) {
             (true, _) => JobRunStatus::Skipped,
             (false, true) => JobRunStatus::Queued,
-            (false, false) => JobRunStatus::Submitted,
+            (false, false) => JobRunStatus::Scheduled,
         })
     }
 
@@ -130,7 +130,7 @@ impl JobRunReleaser {
                 filter: SelectJobRunsDataFilter {
                     id: None,
                     job_id: None,
-                    status: Some(JobRunStatus::Submitted),
+                    status: Some(JobRunStatus::Scheduled),
                     statuses: None,
                     schedule_id: None,
                     scheduled_at: None,
@@ -195,7 +195,7 @@ mod tests {
 
         let db = TestDb::new().await;
 
-        let job_run = db.insert_job_run_at(JobRunStatus::Submitted, scheduled_at, None).await;
+        let job_run = db.insert_job_run_at(JobRunStatus::Scheduled, scheduled_at, None).await;
 
         db.job_run_releaser().handle(&job_run).await.unwrap();
 
@@ -213,7 +213,7 @@ mod tests {
     async fn a_run_that_is_not_due_is_left_alone() {
         let status = released_status(Utc::now() + chrono::TimeDelta::hours(1)).await;
 
-        assert_eq!(status, JobRunStatus::Submitted);
+        assert_eq!(status, JobRunStatus::Scheduled);
     }
 
     /// A stop must not have to wait until the run's time to take effect.
@@ -223,7 +223,7 @@ mod tests {
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run_at(
-            JobRunStatus::Submitted,
+            JobRunStatus::Scheduled,
             Utc::now() + chrono::TimeDelta::days(7),
             None,
         ).await;
@@ -246,7 +246,7 @@ mod tests {
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run_at(
-            JobRunStatus::Submitted,
+            JobRunStatus::Scheduled,
             Utc::now() - chrono::TimeDelta::minutes(1),
             None,
         ).await;
@@ -265,7 +265,7 @@ mod tests {
 
         let db = TestDb::new().await;
 
-        let submitted = db.insert_job_run_at(JobRunStatus::Submitted, Utc::now(), None).await;
+        let submitted = db.insert_job_run_at(JobRunStatus::Scheduled, Utc::now(), None).await;
         let _pending = db.insert_job_run(JobRunStatus::Queued).await;
         let _running = db.insert_job_run(JobRunStatus::Running).await;
 
@@ -282,7 +282,7 @@ mod tests {
 
         let db = TestDb::new().await;
 
-        let job_run = db.insert_job_run_at(JobRunStatus::Submitted, Utc::now(), None).await;
+        let job_run = db.insert_job_run_at(JobRunStatus::Scheduled, Utc::now(), None).await;
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
 
         db.job_run_releaser().set_to_invalid(&job_run).await.unwrap();

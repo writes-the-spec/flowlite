@@ -51,7 +51,7 @@ pub struct SubmitJob {
     /// is refused.
     pub params: Option<BTreeMap<String, String>>,
     /// When this run is due, as an RFC3339 instant such as 2026-09-15T09:00:00Z. Absent
-    /// means now. A run dated in the future is returned still submitted, and cannot be
+    /// means now. A run dated in the future is returned still scheduled, and cannot be
     /// combined with wait_seconds.
     pub schedule_at: Option<String>,
     /// Wait up to this many seconds for the run to finish before returning it. Absent or 0
@@ -69,7 +69,7 @@ impl McpServer {
     // there is sent to the model on every turn, and none of this helps it choose the tool
     // or fill an argument.
     /// Submit a run of a job: one installed in the data directory, a file that is never
-    /// installed there, or a definition given inline. Returns the job run, still submitted
+    /// installed there, or a definition given inline. Returns the job run, still scheduled
     /// unless `wait_seconds` was long enough for it to finish.
     #[tool]
     async fn submit_job(&self, Parameters(args): Parameters<SubmitJob>) -> CallToolResult {

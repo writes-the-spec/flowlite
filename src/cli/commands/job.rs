@@ -250,7 +250,7 @@ pub(crate) fn describe_unserved_data_dir(err: anyhow::Error) -> anyhow::Error {
 fn run_outcome_error(job_run_id: i64, status: JobRunStatus) -> Option<String> {
     match status {
         JobRunStatus::Succeeded => None,
-        JobRunStatus::Submitted
+        JobRunStatus::Scheduled
         | JobRunStatus::Queued
         | JobRunStatus::Running
         | JobRunStatus::Failed

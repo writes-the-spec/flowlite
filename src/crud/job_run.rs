@@ -9,7 +9,7 @@ use crate::crud::CRUD;
 pub enum JobRunStatus {
     /// Written, but not yet due. `JobRunReleaser` is the only thing that moves a run out
     /// of this status, and it only ever moves it to Queued.
-    Submitted,
+    Scheduled,
     Queued,
     Running,
     Succeeded,
@@ -18,7 +18,7 @@ pub enum JobRunStatus {
     Aborted,
     TimedOut,
     Invalid,
-    /// Removed by hand while still Submitted, and kept as a tombstone rather than deleted.
+    /// Removed by hand while still Scheduled, and kept as a tombstone rather than deleted.
     /// The one status the Scheduler's existence check ignores, so the occurrence it held is
     /// free to be submitted again - which is what separates it from Skipped, where the user
     /// cancelled the occurrence and it must never come back.
@@ -33,7 +33,7 @@ impl JobRunStatus {
     /// filter chips and the CLI's `--status` parser - read one list rather than each
     /// keeping its own copy to forget to update.
     pub const ALL: [JobRunStatus; 10] = [
-        JobRunStatus::Submitted,
+        JobRunStatus::Scheduled,
         JobRunStatus::Queued,
         JobRunStatus::Running,
         JobRunStatus::Succeeded,
@@ -50,7 +50,7 @@ impl JobRunStatus {
     /// compiling.
     pub fn is_finished(&self) -> bool {
         match self {
-            JobRunStatus::Submitted
+            JobRunStatus::Scheduled
             | JobRunStatus::Queued
             | JobRunStatus::Running => false,
             JobRunStatus::Succeeded
@@ -68,7 +68,7 @@ impl JobRunStatus {
 impl std::fmt::Display for JobRunStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            JobRunStatus::Submitted => write!(f, "submitted"),
+            JobRunStatus::Scheduled => write!(f, "scheduled"),
             JobRunStatus::Queued => write!(f, "queued"),
             JobRunStatus::Running => write!(f, "running"),
             JobRunStatus::Succeeded => write!(f, "succeeded"),
@@ -478,7 +478,7 @@ mod tests {
     /// that is waiting on the clock rather than on a slot or on a process.
     #[test]
     fn a_submitted_run_is_not_finished() {
-        assert!(!JobRunStatus::Submitted.is_finished());
+        assert!(!JobRunStatus::Scheduled.is_finished());
     }
 
     /// The dashboard's filter chips, the CLI's `--status` parser and the MCP tool all read
@@ -486,12 +486,12 @@ mod tests {
     /// surface can name and another cannot.
     #[test]
     fn submitted_is_one_of_the_statuses_a_caller_can_name() {
-        assert!(JobRunStatus::ALL.contains(&JobRunStatus::Submitted));
+        assert!(JobRunStatus::ALL.contains(&JobRunStatus::Scheduled));
     }
 
     #[test]
     fn a_submitted_run_is_spelled_the_way_it_is_stored() {
-        assert_eq!(JobRunStatus::Submitted.to_string(), "submitted");
+        assert_eq!(JobRunStatus::Scheduled.to_string(), "scheduled");
     }
 
     async fn select(db: &crate::test_support::TestDb, filter: SelectJobRunsDataFilter) -> Vec<JobRun> {
@@ -772,9 +772,9 @@ mod tests {
         let db = TestDb::new().await;
 
         let now = chrono::Utc::now();
-        let nightly = db.insert_job_run_at(JobRunStatus::Submitted, now, Some("nightly")).await;
-        let _hourly = db.insert_job_run_at(JobRunStatus::Submitted, now, Some("hourly")).await;
-        let _manual = db.insert_job_run_at(JobRunStatus::Submitted, now, None).await;
+        let nightly = db.insert_job_run_at(JobRunStatus::Scheduled, now, Some("nightly")).await;
+        let _hourly = db.insert_job_run_at(JobRunStatus::Scheduled, now, Some("hourly")).await;
+        let _manual = db.insert_job_run_at(JobRunStatus::Scheduled, now, None).await;
 
         let runs = db.crud.select_job_runs(&*db.conn_pool, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
@@ -810,7 +810,7 @@ mod tests {
             filter: DeleteJobRunsDataFilter {
                 id: Some(released.id),
                 job_id: None,
-                status: Some(JobRunStatus::Submitted),
+                status: Some(JobRunStatus::Scheduled),
                 schedule_id: Some("nightly".to_string()),
                 scheduled_at_gt: Some(now),
             },

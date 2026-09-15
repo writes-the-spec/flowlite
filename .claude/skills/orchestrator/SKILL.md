@@ -7,11 +7,11 @@ description: High-level map of src/orchestrator/ - the background services that 
 
 The orchestrator is the engine of flowlite: seven background services, all spawned by `Orchestrator::start` ([src/orchestrator/orchestrator.rs](../../../src/orchestrator/orchestrator.rs)), which `serve` calls.
 
-It takes over from an existing job run, whatever created it — `job submit`, the web UI, or the [Scheduler](../scheduler/SKILL.md), which is a separate service `serve` starts alongside it and which only ever inserts a run `Submitted`. Nothing outside the orchestrator touches a run after that: the scheduler never updates one and never deletes one, so every row it writes is one of these services' to settle.
+It takes over from an existing job run, whatever created it — `job submit`, the web UI, or the [Scheduler](../scheduler/SKILL.md), which is a separate service `serve` starts alongside it and which only ever inserts a run `Scheduled`. Nothing outside the orchestrator touches a run after that: the scheduler never updates one and never deletes one, so every row it writes is one of these services' to settle.
 
 | Service | Polls | Does |
 |---|---|---|
-| `JobRunReleaser` | `Submitted` job runs | moves one to `Queued` once its `scheduled_at` has arrived, or skips it — and its task runs — if it was stopped first |
+| `JobRunReleaser` | `Scheduled` job runs | moves one to `Queued` once its `scheduled_at` has arrived, or skips it — and its task runs — if it was stopped first |
 | `JobRunDispatcher` | `Queued` job runs | starts them while `max_parallel_runs` allows — releasing their task runs `Planned` → `Waiting` as it does — holds them when it does not, or skips them |
 | `JobRunMonitor` | `Running` job runs | finishes them from their task runs |
 | `TaskRunDispatcher` | `Waiting` task runs | starts them once their dependencies have succeeded, holds them while one is unfinished, or skips them |
@@ -19,7 +19,7 @@ It takes over from an existing job run, whatever created it — `job submit`, th
 | `TaskRunAttemptDispatcher` | `Queued` attempts | spawns their command, holds a retry until its `retry_delay` has passed, or skips them |
 | `TaskRunAttemptMonitor` | `Running` attempts | waits on the processes and finishes the attempts |
 
-Every job run is created `Submitted`, so `JobRunReleaser` is the one service every run passes through before any of the others can see it: the status path is `Submitted → Queued → Running → <terminal>`, with `Submitted → Skipped` the one shortcut across it, for a run somebody stopped before it was ever released. `Submitted → Queued` is owned solely by the releaser — nothing else ever writes it. It is still not a dispatcher or a monitor in the pattern below: releasing a run is not starting one, and a run it releases does not finish, it only becomes eligible to be picked up. Its skip is the exception that proves it, being the same outcome `JobRunDispatcher` owns one status later and written through the same `CRUD::skip_job_run` — the two select on disjoint statuses, so a run is only ever skipped by one of them.
+Every job run is created `Scheduled`, so `JobRunReleaser` is the one service every run passes through before any of the others can see it: the status path is `Scheduled → Queued → Running → <terminal>`, with `Scheduled → Skipped` the one shortcut across it, for a run somebody stopped before it was ever released. `Scheduled → Queued` is owned solely by the releaser — nothing else ever writes it. It is still not a dispatcher or a monitor in the pattern below: releasing a run is not starting one, and a run it releases does not finish, it only becomes eligible to be picked up. Its skip is the exception that proves it, being the same outcome `JobRunDispatcher` owns one status later and written through the same `CRUD::skip_job_run` — the two select on disjoint statuses, so a run is only ever skipped by one of them.
 
 Telling somebody a run broke is **not** one of them, and no service here writes a line about it. A run's [`job_run_notification`](../entities/references/job_run_notification.md) rows are written when it is submitted, and the [NotificationService](../notifications/SKILL.md) — started by `serve` alongside the orchestrator, the way the [Scheduler](../scheduler/SKILL.md) is — reads the status a monitor wrote and decides for itself. Nothing in the orchestrator calls that service, holds a handle to it, or knows the table exists. Delivery is slow and sometimes fails for hours, which is exactly the work a monitor must not be holding while it is meant to be finishing everyone else's runs.
 
@@ -34,7 +34,7 @@ Together they give every row the same shape: held → `Running` → `<finished>`
 
 Two of the three levels are created one step earlier than that shape starts, in a status nothing dispatches:
 
-- Every `job_run` begins `Submitted`, and `JobRunReleaser` (the table above) moves it to `Queued` once its `scheduled_at` arrives — or straight to `Skipped`, with its task runs, if it was stopped before that.
+- Every `job_run` begins `Scheduled`, and `JobRunReleaser` (the table above) moves it to `Queued` once its `scheduled_at` arrives — or straight to `Skipped`, with its task runs, if it was stopped before that.
 - Every `task_run` begins `Planned`, and `JobRunDispatcher::settle_as_running` moves it to `Waiting` as it starts the job run it belongs to.
 
 Both exist for the same reason: a row written ahead of time must be invisible to its dispatcher until something decides its moment has come. Attempts have no such stage — they are only ever inserted for a task run already `Running`, so they are created `Queued`, already eligible.
@@ -93,7 +93,7 @@ See [job_run.md](references/job_run.md) for the full ladder.
 
 A stop is an insert-only `job_run_stop` row, never a status update. `JobRunDispatcher`, `TaskRunDispatcher`, `TaskRunAttemptDispatcher` and `TaskRunAttemptMonitor` each check for it on every pass — a signal wake-up or the poll interval, whichever came first — and finish only what they own: rows that never started go `Skipped`, an in-flight process is killed and its attempt goes `Aborted`. A stopped job run's status is therefore derived like any other — from its task runs, once they have all settled.
 
-`JobRunReleaser` checks for a stop too, and settles it itself: `Submitted` straight to `Skipped`, the run's task runs with it. `JobRunDispatcher` only polls `Queued` rows, so a run stopped before its `scheduled_at` would otherwise sit `Submitted`, unseen, until its due time. Releasing it to `Queued` early and letting the dispatcher skip it works too, and is what this used to do — but `Queued` says a run is due, so a run stopped in February read as due tonight for as long as the dispatcher's next pass took. Both services write the skip through `CRUD::skip_job_run` ([src/crud/multistatements/skip_job_run.rs](../../../src/crud/multistatements/skip_job_run.rs)), so neither writes half of the pair, and they cannot race for a row: `Submitted` is the releaser's, `Queued` is the dispatcher's.
+`JobRunReleaser` checks for a stop too, and settles it itself: `Scheduled` straight to `Skipped`, the run's task runs with it. `JobRunDispatcher` only polls `Queued` rows, so a run stopped before its `scheduled_at` would otherwise sit `Scheduled`, unseen, until its due time. Releasing it to `Queued` early and letting the dispatcher skip it works too, and is what this used to do — but `Queued` says a run is due, so a run stopped in February read as due tonight for as long as the dispatcher's next pass took. Both services write the skip through `CRUD::skip_job_run` ([src/crud/multistatements/skip_job_run.rs](../../../src/crud/multistatements/skip_job_run.rs)), so neither writes half of the pair, and they cannot race for a row: `Scheduled` is the releaser's, `Queued` is the dispatcher's.
 
 That split is about a stop, so `Invalid` sits outside it: it is not a stop at all, and `is_stopped()` returns false for it precisely so `JobRunMonitor::settle_for_aborted` cannot report a run flowlite lost track of as one somebody stopped.
 

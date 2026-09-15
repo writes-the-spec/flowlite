@@ -383,7 +383,7 @@ mod tests {
         let db = TestDb::new().await;
 
         let due = Utc::now() + chrono::TimeDelta::hours(3);
-        let job_run = db.insert_job_run_at(JobRunStatus::Submitted, due, None).await;
+        let job_run = db.insert_job_run_at(JobRunStatus::Scheduled, due, None).await;
 
         db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
 

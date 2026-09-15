@@ -224,9 +224,9 @@ pub async fn job_run_id_route(
         lanes,
         ticks: build_ticks(window_seconds),
         task_count: format!("{} task{}", lane_count, if lane_count == 1 { "" } else { "s" }),
-        // Submitted included: a run due immediately still spends one poll pass there, and
+        // Scheduled included: a run due immediately still spends one poll pass there, and
         // a page loaded during that pass must keep polling rather than going stale.
-        polling: matches!(job_run.status, JobRunStatus::Submitted | JobRunStatus::Queued | JobRunStatus::Running),
+        polling: matches!(job_run.status, JobRunStatus::Scheduled | JobRunStatus::Queued | JobRunStatus::Running),
         refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
         stoppable: matches!(job_run.status, JobRunStatus::Running),
     };

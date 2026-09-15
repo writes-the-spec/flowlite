@@ -63,7 +63,7 @@ impl NotifyOn {
                 JobRunStatus::Failed
                 | JobRunStatus::TimedOut
                 | JobRunStatus::Invalid => true,
-                JobRunStatus::Submitted
+                JobRunStatus::Scheduled
                 | JobRunStatus::Queued
                 | JobRunStatus::Running
                 | JobRunStatus::Succeeded
@@ -73,7 +73,7 @@ impl NotifyOn {
             },
             NotifyOn::Success => match status {
                 JobRunStatus::Succeeded => true,
-                JobRunStatus::Submitted
+                JobRunStatus::Scheduled
                 | JobRunStatus::Queued
                 | JobRunStatus::Running
                 | JobRunStatus::Failed

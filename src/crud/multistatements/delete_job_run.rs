@@ -15,7 +15,7 @@ use crate::crud::task_run::{TaskRunStatus, UpdateTaskRunsData, UpdateTaskRunsDat
 
 impl CRUD {
 
-    /// Tombstones a `Submitted` job run and skips every task run it owns, and reports
+    /// Tombstones a `Scheduled` job run and skips every task run it owns, and reports
     /// whether it did: a run in any other status is left exactly as it was and `false`
     /// comes back, so a caller that checked the status first still cannot act on a run
     /// that changed underneath it.
@@ -33,11 +33,11 @@ impl CRUD {
 
         let mut tx = conn.begin().await?;
 
-        let submitted = self.select_job_run(&mut *tx, &SelectJobRunsData {
+        let scheduled = self.select_job_run(&mut *tx, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
                 id: Some(job_run_id),
                 job_id: None,
-                status: Some(JobRunStatus::Submitted),
+                status: Some(JobRunStatus::Scheduled),
                 statuses: None,
                 schedule_id: None,
                 scheduled_at: None,
@@ -47,7 +47,7 @@ impl CRUD {
             offset: None,
         }).await?;
 
-        if submitted.is_none() {
+        if scheduled.is_none() {
             return Ok(false);
         }
 
@@ -95,11 +95,11 @@ mod tests {
     use crate::test_support::TestDb;
 
     #[tokio::test]
-    async fn deleting_a_submitted_job_run_tombstones_it_and_skips_its_task_runs() {
+    async fn deleting_a_scheduled_job_run_tombstones_it_and_skips_its_task_runs() {
 
         let db = TestDb::new().await;
 
-        let job_run = db.insert_job_run(JobRunStatus::Submitted).await;
+        let job_run = db.insert_job_run(JobRunStatus::Scheduled).await;
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
@@ -117,7 +117,7 @@ mod tests {
 
         let db = TestDb::new().await;
 
-        let job_run = db.insert_job_run(JobRunStatus::Submitted).await;
+        let job_run = db.insert_job_run(JobRunStatus::Scheduled).await;
         db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
@@ -134,7 +134,7 @@ mod tests {
     /// The status guard is the whole safety of the command: a run that has been released is
     /// on its way to executing, and tombstoning it would strand whatever is already running.
     #[tokio::test]
-    async fn a_job_run_that_is_no_longer_submitted_is_left_alone() {
+    async fn a_job_run_that_is_no_longer_scheduled_is_left_alone() {
 
         let db = TestDb::new().await;
 

@@ -194,10 +194,10 @@ impl CRUD {
                     parameters: definition.parameters.clone(),
                     scheduled_at: definition.scheduled_at,
                     schedule_id: definition.schedule_id.clone(),
-                    // Submitted, not Queued: JobRunReleaser is what decides the run's
+                    // Scheduled, not Queued: JobRunReleaser is what decides the run's
                     // time has come, and it is the only thing that writes Queued. A run
                     // due now spends one poll pass here and no longer.
-                    status: JobRunStatus::Submitted,
+                    status: JobRunStatus::Scheduled,
                 }
             }
         ).await?;

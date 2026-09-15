@@ -389,7 +389,7 @@ fn context_block(mrkdwn: &str) -> serde_json::Value {
 /// rendering rather than defaulting to one of the others.
 fn job_run_emoji(status: JobRunStatus) -> &'static str {
     match status {
-        JobRunStatus::Submitted => ":clock3:",
+        JobRunStatus::Scheduled => ":clock3:",
         JobRunStatus::Queued => ":hourglass_flowing_sand:",
         JobRunStatus::Running => ":arrows_counterclockwise:",
         JobRunStatus::Succeeded => ":white_check_mark:",
@@ -505,7 +505,7 @@ fn failure_output(failure: &JobRunFailureTask, max_output_bytes: usize) -> Strin
 /// fetches no stylesheet, so a class would arrive unstyled.
 fn job_run_accent(status: JobRunStatus) -> &'static str {
     match status {
-        JobRunStatus::Submitted => "#8c959f",
+        JobRunStatus::Scheduled => "#8c959f",
         JobRunStatus::Queued => "#6a737d",
         JobRunStatus::Running => "#0969da",
         JobRunStatus::Succeeded => "#1a7f37",

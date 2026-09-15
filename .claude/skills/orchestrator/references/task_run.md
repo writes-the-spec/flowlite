@@ -4,7 +4,7 @@
 
 | Status | Meaning |
 |---|---|
-| `Planned` | Written with its job run, which has yet to start. **Nothing dispatches it.** The job-run spelling of this is `Submitted`. |
+| `Planned` | Written with its job run, which has yet to start. **Nothing dispatches it.** The job-run spelling of this is `Scheduled`. |
 | `Waiting` | Released by `JobRunDispatcher::settle_as_running`, and waiting for the task runs it depends on. |
 | `Running` | Started, and owned by `TaskRunMonitor`, which decides which attempt runs next. Covers the gaps between attempts, not just the time a process is alive. |
 | `Succeeded` | Its command exited 0. |

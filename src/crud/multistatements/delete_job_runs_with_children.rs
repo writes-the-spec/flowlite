@@ -38,7 +38,7 @@ impl CRUD {
     /// The filter is resolved to ids *inside* that transaction, so the guard a caller
     /// expresses in the filter and the delete it authorises are one atomic step. The
     /// Scheduler's reconcile is the caller that needs it: it deletes only runs that are
-    /// still `Submitted` and still in the future, and `JobRunReleaser` may promote such a
+    /// still `Scheduled` and still in the future, and `JobRunReleaser` may promote such a
     /// row at any moment. Resolving the ids on the plain connection first would leave a
     /// window in which the releaser promotes a run between the check and the delete, and
     /// the reconcile would then cancel a run at the exact instant it came due, along with

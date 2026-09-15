@@ -450,7 +450,7 @@ fn submitting_an_installed_job_returns_its_submitted_run() {
 
     let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
     assert!(job_run["id"].as_i64().unwrap() > 0, "{job_run}");
-    assert_eq!(job_run["status"], json!("submitted"), "{job_run}");
+    assert_eq!(job_run["status"], json!("scheduled"), "{job_run}");
 }
 
 /// `yaml` is the natural agent action: nothing is written to disk, and the run's config
@@ -469,7 +469,7 @@ fn submitting_an_inline_yaml_definition_succeeds() {
 
     let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
     assert_eq!(job_run["job_id"], json!("probe"), "{job_run}");
-    assert_eq!(job_run["status"], json!("submitted"), "{job_run}");
+    assert_eq!(job_run["status"], json!("scheduled"), "{job_run}");
 }
 
 /// The tool's half of --schedule-at: the run comes back written but not started, which is
@@ -489,7 +489,7 @@ fn submitting_with_a_future_schedule_at_returns_a_submitted_run() {
     assert_ne!(result["isError"], json!(true), "{result}");
 
     let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
-    assert_eq!(job_run["status"], json!("submitted"), "{job_run}");
+    assert_eq!(job_run["status"], json!("scheduled"), "{job_run}");
     assert_eq!(job_run["started_at"], Value::Null, "{job_run}");
 }
 
@@ -639,7 +639,7 @@ fn a_param_the_job_does_not_declare_is_refused() {
 /// by a second content block naming the directory, and only while nothing is serving it.
 ///
 /// A warned result carries no `structuredContent` at all: a client that surfaces that field
-/// to the model instead of the text would otherwise hand it `{"status": "submitted"}` with
+/// to the model instead of the text would otherwise hand it `{"status": "scheduled"}` with
 /// nothing saying the status will never move, which is the exact failure the warning exists
 /// to prevent. Content[0] is still the run, as JSON, either way.
 #[test]
@@ -661,7 +661,7 @@ fn the_warning_block_appears_only_while_the_directory_is_unserved() {
     assert!(unserved["structuredContent"].is_null(), "{unserved}");
 
     let warned_run: Value = serde_json::from_str(tool_text(&unserved)).unwrap();
-    assert_eq!(warned_run["status"], json!("submitted"), "{warned_run}");
+    assert_eq!(warned_run["status"], json!("scheduled"), "{warned_run}");
 
     let mut server = ServerGuard::new(serve(&dir, 18232), libc::SIGTERM);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
@@ -729,7 +729,7 @@ fn a_wait_that_expires_returns_the_run_still_running() {
 
     let status = job_run["status"].as_str().unwrap();
     assert!(
-        status == "submitted" || status == "queued" || status == "running",
+        status == "scheduled" || status == "queued" || status == "running",
         "expected an unfinished status, got {status}: {job_run}",
     );
 
@@ -790,7 +790,7 @@ fn stop_job_run_with_wait_seconds_settles_a_running_run() {
     let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
     let status = job_run["status"].as_str().unwrap();
     assert!(
-        status != "submitted" && status != "queued" && status != "running",
+        status != "scheduled" && status != "queued" && status != "running",
         "expected a settled status, got {status}: {job_run}",
     );
 

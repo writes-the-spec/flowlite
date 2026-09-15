@@ -11,7 +11,7 @@ use crate::toolkit::Toolkit;
 
 
 /// Keeps each schedule's next `submit_ahead` occurrences submitted as job runs, submitting
-/// whichever is missing. It never decides a run is due - moving a run from Submitted to
+/// whichever is missing. It never decides a run is due - moving a run from Scheduled to
 /// Queued at its time is JobRunReleaser's job.
 pub struct Scheduler {
     pub toolkit: Arc<Toolkit>,
@@ -74,9 +74,9 @@ impl Scheduler {
     /// Submits one (job, occurrence) pair, exactly as `job submit` does, unless a run for it
     /// is already there.
     ///
-    /// "Already there" is asked across every status but one, not only Submitted: stopping a
+    /// "Already there" is asked across every status but one, not only Scheduled: stopping a
     /// future-dated scheduled run is allowed, `JobRunReleaser` then skips the row outright
-    /// while its instant is still ahead, and a check reading only Submitted would submit the
+    /// while its instant is still ahead, and a check reading only Scheduled would submit the
     /// occurrence the user just cancelled all over again.
     ///
     /// `Deleted` is the exception, and the only thing that frees an occurrence. A stop says
@@ -211,7 +211,7 @@ mod tests {
             filter: SelectJobRunsDataFilter {
                 id: None,
                 job_id: None,
-                status: Some(JobRunStatus::Submitted),
+                status: Some(JobRunStatus::Scheduled),
                 statuses: None,
                 schedule_id: Some(schedule_id.to_string()),
                 scheduled_at: None,
@@ -224,7 +224,7 @@ mod tests {
 
     /// Every run this schedule has ever produced, whatever status it now holds - what the
     /// submit side asks about, and the only way to see a second run written for an
-    /// occurrence whose first run has already left Submitted.
+    /// occurrence whose first run has already left Scheduled.
     async fn all_runs(db: &TestDb, schedule_id: &str) -> Vec<JobRun> {
         db.crud.select_job_runs(&*db.conn_pool, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
@@ -280,7 +280,7 @@ mod tests {
         assert_eq!(first[0].id, second[0].id);
     }
 
-    /// Exactly what `JobRunReleaser` does to a run whose instant has arrived: Submitted to
+    /// Exactly what `JobRunReleaser` does to a run whose instant has arrived: Scheduled to
     /// Queued, and nothing else.
     async fn release(db: &TestDb, job_run_id: i64) {
 
@@ -304,7 +304,7 @@ mod tests {
         let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
 
         let past_due = db.insert_job_run_at(
-            JobRunStatus::Submitted,
+            JobRunStatus::Scheduled,
             Utc::now() - chrono::TimeDelta::minutes(5),
             Some("nightly"),
         ).await;
@@ -321,8 +321,8 @@ mod tests {
     }
 
     /// Stopping a single future-dated occurrence has to stick. The stop is honoured by
-    /// `JobRunReleaser` skipping the run outright, so the row leaves Submitted while its
-    /// instant is still in the future - and a check reading only Submitted would decide the
+    /// `JobRunReleaser` skipping the run outright, so the row leaves Scheduled while its
+    /// instant is still in the future - and a check reading only Scheduled would decide the
     /// occurrence was never dealt with and submit it again, running the very job the user
     /// cancelled.
     #[tokio::test]
@@ -381,7 +381,7 @@ mod tests {
 
         assert_eq!(at_that_instant.len(), 2, "the deleted occurrence should be written again");
         assert_eq!(at_that_instant[0].status, JobRunStatus::Deleted);
-        assert_eq!(at_that_instant[1].status, JobRunStatus::Submitted);
+        assert_eq!(at_that_instant[1].status, JobRunStatus::Scheduled);
     }
 
     /// The restart case the schedule_id column exists for. Nothing about a pass is written
@@ -461,14 +461,14 @@ mod tests {
         let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
 
         let manual = db.insert_job_run_at(
-            JobRunStatus::Submitted,
+            JobRunStatus::Scheduled,
             Utc::now() + chrono::TimeDelta::days(365),
             None,
         ).await;
 
         db.scheduler().handle(&schedule).await.unwrap();
 
-        assert_eq!(db.job_run(manual.id).await.status, JobRunStatus::Submitted);
+        assert_eq!(db.job_run(manual.id).await.status, JobRunStatus::Scheduled);
         assert_eq!(outstanding(&db, "nightly").await.len(), 1);
     }
 }

@@ -276,14 +276,14 @@ impl JobRunStopCmd {
     }
 }
 
-/// Refuses anything but a `Submitted` run, and says which status it found instead. The
+/// Refuses anything but a `Scheduled` run, and says which status it found instead. The
 /// status is what separates a run nothing has touched from one already on its way to
 /// executing, and only the first can be removed without stranding work.
 ///
 /// `delete_job_run` re-checks the status inside its own transaction, so the `false` here is
 /// the run having moved between the two - a `job-run delete` racing the releaser at the
 /// instant the run came due.
-async fn delete_submitted_job_run(
+async fn delete_scheduled_job_run(
     crud: &CRUD,
     conn: &mut sqlx::SqliteConnection,
     job_run_id: i64,
@@ -307,7 +307,7 @@ async fn delete_submitted_job_run(
         anyhow::bail!("Job run {} not found", job_run_id);
     };
 
-    if job_run.status != JobRunStatus::Submitted {
+    if job_run.status != JobRunStatus::Scheduled {
 
         // A run already under way is the one case with somewhere else to go. A settled one
         // cannot be stopped either, so naming `stop` there would only buy a second refusal.
@@ -348,7 +348,7 @@ impl JobRunDeleteCmd {
 
         let crud = CRUD::new(std::sync::Arc::new(toolkit));
 
-        delete_submitted_job_run(&crud, &mut conn, self.job_run_id).await?;
+        delete_scheduled_job_run(&crud, &mut conn, self.job_run_id).await?;
 
         match json {
             true => println!("{}", serde_json::json!({
@@ -516,14 +516,14 @@ mod tests {
     use crate::test_support::TestDb;
 
     #[tokio::test]
-    async fn a_submitted_job_run_is_deleted() {
+    async fn a_scheduled_job_run_is_deleted() {
 
         let db = TestDb::new().await;
 
-        let job_run = db.insert_job_run(JobRunStatus::Submitted).await;
+        let job_run = db.insert_job_run(JobRunStatus::Scheduled).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
-        delete_submitted_job_run(&db.crud, &mut conn, job_run.id).await.unwrap();
+        delete_scheduled_job_run(&db.crud, &mut conn, job_run.id).await.unwrap();
 
         assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Deleted);
     }
@@ -531,7 +531,7 @@ mod tests {
     /// The guard the whole command rests on. A queued run is already the dispatcher's, and
     /// the message has to send the user to `stop`, which is what deals with one under way.
     #[tokio::test]
-    async fn a_run_that_has_left_submitted_is_refused_and_told_to_stop_it_instead() {
+    async fn a_run_that_has_left_scheduled_is_refused_and_told_to_stop_it_instead() {
 
         let db = TestDb::new().await;
 
@@ -539,7 +539,7 @@ mod tests {
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
-        let error = delete_submitted_job_run(&db.crud, &mut conn, job_run.id)
+        let error = delete_scheduled_job_run(&db.crud, &mut conn, job_run.id)
             .await
             .unwrap_err()
             .to_string();
@@ -562,7 +562,7 @@ mod tests {
         let job_run = db.insert_job_run(JobRunStatus::Succeeded).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
-        let error = delete_submitted_job_run(&db.crud, &mut conn, job_run.id)
+        let error = delete_scheduled_job_run(&db.crud, &mut conn, job_run.id)
             .await
             .unwrap_err()
             .to_string();
@@ -577,7 +577,7 @@ mod tests {
         let db = TestDb::new().await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
-        let error = delete_submitted_job_run(&db.crud, &mut conn, 404)
+        let error = delete_scheduled_job_run(&db.crud, &mut conn, 404)
             .await
             .unwrap_err()
             .to_string();

@@ -2,7 +2,7 @@
 //! itself and every task run it owns.
 //!
 //! `JobRunReleaser::set_to_invalid` is the one caller, and reaches this only as a bug:
-//! a `Submitted` run whose stopped-ness and due-ness together claimed no settle above it.
+//! a `Scheduled` run whose stopped-ness and due-ness together claimed no settle above it.
 
 use sqlx::SqliteConnection;
 
@@ -71,7 +71,7 @@ mod tests {
 
         let db = TestDb::new().await;
 
-        let job_run = db.insert_job_run(JobRunStatus::Submitted).await;
+        let job_run = db.insert_job_run(JobRunStatus::Scheduled).await;
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
@@ -88,7 +88,7 @@ mod tests {
 
         let db = TestDb::new().await;
 
-        let job_run = db.insert_job_run(JobRunStatus::Submitted).await;
+        let job_run = db.insert_job_run(JobRunStatus::Scheduled).await;
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
@@ -110,14 +110,14 @@ mod tests {
 
         let db = TestDb::new().await;
 
-        let unclaimed = db.insert_job_run(JobRunStatus::Submitted).await;
-        let other = db.insert_job_run(JobRunStatus::Submitted).await;
+        let unclaimed = db.insert_job_run(JobRunStatus::Scheduled).await;
+        let other = db.insert_job_run(JobRunStatus::Scheduled).await;
         let other_task_run = db.insert_task_run(other.id, TaskRunStatus::Planned).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
         db.crud.invalidate_job_run(&mut conn, unclaimed.id).await.unwrap();
 
-        assert_eq!(db.job_run(other.id).await.status, JobRunStatus::Submitted);
+        assert_eq!(db.job_run(other.id).await.status, JobRunStatus::Scheduled);
         assert_eq!(db.task_run(other_task_run.id).await.status, TaskRunStatus::Planned);
     }
 }

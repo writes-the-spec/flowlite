@@ -28,7 +28,7 @@ const MAX_JOB_RUN_LIMIT: i64 = 200;
 pub struct ListJobRuns {
     /// Only runs of this job.
     pub job: Option<String>,
-    /// Only runs with this status: submitted, queued, running, succeeded, failed, skipped,
+    /// Only runs with this status: scheduled, queued, running, succeeded, failed, skipped,
     /// aborted, timedout or invalid.
     pub status: Option<String>,
     /// How many runs to show, newest first. Defaults to 20. A value above 200 shows 200,

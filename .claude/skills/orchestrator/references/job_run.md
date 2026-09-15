@@ -1,10 +1,10 @@
 # Job run
 
-`JobRunStatus` lives in [src/crud/job_run.rs](../../../../src/crud/job_run.rs). A `job_run` row is created `Submitted` by `CRUD::submit_job` or `CRUD::rerun_job`, together with one `Planned` task run per task of the job — `Planned` is the task run spelling of `Submitted`.
+`JobRunStatus` lives in [src/crud/job_run.rs](../../../../src/crud/job_run.rs). A `job_run` row is created `Scheduled` by `CRUD::submit_job` or `CRUD::rerun_job`, together with one `Planned` task run per task of the job — `Planned` is the task run spelling of `Scheduled`.
 
 | Status | Meaning |
 |---|---|
-| `Submitted` | Written, but not yet due. `JobRunReleaser` is the only thing that moves a run out of this status — to `Queued` when its instant arrives, or to `Skipped` if somebody stopped it first. |
+| `Scheduled` | Written, but not yet due. `JobRunReleaser` is the only thing that moves a run out of this status — to `Queued` when its instant arrives, or to `Skipped` if somebody stopped it first. |
 | `Queued` | Released, waiting. Nothing has run; `started_at` is NULL. |
 | `Running` | Started. Its task runs are being dispatched, executed and retried. |
 | `Succeeded` | Every task run succeeded — also the status of a job with no tasks. |
@@ -16,19 +16,19 @@
 
 `Aborted` vs `Skipped` is the "stopped" pair, and **the row's own lifecycle decides which**, not what its task runs report: a job run with `started_at` set is `Aborted`, one that never started is `Skipped`. So `JobRunReleaser` and `JobRunDispatcher` write `Skipped` and never `Aborted`, `JobRunMonitor` writes `Aborted` and never `Skipped`. There is deliberately no `Cancelled`.
 
-## Releaser: Submitted → Queued / Skipped
+## Releaser: Scheduled → Queued / Skipped
 
-`JobRunReleaser` ([src/orchestrator/job_run_releaser.rs](../../../../src/orchestrator/job_run_releaser.rs)) polls every `Submitted` job run and settles each as exactly one outcome:
+`JobRunReleaser` ([src/orchestrator/job_run_releaser.rs](../../../../src/orchestrator/job_run_releaser.rs)) polls every `Scheduled` job run and settles each as exactly one outcome:
 
 1. `settle_as_skipped` — **stopped?** (a `job_run_stop` row exists) → the run goes `Skipped` and every task run it owns goes with it, through `CRUD::skip_job_run`. Asked first, so a run stopped in the same pass it came due is skipped rather than released to be started.
 2. `settle_as_queued` — **has `scheduled_at` arrived?** → `status = Queued`, which is what makes `JobRunDispatcher` pick it up. `started_at` stays NULL: nothing has started, and the dispatcher writes it when something does.
-3. `settle_as_submitted` — otherwise → left `Submitted`, writing nothing. **It exists to say so.** Unlike five of the other chains this one ends there rather than in a `settle_unclaimed` that writes `Invalid`: a run that is simply not due yet is this service's common case, not the symptom of a missing rung.
+3. `settle_as_submitted` — otherwise → left `Scheduled`, writing nothing. **It exists to say so.** Unlike five of the other chains this one ends there rather than in a `settle_unclaimed` that writes `Invalid`: a run that is simply not due yet is this service's common case, not the symptom of a missing rung.
 
-The skip half exists so that stopping a run does not have to wait for its due time. It used to be done by releasing such a run to `Queued` early and leaving the skip to `JobRunDispatcher`, which worked but put a run that will never run into the status that means its moment has come, for as long as the dispatcher's next pass took. Both services now write the same pair of updates through `CRUD::skip_job_run`, and they cannot race for a row: `Submitted` is this service's, `Queued` is the dispatcher's.
+The skip half exists so that stopping a run does not have to wait for its due time. It used to be done by releasing such a run to `Queued` early and leaving the skip to `JobRunDispatcher`, which worked but put a run that will never run into the status that means its moment has come, for as long as the dispatcher's next pass took. Both services now write the same pair of updates through `CRUD::skip_job_run`, and they cannot race for a row: `Scheduled` is this service's, `Queued` is the dispatcher's.
 
 It is the one service that genuinely depends on the poll interval rather than a signal wake-up: nothing publishes when a future instant simply arrives, so the timer is what notices. This is also the reason the [Scheduler](../../scheduler/SKILL.md) is a separate service from the orchestrator's dispatchers and monitors — it decides *which* runs ought to exist, `JobRunReleaser` decides *when* one of them is due.
 
-A `Submitted` run is never taken back out from under this service. The scheduler only ever inserts, so a future-dated run whose schedule has since changed its mind — a lowered `submit_ahead`, an edited cron, a disabled or deleted schedule — still arrives here and is still released at its instant. The only way one does not run is a [`job_run_stop`](../../entities/references/job_run_stop.md) row, settled by step 1 above.
+A `Scheduled` run is never taken back out from under this service. The scheduler only ever inserts, so a future-dated run whose schedule has since changed its mind — a lowered `submit_ahead`, an edited cron, a disabled or deleted schedule — still arrives here and is still released at its instant. The only way one does not run is a [`job_run_stop`](../../entities/references/job_run_stop.md) row, settled by step 1 above.
 
 ## Dispatcher: Queued → Running / Skipped
 

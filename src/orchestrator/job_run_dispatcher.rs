@@ -231,7 +231,7 @@ mod tests {
         assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Invalid);
     }
 
-    /// The other half of the skip JobRunReleaser owns for a Submitted run: a Queued one
+    /// The other half of the skip JobRunReleaser owns for a Scheduled run: a Queued one
     /// that was stopped ends here, and its task runs end with it - left behind they would
     /// hold the run open for ever.
     #[tokio::test]

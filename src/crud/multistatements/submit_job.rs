@@ -178,7 +178,7 @@ mod tests {
     /// which is what makes a scheduled run and a --schedule-at run the same object, and gives
     /// the pipeline exactly one door into queued.
     #[tokio::test]
-    async fn a_submitted_run_starts_as_submitted_and_keeps_its_due_time() {
+    async fn a_submitted_run_starts_as_scheduled_and_keeps_its_due_time() {
 
         // `new_with_migrated_mem`, not `new`: `submit_job` reads the job's config out of
         // `mem.job`, and `mem` is one shared-cache name for the whole test binary - seeding
@@ -200,7 +200,7 @@ mod tests {
 
         let job_run = db.job_run(job_run_id).await;
 
-        assert_eq!(job_run.status, crate::crud::job_run::JobRunStatus::Submitted);
+        assert_eq!(job_run.status, crate::crud::job_run::JobRunStatus::Scheduled);
         assert_eq!(job_run.scheduled_at.timestamp(), due.timestamp());
         assert_eq!(job_run.schedule_id, None);
     }
