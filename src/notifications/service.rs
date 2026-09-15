@@ -722,6 +722,40 @@ mod tests {
     }
 
     /// The counterpart: a success block has nothing to say about a run whose outcome is
+    /// A run removed before it was ever due is not a failure - nobody wants an alert for a
+    /// run they deleted themselves, and Invalid sitting next to it under Failure is exactly
+    /// the neighbour it could have been grouped with by mistake.
+    #[tokio::test]
+    async fn a_deleted_run_closes_its_failure_notification_as_skipped() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Deleted).await;
+
+        let notification = db.insert_job_run_notification(
+            job_run.id,
+            NotifyOn::Failure,
+            NotificationChannel::Email,
+            &["team@example.com"],
+        ).await;
+
+        db.notification_service().handle(&notification).await.unwrap();
+
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Skipped);
+    }
+
+    #[tokio::test]
+    async fn a_deleted_run_closes_its_success_notification_as_skipped() {
+
+        let db = TestDb::new().await;
+
+        let notification = success_notification_for_run(&db, JobRunStatus::Deleted).await;
+
+        db.notification_service().handle(&notification).await.unwrap();
+
+        assert_eq!(settled_status(&db, &notification).await, JobRunNotificationStatus::Skipped);
+    }
+
     /// unknown, so its row closes rather than delivering.
     #[tokio::test]
     async fn an_invalid_run_closes_its_success_notification_as_skipped() {

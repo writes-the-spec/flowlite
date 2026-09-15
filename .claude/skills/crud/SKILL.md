@@ -21,6 +21,7 @@ A method that runs **one** statement lives in its entity's file. A method that r
 | [job_run_reads.rs](../../../src/crud/multistatements/job_run_reads.rs) | `select_job_run_with_task_runs`, `select_task_run_attempt_logs` |
 | [ad_hoc_job.rs](../../../src/crud/multistatements/ad_hoc_job.rs) | `seed_ad_hoc_job` and `JobIdAlreadyInstalled` |
 | [skip_job_run.rs](../../../src/crud/multistatements/skip_job_run.rs) | `skip_job_run` — the job run and every task run it owns, for a run nobody ever started |
+| [delete_job_run.rs](../../../src/crud/multistatements/delete_job_run.rs) | `delete_job_run` — the same pair for a `Submitted` run somebody removed by hand, tombstoned as `Deleted` rather than erased, which is what frees its occurrence for the Scheduler |
 
 A new operation gets its own file and a `pub mod` line, the way a new MCP tool does. Items only the sibling operations use are `pub(super)`, not `pub`.
 

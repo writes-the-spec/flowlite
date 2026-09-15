@@ -18,6 +18,11 @@ pub enum JobRunStatus {
     Aborted,
     TimedOut,
     Invalid,
+    /// Removed by hand while still Submitted, and kept as a tombstone rather than deleted.
+    /// The one status the Scheduler's existence check ignores, so the occurrence it held is
+    /// free to be submitted again - which is what separates it from Skipped, where the user
+    /// cancelled the occurrence and it must never come back.
+    Deleted,
 }
 
 impl JobRunStatus {
@@ -27,7 +32,7 @@ impl JobRunStatus {
     /// It lives beside the enum so the surfaces that need to enumerate statuses - the
     /// filter chips and the CLI's `--status` parser - read one list rather than each
     /// keeping its own copy to forget to update.
-    pub const ALL: [JobRunStatus; 9] = [
+    pub const ALL: [JobRunStatus; 10] = [
         JobRunStatus::Submitted,
         JobRunStatus::Queued,
         JobRunStatus::Running,
@@ -37,6 +42,7 @@ impl JobRunStatus {
         JobRunStatus::Aborted,
         JobRunStatus::TimedOut,
         JobRunStatus::Invalid,
+        JobRunStatus::Deleted,
     ];
 
     /// Whether the run has settled and will not change again. Matched exhaustively on
@@ -52,7 +58,8 @@ impl JobRunStatus {
             | JobRunStatus::Skipped
             | JobRunStatus::Aborted
             | JobRunStatus::TimedOut
-            | JobRunStatus::Invalid => true,
+            | JobRunStatus::Invalid
+            | JobRunStatus::Deleted => true,
         }
     }
 
@@ -70,6 +77,7 @@ impl std::fmt::Display for JobRunStatus {
             JobRunStatus::Aborted => write!(f, "aborted"),
             JobRunStatus::TimedOut => write!(f, "timedout"),
             JobRunStatus::Invalid => write!(f, "invalid"),
+            JobRunStatus::Deleted => write!(f, "deleted"),
         }
     }
 }

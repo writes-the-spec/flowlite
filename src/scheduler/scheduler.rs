@@ -2,7 +2,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use crate::cron_trigger::CronTrigger;
 use crate::crud::CRUD;
-use crate::crud::job_run::{SelectJobRunsData, SelectJobRunsDataFilter};
+use crate::crud::job_run::{JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::schedule::{Schedule, SelectSchedulesData, SelectSchedulesDataFilter, SelectSchedulesDataSort};
 use crate::crud::schedule_job::{ScheduleJob, SelectScheduleJobsData, SelectScheduleJobsDataFilter, SelectScheduleJobsDataSort};
 use crate::poller::Service;
@@ -18,6 +18,16 @@ pub struct Scheduler {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
     pub signals: Arc<Signals>,
+}
+
+
+/// Every status whose presence means an occurrence is spoken for - which is all of them
+/// except `Deleted`, the tombstone left by a run somebody removed to have it written again.
+fn occupying_statuses() -> Vec<JobRunStatus> {
+    JobRunStatus::ALL
+        .into_iter()
+        .filter(|status| *status != JobRunStatus::Deleted)
+        .collect()
 }
 
 
@@ -64,10 +74,16 @@ impl Scheduler {
     /// Submits one (job, occurrence) pair, exactly as `job submit` does, unless a run for it
     /// is already there.
     ///
-    /// "Already there" is asked across every status, not only Submitted: stopping a
+    /// "Already there" is asked across every status but one, not only Submitted: stopping a
     /// future-dated scheduled run is allowed, `JobRunReleaser` then skips the row outright
     /// while its instant is still ahead, and a check reading only Submitted would submit the
     /// occurrence the user just cancelled all over again.
+    ///
+    /// `Deleted` is the exception, and the only thing that frees an occurrence. A stop says
+    /// "do not run this", so its Skipped row goes on holding the instant for ever; deleting
+    /// a submitted run says "write this one again", which is how an edited definition
+    /// reaches an occurrence already standing. Those are the two halves of the same
+    /// question, and this filter is where they are told apart.
     async fn submit_if_missing(
         &self,
         schedule: &Schedule,
@@ -85,7 +101,7 @@ impl Scheduler {
                 id: None,
                 job_id: Some(schedule_job.job_id.clone()),
                 status: None,
-                statuses: None,
+                statuses: Some(occupying_statuses()),
                 schedule_id: Some(schedule.schedule_id.clone()),
                 scheduled_at: Some(occurrence),
             },
@@ -336,6 +352,36 @@ mod tests {
             .count();
 
         assert_eq!(at_that_instant, 1, "the stopped occurrence must not be submitted a second time");
+    }
+
+    /// The point of the Deleted status. Removing a submitted run by hand says "write this
+    /// occurrence again", so unlike a stop it must leave the occurrence free - otherwise the
+    /// edited definition the user deleted the run for never reaches the schedule.
+    #[tokio::test]
+    async fn a_deleted_occurrence_is_submitted_again() {
+
+        let (db, _mem_conn) = scheduled_db().await;
+        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
+
+        db.scheduler().handle(&schedule).await.unwrap();
+
+        let submitted = outstanding(&db, "nightly").await;
+        assert_eq!(submitted.len(), 1);
+        let occurrence = submitted[0].scheduled_at;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        assert!(db.crud.delete_job_run(&mut conn, submitted[0].id).await.unwrap());
+
+        db.scheduler().handle(&schedule).await.unwrap();
+
+        let at_that_instant = all_runs(&db, "nightly").await
+            .into_iter()
+            .filter(|run| run.scheduled_at == occurrence)
+            .collect::<Vec<_>>();
+
+        assert_eq!(at_that_instant.len(), 2, "the deleted occurrence should be written again");
+        assert_eq!(at_that_instant[0].status, JobRunStatus::Deleted);
+        assert_eq!(at_that_instant[1].status, JobRunStatus::Submitted);
     }
 
     /// The restart case the schedule_id column exists for. Nothing about a pass is written

@@ -68,7 +68,8 @@ impl NotifyOn {
                 | JobRunStatus::Running
                 | JobRunStatus::Succeeded
                 | JobRunStatus::Skipped
-                | JobRunStatus::Aborted => false,
+                | JobRunStatus::Aborted
+                | JobRunStatus::Deleted => false,
             },
             NotifyOn::Success => match status {
                 JobRunStatus::Succeeded => true,
@@ -79,7 +80,8 @@ impl NotifyOn {
                 | JobRunStatus::Skipped
                 | JobRunStatus::Aborted
                 | JobRunStatus::TimedOut
-                | JobRunStatus::Invalid => false,
+                | JobRunStatus::Invalid
+                | JobRunStatus::Deleted => false,
             },
         }
     }

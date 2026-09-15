@@ -223,7 +223,7 @@ main { flex: 1; padding: 2.5rem 0 5rem; }
 .mark--running { background: var(--brand); animation: breathe 1.6s ease-in-out infinite; }
 .mark--succeeded { background: var(--ok); }
 .mark--failed, .mark--timedout { background: var(--fail); }
-.mark--skipped, .mark--aborted { background: none; box-shadow: inset 0 0 0 1px var(--rule); }
+.mark--skipped, .mark--aborted, .mark--deleted { background: none; box-shadow: inset 0 0 0 1px var(--rule); }
 .mark--invalid { background: var(--invalid); }
 
 @keyframes breathe {

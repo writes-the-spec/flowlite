@@ -82,9 +82,9 @@ impl CRUD {
             scheduled_at: job_run.scheduled_at,
             // Deliberately not copied. A rerun is a manual re-submission of a definition:
             // the schedule asked for the original, not for this one. Copying it would make
-            // the rerun count as that schedule's outstanding run, which would both block
-            // the real next occurrence and get the rerun deleted by the Scheduler's
-            // reconcile, since its due time is not one of the schedule's occurrences.
+            // the rerun stand in for that schedule's occurrence - the existence check is
+            // keyed on (schedule, job, instant), and the rerun carries the original's
+            // instant - so the occurrence itself would never be submitted.
             schedule_id: None,
             tasks: task_runs
                 .into_iter()
@@ -122,6 +122,24 @@ mod tests {
     use crate::crud::job_run_notification::{JobRunNotificationStatus, NotificationChannel, NotifyOn};
     use crate::test_support::{map, TestDb};
 
+
+    /// A tombstone keeps every row a rerun reads, so removing an occurrence to have it
+    /// written again does not cost you the ability to replay what it would have run.
+    #[tokio::test]
+    async fn a_deleted_run_is_still_rerunnable() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Submitted).await;
+        db.insert_task_run_for_command(job_run.id, "echo hi", 60).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        assert!(db.crud.delete_job_run(&mut conn, job_run.id).await.unwrap());
+
+        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id).await.unwrap();
+
+        assert_eq!(db.job_run(rerun_id).await.status, JobRunStatus::Submitted);
+    }
 
     /// A rerun replays the run's own inputs. Nothing here reads config, so the rerun of a
     /// scheduled run stays a run for the same slice and the same instant - rerunning
