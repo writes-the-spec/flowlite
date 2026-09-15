@@ -60,6 +60,7 @@ struct JobRunIdRouteTemplate {
     polling: bool,
     refresh_seconds: u32,
     deletable: bool,
+    skippable: bool,
     stoppable: bool,
     rerunnable: bool,
     /// See `JobRunDisplay::job_exists` on the home table: a run can outlive its job, and
@@ -233,6 +234,7 @@ pub async fn job_run_id_route(
         polling: matches!(job_run.status, JobRunStatus::Scheduled | JobRunStatus::Queued | JobRunStatus::Running),
         refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
         deletable: controls.deletable,
+        skippable: controls.skippable,
         stoppable: controls.stoppable,
         rerunnable: controls.rerunnable,
     };
@@ -357,11 +359,12 @@ pub async fn stop_job_run_route(
     }
 }
 
-/// Which of the three buttons a run's status offers. One function, because "may this be
+/// Which of the four buttons a run's status offers. One function, because "may this be
 /// stopped?" and "may this be deleted?" are the same question asked at two ends of a run's
 /// life, and answering them in separate places is how a run comes to offer both.
 struct JobRunControls {
     deletable: bool,
+    skippable: bool,
     stoppable: bool,
     rerunnable: bool,
 }
@@ -370,6 +373,10 @@ fn job_run_controls(status: JobRunStatus) -> JobRunControls {
     JobRunControls {
         // Nothing of it has run, and removing it hands the occurrence back to the schedule.
         deletable: status == JobRunStatus::Scheduled,
+        // The same status as the delete, and the opposite answer to the same question: a
+        // skip keeps the occurrence, a delete hands it back. Only a scheduled run can be
+        // called off before its schedule has had the chance to submit it again.
+        skippable: status == JobRunStatus::Scheduled,
         // Queued too, not only Running: a queued run is due and starts on the next pass,
         // and waiting for it to start before offering the stop is offering it too late.
         stoppable: matches!(status, JobRunStatus::Queued | JobRunStatus::Running),
@@ -390,6 +397,20 @@ mod tests {
         for status in JobRunStatus::ALL {
             assert_eq!(
                 job_run_controls(status).deletable,
+                status == JobRunStatus::Scheduled,
+                "{status}",
+            );
+        }
+    }
+
+    /// A skip and a delete are offered together, on the one status where the occurrence is
+    /// still the schedule's to decide — they differ in what they leave behind, not in when
+    /// they are reachable.
+    #[test]
+    fn only_a_scheduled_run_offers_skip() {
+        for status in JobRunStatus::ALL {
+            assert_eq!(
+                job_run_controls(status).skippable,
                 status == JobRunStatus::Scheduled,
                 "{status}",
             );

@@ -39,6 +39,10 @@
             <button class="btn btn--danger" onclick="document.getElementById('stop_run').showModal()">Stop run</button>
             {% endif %}
 
+            {% if skippable %}
+            <button class="btn" onclick="document.getElementById('skip_run').showModal()">Skip run</button>
+            {% endif %}
+
             {% if deletable %}
             <button class="btn btn--danger" onclick="document.getElementById('delete_run').showModal()">Delete run</button>
             {% endif %}
@@ -203,19 +207,32 @@
     {% if deletable %}
     <dialog id="delete_run">
         <h2 class="dialog__title">Delete run {{ job_run.id }}?</h2>
-        <p class="dialog__body">Nothing of it has run yet. Deleting keeps the run as a record and hands the occurrence back to its schedule, which submits it again under the job as it now stands. Skipping calls the occurrence off for good.</p>
+        <p class="dialog__body">Nothing of it has run yet. The run is kept as a record, and its schedule submits the occurrence again under the job as it now stands. To call the occurrence off for good, skip it instead.</p>
 
         <div class="dialog__actions">
             <form method="dialog">
                 <button class="btn btn--quiet">Keep it</button>
             </form>
-            {# A stop on a still-scheduled run is what skips it: JobRunReleaser reads the stop
-               row before it reads the clock, so the occurrence never comes due. #}
-            <form action="/job-runs/{{ job_run.id }}/stop" method="POST">
-                <button type="submit" class="btn">Skip run</button>
-            </form>
             <form action="/job-runs/{{ job_run.id }}/delete" method="POST">
                 <button type="submit" class="btn btn--danger">Delete run</button>
+            </form>
+        </div>
+    </dialog>
+    {% endif %}
+
+    {% if skippable %}
+    <dialog id="skip_run">
+        <h2 class="dialog__title">Skip run {{ job_run.id }}?</h2>
+        {# A stop on a still-scheduled run is what skips it: JobRunReleaser reads the stop
+           row before it reads the clock, so the occurrence never comes due. #}
+        <p class="dialog__body">The occurrence is called off for good — its schedule will not submit it again. Nothing of the run has started, and it is kept as a record, marked skipped.</p>
+
+        <div class="dialog__actions">
+            <form method="dialog">
+                <button class="btn btn--quiet">Keep it</button>
+            </form>
+            <form action="/job-runs/{{ job_run.id }}/stop" method="POST">
+                <button type="submit" class="btn btn--danger">Skip run</button>
             </form>
         </div>
     </dialog>
