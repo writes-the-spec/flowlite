@@ -28,6 +28,8 @@ The skip half exists so that stopping a run does not have to wait for its due ti
 
 It is the one service that genuinely depends on the poll interval rather than a signal wake-up: nothing publishes when a future instant simply arrives, so the timer is what notices. This is also the reason the [Scheduler](../../scheduler/SKILL.md) is a separate service from the orchestrator's dispatchers and monitors — it decides *which* runs ought to exist, `JobRunReleaser` decides *when* one of them is due.
 
+A `Submitted` run is never taken back out from under this service. The scheduler only ever inserts, so a future-dated run whose schedule has since changed its mind — a lowered `submit_ahead`, an edited cron, a disabled or deleted schedule — still arrives here and is still released at its instant. The only way one does not run is a [`job_run_stop`](../../entities/references/job_run_stop.md) row, settled by step 1 above.
+
 ## Dispatcher: Queued → Running / Skipped
 
 `JobRunDispatcher` ([src/orchestrator/job_run_dispatcher.rs](../../../../src/orchestrator/job_run_dispatcher.rs)) polls `Queued` job runs **oldest id first** — on a signal wake-up or its one-second interval, whichever comes first — and settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened:

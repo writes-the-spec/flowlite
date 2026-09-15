@@ -7,7 +7,7 @@ description: High-level map of src/orchestrator/ - the background services that 
 
 The orchestrator is the engine of flowlite: seven background services, all spawned by `Orchestrator::start` ([src/orchestrator/orchestrator.rs](../../../src/orchestrator/orchestrator.rs)), which `serve` calls.
 
-It takes over from an existing job run, whatever created it — `job submit`, the web UI, or the [Scheduler](../scheduler/SKILL.md), which is a separate service `serve` starts alongside it and which only ever writes a run `Submitted`.
+It takes over from an existing job run, whatever created it — `job submit`, the web UI, or the [Scheduler](../scheduler/SKILL.md), which is a separate service `serve` starts alongside it and which only ever inserts a run `Submitted`. Nothing outside the orchestrator touches a run after that: the scheduler never updates one and never deletes one, so every row it writes is one of these services' to settle.
 
 | Service | Polls | Does |
 |---|---|---|
