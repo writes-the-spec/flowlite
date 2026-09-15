@@ -39,62 +39,63 @@ impl TaskRunMonitor {
         let last_task_run_attempt = self.get_or_start_task_run_attempt(task_run).await?;
 
         match self.derive_next_status(task_run, &last_task_run_attempt).await {
-            Ok(TaskRunStatus::Succeeded) => self.set_to_succeeded(task_run).await,
-            Ok(TaskRunStatus::Failed) => self.set_to_failed(task_run).await,
-            Ok(TaskRunStatus::TimedOut) => self.set_to_timed_out(task_run).await,
-            Ok(TaskRunStatus::Aborted) => self.set_to_aborted(task_run).await,
-            Ok(TaskRunStatus::Running) => Ok(()),
-            Ok(_) | Err(_) => self.set_to_invalid(task_run).await,
+            Ok(Some(TaskRunStatus::Succeeded)) => self.set_to_succeeded(task_run).await,
+            Ok(Some(TaskRunStatus::Failed)) => self.set_to_failed(task_run).await,
+            Ok(Some(TaskRunStatus::TimedOut)) => self.set_to_timed_out(task_run).await,
+            Ok(Some(TaskRunStatus::Aborted)) => self.set_to_aborted(task_run).await,
+            Ok(Some(TaskRunStatus::Running)) => Ok(()),
+            Ok(_) => self.set_to_invalid(task_run).await,
+            // Only the retry insert can fail here, and a failed write is not a verdict:
+            // settling the terminal `Invalid` on it would make a moment's contention on the
+            // database permanent. `Poller` logs it and comes round again.
+            Err(error) => Err(error),
         }
     }
 
     /// Derives the next status from the last attempt's status alone; a failed attempt with
     /// retries left inserts its next attempt here, since starting one is not itself a
-    /// status. Errs, unreachable, if no rung claims the status.
+    /// status. `None`, unreachable, if no check claims the status — a value rather than an
+    /// `Err`, so that the `Err` this can still return means only that the insert failed.
     async fn derive_next_status(
         &self,
         task_run: &TaskRun,
         last_task_run_attempt: &TaskRunAttempt,
-    ) -> anyhow::Result<TaskRunStatus> {
+    ) -> anyhow::Result<Option<TaskRunStatus>> {
 
         // Never retried — flowlite has no idea what that attempt did.
         if last_task_run_attempt.status == TaskRunAttemptStatus::Invalid {
-            return Ok(TaskRunStatus::Invalid);
+            return Ok(Some(TaskRunStatus::Invalid));
         }
 
         if last_task_run_attempt.status == TaskRunAttemptStatus::Succeeded {
-            return Ok(TaskRunStatus::Succeeded);
+            return Ok(Some(TaskRunStatus::Succeeded));
         }
 
         // Still owned by the attempt services.
         if !last_task_run_attempt.status.is_finished() {
-            return Ok(TaskRunStatus::Running);
+            return Ok(Some(TaskRunStatus::Running));
         }
 
         if last_task_run_attempt.status == TaskRunAttemptStatus::Failed {
             // Attempts count from 1, so max_retries + 1 of them run in all.
             if last_task_run_attempt.attempt < task_run.max_retries + 1 {
                 self.insert_next_attempt(task_run, last_task_run_attempt).await?;
-                return Ok(TaskRunStatus::Running);
+                return Ok(Some(TaskRunStatus::Running));
             }
-            return Ok(TaskRunStatus::Failed);
+            return Ok(Some(TaskRunStatus::Failed));
         }
 
         if last_task_run_attempt.status == TaskRunAttemptStatus::TimedOut {
-            return Ok(TaskRunStatus::TimedOut);
+            return Ok(Some(TaskRunStatus::TimedOut));
         }
 
         // Killed mid-flight or skipped before starting; either way not Skipped — the task
         // run had started and may have left output.
         if last_task_run_attempt.status.is_stopped() {
-            return Ok(TaskRunStatus::Aborted);
+            return Ok(Some(TaskRunStatus::Aborted));
         }
 
-        Err(anyhow::anyhow!(
-            "Task run {}'s last attempt has status {:?}, which no outcome claims",
-            task_run.id,
-            last_task_run_attempt.status,
-        ))
+        Ok(None)
     }
 
     /// Inserts a task run's next retry attempt; the task run itself stays Running.

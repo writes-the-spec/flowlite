@@ -167,7 +167,9 @@ flowlite job-run delete 42
 The next scheduler pass finds no run standing for that occurrence and submits it again,
 carrying the job as the restarted server now reads it. Only a run still `scheduled` can be
 deleted — one already queued or running is the dispatcher's, and `job-run stop` is what
-calls that off.
+calls that off. The run page on the dashboard offers the same three, one per stage of a
+run's life: **Delete** while it is scheduled, **Stop run** once it is queued or running,
+and **Rerun** once it has finished.
 
 **Deleting is not stopping, and the difference is which one the schedule writes again.** A
 stopped run settles `skipped`, and that row goes on holding its instant for ever, so the

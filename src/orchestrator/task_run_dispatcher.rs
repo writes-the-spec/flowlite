@@ -41,7 +41,11 @@ impl TaskRunDispatcher {
             Ok(Some(TaskRunStatus::Skipped)) => self.set_to_skipped(task_run).await,
             Ok(Some(TaskRunStatus::Waiting)) => Ok(()),
             Ok(Some(TaskRunStatus::Running)) => self.set_to_running(task_run).await,
-            Ok(_) | Err(_) => self.set_to_invalid(task_run).await,
+            Ok(_) => self.set_to_invalid(task_run).await,
+            // A read that failed is not a verdict: `Invalid` is terminal, so settling on
+            // it would make a moment's contention on the database permanent. The error
+            // goes back to `Poller`, which logs it and comes round again.
+            Err(error) => Err(error),
         }
     }
 
@@ -302,6 +306,27 @@ mod tests {
         db.task_run_dispatcher().set_to_invalid(&task_run).await.unwrap();
 
         assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Invalid);
+    }
+
+    /// A read that failed is not a verdict, and `Invalid` here strands every dependent
+    /// below the row as well.
+    #[tokio::test]
+    async fn a_failed_read_leaves_the_task_run_alone_and_reports_the_error() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Waiting).await;
+
+        sqlx::query("DROP TABLE job_run_stop")
+            .execute(&*db.conn_pool)
+            .await
+            .unwrap();
+
+        let result = db.task_run_dispatcher().handle(&task_run).await;
+
+        assert!(result.is_err(), "a failed read must reach the Poller, which logs and retries");
+        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Waiting);
     }
 
     /// Without Invalid in the skip list a dependent is neither skipped, waiting, nor started

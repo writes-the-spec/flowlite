@@ -59,7 +59,9 @@ struct JobRunIdRouteTemplate {
     task_count: String,
     polling: bool,
     refresh_seconds: u32,
+    deletable: bool,
     stoppable: bool,
+    rerunnable: bool,
     /// See `JobRunDisplay::job_exists` on the home table: a run can outlive its job, and
     /// one submitted from a file never had one to begin with.
     job_exists: bool,
@@ -203,6 +205,8 @@ pub async fn job_run_id_route(
         offset: None,
     }).await.unwrap_or_default();
 
+    let controls = job_run_controls(job_run.status);
+
     let template = JobRunIdRouteTemplate {
         current_route: "home",
         theme: state.toolkit.app_config.ui.theme.as_attribute(),
@@ -228,7 +232,9 @@ pub async fn job_run_id_route(
         // a page loaded during that pass must keep polling rather than going stale.
         polling: matches!(job_run.status, JobRunStatus::Scheduled | JobRunStatus::Queued | JobRunStatus::Running),
         refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
-        stoppable: matches!(job_run.status, JobRunStatus::Running),
+        deletable: controls.deletable,
+        stoppable: controls.stoppable,
+        rerunnable: controls.rerunnable,
     };
 
     match template.render() {
@@ -263,6 +269,35 @@ pub async fn rerun_job_run_route(
         Err(err) => {
             eprintln!("Error rerunning job run: {}", err);
             Html("Error rerunning job run").into_response()
+        }
+    }
+}
+
+pub async fn delete_job_run_route(
+    State(state): State<AppState>,
+    Extension(crud): Extension<CRUD>,
+    Path(job_run_id): Path<i64>,
+) -> impl IntoResponse {
+    let mut conn = match state.conn_pool.acquire().await {
+        Ok(conn) => conn,
+        Err(err) => {
+            eprintln!("Error deleting job run: {}", err);
+            return Html("Error deleting job run").into_response();
+        }
+    };
+
+    // `delete_job_run` re-checks the status inside its own transaction and leaves anything
+    // but a `Scheduled` run alone, so a page that has gone stale - or one whose run came due
+    // between the render and the click - redirects to a run that says what actually
+    // happened, the way the stop route does, rather than to a dead end.
+    match crud.delete_job_run(&mut conn, job_run_id).await {
+        Ok(_) => {
+            state.signals.publish();
+            Redirect::to(&format!("/job-runs/{}", job_run_id)).into_response()
+        }
+        Err(err) => {
+            eprintln!("Error deleting job run: {}", err);
+            Html("Error deleting job run").into_response()
         }
     }
 }
@@ -317,6 +352,74 @@ pub async fn stop_job_run_route(
         Err(err) => {
             eprintln!("Error stopping job run: {}", err);
             Html("Error stopping job run").into_response()
+        }
+    }
+}
+
+/// Which of the three buttons a run's status offers. One function, because "may this be
+/// stopped?" and "may this be deleted?" are the same question asked at two ends of a run's
+/// life, and answering them in separate places is how a run comes to offer both.
+struct JobRunControls {
+    deletable: bool,
+    stoppable: bool,
+    rerunnable: bool,
+}
+
+fn job_run_controls(status: JobRunStatus) -> JobRunControls {
+    JobRunControls {
+        // Nothing of it has run, and removing it hands the occurrence back to the schedule.
+        deletable: status == JobRunStatus::Scheduled,
+        // Queued too, not only Running: a queued run is due and starts on the next pass,
+        // and waiting for it to start before offering the stop is offering it too late.
+        stoppable: matches!(status, JobRunStatus::Queued | JobRunStatus::Running),
+        // A rerun replays the run's own snapshot, which is only an answer once the run is
+        // over. A `Deleted` run counts: its rows are all still there.
+        rerunnable: status.is_finished(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A scheduled run has no process and no output, and deleting it hands its occurrence
+    /// back to the schedule — the one status where that is true.
+    #[test]
+    fn only_a_scheduled_run_offers_delete() {
+        for status in JobRunStatus::ALL {
+            assert_eq!(
+                job_run_controls(status).deletable,
+                status == JobRunStatus::Scheduled,
+                "{status}",
+            );
+        }
+    }
+
+    /// Queued as well as Running: a queued run is already due and starts on the next pass,
+    /// so the page has to offer the stop before anything of it has run.
+    #[test]
+    fn a_queued_or_running_run_offers_stop() {
+        assert!(job_run_controls(JobRunStatus::Queued).stoppable);
+        assert!(job_run_controls(JobRunStatus::Running).stoppable);
+    }
+
+    /// Stopping settles the run, so a settled one has nothing left to stop — and a
+    /// scheduled one is deleted rather than stopped.
+    #[test]
+    fn a_settled_or_scheduled_run_offers_no_stop() {
+        assert!(!job_run_controls(JobRunStatus::Scheduled).stoppable);
+
+        for status in JobRunStatus::ALL.into_iter().filter(|status| status.is_finished()) {
+            assert!(!job_run_controls(status).stoppable, "{status}");
+        }
+    }
+
+    /// A rerun replays the run's own snapshot, which only says something once the run is
+    /// over. Offering it earlier invites two runs of the same work at once.
+    #[test]
+    fn only_a_finished_run_offers_rerun() {
+        for status in JobRunStatus::ALL {
+            assert_eq!(job_run_controls(status).rerunnable, status.is_finished(), "{status}");
         }
     }
 }

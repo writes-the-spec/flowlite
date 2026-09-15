@@ -43,7 +43,11 @@ impl JobRunReleaser {
             Ok(JobRunStatus::Skipped) => self.set_to_skipped(job_run).await,
             Ok(JobRunStatus::Queued) => self.set_to_queued(job_run).await,
             Ok(JobRunStatus::Scheduled) => Ok(()),
-            Ok(_) | Err(_) => self.set_to_invalid(job_run).await,
+            Ok(_) => self.set_to_invalid(job_run).await,
+            // A read that failed is not a verdict: `Invalid` is terminal, so settling on
+            // it would make a moment's contention on the database permanent. The error
+            // goes back to `Poller`, which logs it and comes round again.
+            Err(error) => Err(error),
         }
     }
 
@@ -273,6 +277,28 @@ mod tests {
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].id, scheduled.id);
+    }
+
+    /// A read that failed is not a verdict. The stop lookup is made to fail while the
+    /// tables the writes touch are intact, so settling `Invalid` here would be a decision
+    /// taken on no information - and `Invalid` is terminal, so the run would never recover
+    /// from what may be a moment's contention on the database.
+    #[tokio::test]
+    async fn a_failed_read_leaves_the_run_alone_and_reports_the_error() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run_at(JobRunStatus::Scheduled, Utc::now(), None).await;
+
+        sqlx::query("DROP TABLE job_run_stop")
+            .execute(&*db.conn_pool)
+            .await
+            .unwrap();
+
+        let result = db.job_run_releaser().handle(&job_run).await;
+
+        assert!(result.is_err(), "a failed read must reach the Poller, which logs and retries");
+        assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Scheduled);
     }
 
     /// Unreachable through `handle`, so called directly. See `JobRunMonitor`'s equivalent

@@ -55,7 +55,11 @@ impl TaskRunAttemptDispatcher {
             Ok(TaskRunAttemptStatus::Skipped) => self.set_to_skipped(task_run_attempt).await,
             Ok(TaskRunAttemptStatus::Queued) => Ok(()),
             Ok(TaskRunAttemptStatus::Running) => self.set_to_running(task_run_attempt).await,
-            Ok(_) | Err(_) => self.set_to_invalid(task_run_attempt).await,
+            Ok(_) => self.set_to_invalid(task_run_attempt).await,
+            // A read that failed is not a verdict: `Invalid` is terminal, so settling on
+            // it would make a moment's contention on the database permanent. The error
+            // goes back to `Poller`, which logs it and comes round again.
+            Err(error) => Err(error),
         }
     }
 
@@ -557,6 +561,7 @@ impl Service for TaskRunAttemptDispatcher {
 mod tests {
     use super::*;
     use crate::crud::job_run::JobRunStatus;
+    use crate::crud::task_run::TaskRunStatus;
     use crate::test_support::TestDb;
     use crate::test_support::read_command_file;
     use crate::test_support::{reading_the_environment, writing_the_environment};
@@ -662,6 +667,28 @@ mod tests {
         let status = settled_attempt_status(1, 0, true).await;
 
         assert_eq!(status, TaskRunAttemptStatus::Skipped);
+    }
+
+    /// A read that failed is not a verdict. `Invalid` is never retried, so settling on a
+    /// failed read would cost the attempt the retries its task run still had.
+    #[tokio::test]
+    async fn a_failed_read_leaves_the_attempt_alone_and_reports_the_error() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
+        let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
+
+        sqlx::query("DROP TABLE job_run_stop")
+            .execute(&*db.conn_pool)
+            .await
+            .unwrap();
+
+        let result = db.task_run_attempt_dispatcher().handle(&attempt).await;
+
+        assert!(result.is_err(), "a failed read must reach the Poller, which logs and retries");
+        assert_eq!(db.task_run_attempt(attempt.id).await.status, TaskRunAttemptStatus::Queued);
     }
 
     /// Pins the stopped check ahead of the queued check. Swap them and a retry still inside

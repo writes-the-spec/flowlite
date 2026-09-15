@@ -36,52 +36,52 @@ impl JobRunMonitor {
 
         let task_runs = self.get_task_runs(job_run).await?;
 
-        match self.derive_next_status(job_run, &task_runs) {
-            Ok(JobRunStatus::Succeeded) => self.set_to_succeeded(job_run).await,
-            Ok(JobRunStatus::Failed) => self.set_to_failed(job_run).await,
-            Ok(JobRunStatus::TimedOut) => self.set_to_timed_out(job_run).await,
-            Ok(JobRunStatus::Aborted) => self.set_to_aborted(job_run).await,
-            Ok(JobRunStatus::Running) => Ok(()),
-            Ok(_) | Err(_) => self.set_to_invalid(job_run).await,
+        match self.derive_next_status(&task_runs) {
+            Some(JobRunStatus::Succeeded) => self.set_to_succeeded(job_run).await,
+            Some(JobRunStatus::Failed) => self.set_to_failed(job_run).await,
+            Some(JobRunStatus::TimedOut) => self.set_to_timed_out(job_run).await,
+            Some(JobRunStatus::Aborted) => self.set_to_aborted(job_run).await,
+            Some(JobRunStatus::Running) => Ok(()),
+            _ => self.set_to_invalid(job_run).await,
         }
     }
 
     /// Derives the next status from the task runs' statuses; order ranks an unknown above
-    /// every verdict and a real failure above a stop. Errs, unreachable, if none claim it.
-    fn derive_next_status(&self, job_run: &JobRun, task_runs: &[TaskRun]) -> anyhow::Result<JobRunStatus> {
+    /// every verdict and a real failure above a stop. `None`, unreachable, if none claim it.
+    ///
+    /// Reads nothing but its arguments, so there is no failure to tell apart from a verdict
+    /// and no `Result` to wrap one in: an undecidable set of task runs is a value.
+    fn derive_next_status(&self, task_runs: &[TaskRun]) -> Option<JobRunStatus> {
 
         let all_finished = task_runs.iter().all(|task_run| task_run.status.is_finished());
 
         if !all_finished {
-            return Ok(JobRunStatus::Running);
+            return Some(JobRunStatus::Running);
         }
 
         if task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Invalid) {
-            return Ok(JobRunStatus::Invalid);
+            return Some(JobRunStatus::Invalid);
         }
 
         // `all` over an empty list is true, so a job run with no task runs succeeds here.
         if task_runs.iter().all(|task_run| task_run.status == TaskRunStatus::Succeeded) {
-            return Ok(JobRunStatus::Succeeded);
+            return Some(JobRunStatus::Succeeded);
         }
 
         if task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::Failed) {
-            return Ok(JobRunStatus::Failed);
+            return Some(JobRunStatus::Failed);
         }
 
         if task_runs.iter().any(|task_run| task_run.status == TaskRunStatus::TimedOut) {
-            return Ok(JobRunStatus::TimedOut);
+            return Some(JobRunStatus::TimedOut);
         }
 
         // A stopped task run: killed mid-flight, or skipped before it could start.
         if task_runs.iter().any(|task_run| task_run.status.is_stopped()) {
-            return Ok(JobRunStatus::Aborted);
+            return Some(JobRunStatus::Aborted);
         }
 
-        Err(anyhow::anyhow!(
-            "Job run {}'s task runs finished with no outcome claiming them",
-            job_run.id,
-        ))
+        None
     }
 
     async fn set_to_invalid(&self, job_run: &JobRun) -> anyhow::Result<()> {

@@ -38,7 +38,11 @@ impl JobRunDispatcher {
             Ok(JobRunStatus::Skipped) => self.set_to_skipped(job_run).await,
             Ok(JobRunStatus::Queued) => Ok(()),
             Ok(JobRunStatus::Running) => self.set_to_running(job_run).await,
-            Ok(_) | Err(_) => self.set_to_invalid(job_run).await,
+            Ok(_) => self.set_to_invalid(job_run).await,
+            // A read that failed is not a verdict: `Invalid` is terminal, so settling on
+            // it would make a moment's contention on the database permanent. The error
+            // goes back to `Poller`, which logs it and comes round again.
+            Err(error) => Err(error),
         }
     }
 
@@ -234,6 +238,26 @@ mod tests {
     /// The other half of the skip JobRunReleaser owns for a Scheduled run: a Queued one
     /// that was stopped ends here, and its task runs end with it - left behind they would
     /// hold the run open for ever.
+    /// A read that failed is not a verdict, and `Invalid` is terminal: a moment's
+    /// contention on the database must not end a run that was only queued.
+    #[tokio::test]
+    async fn a_failed_read_leaves_the_queued_run_alone_and_reports_the_error() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Queued).await;
+
+        sqlx::query("DROP TABLE job_run_stop")
+            .execute(&*db.conn_pool)
+            .await
+            .unwrap();
+
+        let result = db.job_run_dispatcher().handle(&job_run).await;
+
+        assert!(result.is_err(), "a failed read must reach the Poller, which logs and retries");
+        assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Queued);
+    }
+
     #[tokio::test]
     async fn a_stopped_job_run_is_skipped_along_with_its_task_runs() {
 

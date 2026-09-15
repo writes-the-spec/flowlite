@@ -31,10 +31,16 @@
             <span class="mark mark--{{ job_run.status }}"></span>
             <span class="state state--{{ job_run.status }}">{{ job_run.status_word }}</span>
 
+            {% if rerunnable %}
             <button class="btn btn--primary" onclick="document.getElementById('rerun_run').showModal()">Rerun</button>
+            {% endif %}
 
             {% if stoppable %}
             <button class="btn btn--danger" onclick="document.getElementById('stop_run').showModal()">Stop run</button>
+            {% endif %}
+
+            {% if deletable %}
+            <button class="btn btn--danger" onclick="document.getElementById('delete_run').showModal()">Delete run</button>
             {% endif %}
         </div>
     </div>
@@ -162,9 +168,10 @@
         {% endif %}
     </div>
 
+    {% if rerunnable %}
     <dialog id="rerun_run">
         <h2 class="dialog__title">Rerun {{ job_run.job_name }}?</h2>
-        <p class="dialog__body">A new run of the job is submitted with the job's current definition. Run {{ job_run.id }} is left untouched.</p>
+        <p class="dialog__body">A new run is submitted with the definition run {{ job_run.id }} executed, not the job's YAML as it stands now. Run {{ job_run.id }} is left untouched.</p>
 
         <div class="dialog__actions">
             <form method="dialog">
@@ -175,6 +182,7 @@
             </form>
         </div>
     </dialog>
+    {% endif %}
 
     {% if stoppable %}
     <dialog id="stop_run">
@@ -187,6 +195,22 @@
             </form>
             <form action="/job-runs/{{ job_run.id }}/stop" method="POST">
                 <button type="submit" class="btn btn--danger">Stop run</button>
+            </form>
+        </div>
+    </dialog>
+    {% endif %}
+
+    {% if deletable %}
+    <dialog id="delete_run">
+        <h2 class="dialog__title">Delete run {{ job_run.id }}?</h2>
+        <p class="dialog__body">Nothing of it has run yet. The run is kept as a record, marked deleted, and its schedule submits the occurrence again on its next pass — under the job as the running server read it. To call the occurrence off for good, stop it once it is queued instead.</p>
+
+        <div class="dialog__actions">
+            <form method="dialog">
+                <button class="btn btn--quiet">Keep it</button>
+            </form>
+            <form action="/job-runs/{{ job_run.id }}/delete" method="POST">
+                <button type="submit" class="btn btn--danger">Delete run</button>
             </form>
         </div>
     </dialog>
