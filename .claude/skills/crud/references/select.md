@@ -74,10 +74,17 @@ Column list is explicit (`SELECT a, b, c FROM ...`), never `SELECT *` — the co
 
 - **Equality**: `AND col = <bind>`, guarded by `if let Some(v) = &data.filter.col`.
 - **Substring match**: `name_like: Option<String>` binds `format!("%{}%", name)` against `LIKE` — see `SelectJobsDataFilter::name_like` in [src/crud/job.rs](../../../../src/crud/job.rs) and `SelectSchedulesDataFilter::name_like`.
-- **Comparison**: name the field after the operator, e.g. `scheduled_at_gt: Option<DateTime<Utc>>` → `AND scheduled_at > <bind>` (see [src/crud/job_run.rs](../../../../src/crud/job_run.rs)).
+- **Comparison**: name the field after the operator, e.g. `scheduled_at_gt: Option<DateTime<Utc>>` → `AND scheduled_at > <bind>` (see `DeleteJobRunsDataFilter` in [src/crud/job_run.rs](../../../../src/crud/job_run.rs)). A plain name means equality, so the unsuffixed `scheduled_at` on `SelectJobRunsDataFilter` is `AND scheduled_at = <bind>` — the two sit side by side on the same entity, one per filter type.
+- **Instant**: an equality on a `DATETIME` matches the stored value exactly, so it only answers the caller that passes back the instant it inserted. `SelectJobRunsDataFilter::scheduled_at` is that caller's filter — the Scheduler asks after one cron occurrence at a time, the same value `CRUD::submit_job` wrote — and the doc comment on the field says so. Anything deriving an instant some other way wants a `_gt`/`_lt` window instead.
 - **Bool**: bind `if v { 1 } else { 0 }`, same as insert.
 - **Enum**: bind directly, same as insert (`status: Option<JobRunStatus>`).
 - **Any of several**: `statuses: Option<Vec<JobRunStatus>>` pushes `AND status IN (?, ?, ...)` with `query_builder.separated(", ")`. It sits *beside* the singular `status` rather than replacing it — "exactly this one" and "any of these" are different questions, and every existing caller keeps passing `statuses: None`. Pass a non-empty list: `IN ()` is not valid SQLite.
+
+### Adding a field to an existing filter
+
+Nothing derives `Default`, and no construction site uses `..Default::default()`, so a new field is a compile error at **every** literal that builds the filter — around 35 of them for `SelectJobRunsDataFilter`. That is the intended cost: each site says `None` on purpose rather than inheriting a default nobody read. Add the field, then let `cargo build` list the sites.
+
+Where the entity has a shared clause-pusher, the clause goes there once and nowhere else. `push_job_run_filter` in [src/crud/job_run.rs](../../../../src/crud/job_run.rs) renders `SelectJobRunsDataFilter` for `select_job_runs`, `count_job_runs` and `select_job_run_job_ids` alike — this is the one place the repo's preference for redundancy over abstraction is overruled, because a clause added to the select and forgotten in the count makes retention's deletion window too wide. `delete_job_runs` has its own filter type and renders its own clauses, so a select-side field does not reach it.
 
 ### Counts and projections
 
