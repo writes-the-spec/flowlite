@@ -7,7 +7,7 @@ use crate::crud::task_run::TaskRun;
 use crate::crud::task_run_attempt::TaskRunAttempt;
 use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStreams;
 use crate::shared::format;
-use crate::shared::job_run::{parse_job_run_status, stop_job_run, JobRunDetail, TaskRunAttemptLog};
+use crate::shared::job_run::{delete_job_run, deleted_occurrence, parse_job_run_status, select_job_run, stop_job_run, DeletedOccurrence, JobRunDetail, TaskRunAttemptLog};
 use crate::shared::wait::{ensure_data_dir_is_served, wait_for_job_run};
 use super::job::describe_unserved_data_dir;
 
@@ -276,68 +276,6 @@ impl JobRunStopCmd {
     }
 }
 
-/// Refuses anything but a `Scheduled` run, and says which status it found instead. The
-/// status is what separates a run nothing has touched from one already on its way to
-/// executing, and only the first can be removed without stranding work.
-///
-/// `delete_job_run` re-checks the status inside its own transaction, so the `false` here is
-/// the run having moved between the two - a `job-run delete` racing the releaser at the
-/// instant the run came due.
-async fn delete_scheduled_job_run(
-    crud: &CRUD,
-    conn: &mut sqlx::SqliteConnection,
-    job_run_id: i64,
-) -> anyhow::Result<()> {
-
-    let job_run = crud.select_job_run(&mut *conn, &SelectJobRunsData {
-        filter: SelectJobRunsDataFilter {
-            id: Some(job_run_id),
-            job_id: None,
-            status: None,
-            statuses: None,
-            schedule_id: None,
-            scheduled_at: None,
-        },
-        sort: None,
-        limit: Some(1),
-        offset: None,
-    }).await?;
-
-    let Some(job_run) = job_run else {
-        anyhow::bail!("Job run {} not found", job_run_id);
-    };
-
-    if job_run.status != JobRunStatus::Scheduled {
-
-        // A run already under way is the one case with somewhere else to go. A settled one
-        // cannot be stopped either, so naming `stop` there would only buy a second refusal.
-        let remedy = match job_run.status.is_finished() {
-            true => String::new(),
-            false => format!(
-                " `flowlite job-run stop {}` is what calls off one already under way.",
-                job_run_id,
-            ),
-        };
-
-        anyhow::bail!(
-            "Job run {} is {} and can no longer be deleted. Only a run still waiting for \
-             its time can be.{}",
-            job_run_id,
-            format::job_run_word(job_run.status),
-            remedy,
-        );
-    }
-
-    if !crud.delete_job_run(&mut *conn, job_run_id).await? {
-        anyhow::bail!(
-            "Job run {} came due while it was being deleted, and was left alone",
-            job_run_id,
-        );
-    }
-
-    Ok(())
-}
-
 impl JobRunDeleteCmd {
     /// Seeds no config, like `stop`: which runs exist and what status they hold is run
     /// history, and the schedule that writes the occurrence again reads its own YAML in the
@@ -348,20 +286,34 @@ impl JobRunDeleteCmd {
 
         let crud = CRUD::new(std::sync::Arc::new(toolkit));
 
-        delete_scheduled_job_run(&crud, &mut conn, self.job_run_id).await?;
+        let deleted = delete_job_run(&crud, &mut conn, self.job_run_id).await?;
+        let occurrence = deleted_occurrence(&deleted, crud.toolkit.get_current_ts());
 
         match json {
             true => println!("{}", serde_json::json!({
                 "job_run_id": self.job_run_id,
                 "deleted": true,
+                "occurrence_resubmitted": occurrence == DeletedOccurrence::Resubmitted,
             })),
             // Said in terms of the occurrence rather than the row: a scheduled run coming
-            // back on the next pass is the point of the command, not a surprise.
-            false => println!(
-                "Job run {} deleted. Its schedule will submit the occurrence again on its \
-                 next pass, under the job as the running server read it.",
-                self.job_run_id,
-            ),
+            // back on the next pass is the point of the command, and where it is not coming
+            // back the reader has to hear that here - after the delete there is nothing
+            // left to read it off.
+            false => println!("Job run {} deleted. {}", self.job_run_id, match occurrence {
+                DeletedOccurrence::Resubmitted =>
+                    "Its schedule will submit the occurrence again on its next pass, under \
+                     the job as the running server read it.".to_string(),
+                DeletedOccurrence::NotScheduled => format!(
+                    "It was submitted by hand rather than by a schedule, so nothing writes \
+                     it again: submit {} yourself when you want it back.",
+                    deleted.job_id,
+                ),
+                DeletedOccurrence::AlreadyPassed => format!(
+                    "Its instant ({}) has already gone by and the scheduler only fills \
+                     occurrences still ahead, so this one will not be written again.",
+                    format::timestamp(deleted.scheduled_at),
+                ),
+            }),
         }
 
         Ok(())
@@ -382,30 +334,25 @@ async fn rerun_job_run(
     job_run_id: i64,
 ) -> anyhow::Result<i64> {
 
-    let job_run = crud.select_job_run(&mut *conn, &SelectJobRunsData {
-        filter: SelectJobRunsDataFilter {
-            id: Some(job_run_id),
-            job_id: None,
-            status: None,
-            statuses: None,
-            schedule_id: None,
-            scheduled_at: None,
-        },
-        sort: None,
-        limit: Some(1),
-        offset: None,
-    }).await?;
-
-    let Some(job_run) = job_run else {
-        anyhow::bail!("Job run {} not found", job_run_id);
-    };
+    let job_run = select_job_run(crud, &mut *conn, job_run_id).await?;
 
     if !job_run.status.is_rerunnable() {
+
+        // Deleted is the only status that gets here, so this speaks about an occurrence -
+        // and only one a schedule still owes says so, for the reason the delete's own
+        // wording branches: an ad-hoc run nothing writes again would be promised a run that
+        // never comes.
+        let schedule_writes_it_again = match deleted_occurrence(&job_run, crud.toolkit.get_current_ts()) {
+            DeletedOccurrence::Resubmitted => "Its schedule submits the occurrence again on its next pass; ",
+            DeletedOccurrence::NotScheduled | DeletedOccurrence::AlreadyPassed => "",
+        };
+
         anyhow::bail!(
-            "Job run {} is {} and cannot be rerun. Its schedule submits the occurrence \
-             again on its next pass; `flowlite job submit {}` is what runs it now.",
+            "Job run {} is {} and cannot be rerun. {}`flowlite job submit {}` is what runs \
+             it now.",
             job_run_id,
             format::job_run_word(job_run.status),
+            schedule_writes_it_again,
             job_run.job_id,
         );
     }
@@ -557,64 +504,7 @@ fn print_task_run_attempt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crud::task_run::TaskRunStatus;
     use crate::test_support::TestDb;
-
-    #[tokio::test]
-    async fn a_scheduled_job_run_is_deleted() {
-
-        let db = TestDb::new().await;
-
-        let job_run = db.insert_job_run(JobRunStatus::Scheduled).await;
-
-        let mut conn = db.conn_pool.acquire().await.unwrap();
-        delete_scheduled_job_run(&db.crud, &mut conn, job_run.id).await.unwrap();
-
-        assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Deleted);
-    }
-
-    /// The guard the whole command rests on. A queued run is already the dispatcher's, and
-    /// the message has to send the user to `stop`, which is what deals with one under way.
-    #[tokio::test]
-    async fn a_run_that_has_left_scheduled_is_refused_and_told_to_stop_it_instead() {
-
-        let db = TestDb::new().await;
-
-        let job_run = db.insert_job_run(JobRunStatus::Queued).await;
-        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
-
-        let mut conn = db.conn_pool.acquire().await.unwrap();
-        let error = delete_scheduled_job_run(&db.crud, &mut conn, job_run.id)
-            .await
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains(&job_run.id.to_string()), "{error}");
-        assert!(error.contains("queued"), "{error}");
-        assert!(error.contains("stop"), "{error}");
-
-        assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Queued);
-        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Planned);
-    }
-
-    /// A run that has settled cannot be stopped either, so pointing at `stop` would send
-    /// the reader to a second refusal. Only a run still under way gets that suggestion.
-    #[tokio::test]
-    async fn a_run_that_has_already_settled_is_not_pointed_at_stop() {
-
-        let db = TestDb::new().await;
-
-        let job_run = db.insert_job_run(JobRunStatus::Succeeded).await;
-
-        let mut conn = db.conn_pool.acquire().await.unwrap();
-        let error = delete_scheduled_job_run(&db.crud, &mut conn, job_run.id)
-            .await
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("succeeded"), "{error}");
-        assert!(!error.contains("stop"), "a settled run cannot be stopped either: {error}");
-    }
 
     #[tokio::test]
     async fn a_job_run_is_rerun_from_its_own_rows() {
@@ -665,20 +555,5 @@ mod tests {
         let new_id = rerun_job_run(&db.crud, &mut conn, job_run.id).await.unwrap();
 
         assert_ne!(new_id, job_run.id);
-    }
-
-    #[tokio::test]
-    async fn deleting_a_job_run_that_is_not_there_says_so() {
-
-        let db = TestDb::new().await;
-
-        let mut conn = db.conn_pool.acquire().await.unwrap();
-        let error = delete_scheduled_job_run(&db.crud, &mut conn, 404)
-            .await
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("404"), "{error}");
-        assert!(error.contains("not found"), "{error}");
     }
 }

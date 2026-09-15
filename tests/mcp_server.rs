@@ -239,7 +239,7 @@ fn initialize_names_the_server_and_its_version() {
 /// cut, is this cut's own: `stop_job_run` alongside the other five, and nothing else,
 /// named by `tools/list` - the full set the design promises.
 #[test]
-fn the_handshake_declares_tools_and_lists_the_nine_tools() {
+fn the_handshake_declares_tools_and_lists_the_ten_tools() {
     let dir = data_dir("tools");
     let mut client = McpClient::start(&dir);
 
@@ -264,6 +264,7 @@ fn the_handshake_declares_tools_and_lists_the_nine_tools() {
     assert_eq!(
         names,
         vec![
+            "delete_job_run",
             "get_job_run",
             "get_job_run_logs",
             "get_serve_status",
@@ -491,6 +492,79 @@ fn submitting_with_a_future_schedule_at_returns_a_scheduled_run() {
     let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
     assert_eq!(job_run["status"], json!("scheduled"), "{job_run}");
     assert_eq!(job_run["started_at"], Value::Null, "{job_run}");
+}
+
+/// `delete_job_run`'s own half of that: a run written for an instant nobody has reached is
+/// removable, and comes back tombstoned so the caller reads the outcome off `.status`.
+#[test]
+fn deleting_a_scheduled_run_returns_it_deleted() {
+    let dir = data_dir("delete-scheduled");
+    install_job(&dir, "hello.yaml", HELLO);
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let submitted = client.call_tool("submit_job", json!({
+        "job": "hello",
+        "schedule_at": "2099-01-01T00:00:00Z",
+    }));
+    let job_run_id = serde_json::from_str::<Value>(tool_text(&submitted)).unwrap()["id"].as_i64().unwrap();
+
+    let result = client.call_tool("delete_job_run", json!({ "job_run_id": job_run_id }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let job_run: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    assert_eq!(job_run["id"], json!(job_run_id), "{job_run}");
+    assert_eq!(job_run["status"], json!("deleted"), "{job_run}");
+}
+
+/// The warning the tool exists to carry. An agent deletes an outstanding run to have the
+/// occurrence written again under an edited definition - and a run it submitted itself
+/// carries no schedule, so nothing writes anything again and the result has to say so
+/// rather than leave the agent waiting for a run that never comes.
+#[test]
+fn deleting_an_ad_hoc_run_warns_that_nothing_writes_it_again() {
+    let dir = data_dir("delete-ad-hoc");
+    install_job(&dir, "hello.yaml", HELLO);
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let submitted = client.call_tool("submit_job", json!({
+        "job": "hello",
+        "schedule_at": "2099-01-01T00:00:00Z",
+    }));
+    let job_run_id = serde_json::from_str::<Value>(tool_text(&submitted)).unwrap()["id"].as_i64().unwrap();
+
+    let result = client.call_tool("delete_job_run", json!({ "job_run_id": job_run_id }));
+
+    let warning = result["content"][1]["text"].as_str().unwrap_or_default();
+    assert!(warning.contains("submitted by hand"), "{result}");
+    assert!(warning.contains("submit_job"), "{result}");
+}
+
+/// A run already on its way to executing is refused rather than half-removed, and the
+/// refusal names the status it found and the stop, which is what deals with one under way.
+#[test]
+fn deleting_a_run_that_has_left_scheduled_is_refused() {
+    let dir = data_dir("delete-refused");
+    install_job(&dir, "hello.yaml", HELLO);
+
+    let mut server = ServerGuard::new(serve(&dir, 18239), libc::SIGTERM);
+    assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let submitted = client.call_tool("submit_job", json!({ "job": "hello", "wait_seconds": 30 }));
+    let job_run_id = serde_json::from_str::<Value>(tool_text(&submitted)).unwrap()["id"].as_i64().unwrap();
+
+    let result = client.call_tool("delete_job_run", json!({ "job_run_id": job_run_id }));
+
+    assert_eq!(result["isError"], json!(true), "{result}");
+    assert!(tool_text(&result).contains("no longer be deleted"), "{result}");
+
+    server.stop();
 }
 
 /// Both waits poll for a finished status, so this combination could only spend its whole

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
@@ -98,6 +99,74 @@ pub(crate) async fn stop_job_run(
     Ok(())
 }
 
+/// Removes a run that has not run yet and hands back the tombstoned row, so a caller reads
+/// the run's new status off the result rather than taking the delete on trust.
+///
+/// Refuses anything but a `Scheduled` run, naming the status it found instead: that status
+/// is what separates a run nothing has touched from one already on its way to executing,
+/// and only the first can be removed without stranding work. `CRUD::delete_job_run`
+/// re-checks it inside its own transaction, so the `false` below is the run having come due
+/// between the two reads - a delete racing `JobRunReleaser`.
+pub(crate) async fn delete_job_run(
+    crud: &CRUD,
+    conn: &mut sqlx::SqliteConnection,
+    job_run_id: i64,
+) -> anyhow::Result<JobRun> {
+
+    let job_run = select_job_run(crud, &mut *conn, job_run_id).await?;
+
+    if job_run.status != JobRunStatus::Scheduled {
+
+        // A run already under way is the one case with somewhere else to go. A settled one
+        // cannot be stopped either, so naming the stop there would only buy a second
+        // refusal. Said without naming a command or a tool: both frontends raise this text
+        // and each has its own spelling of the stop.
+        let remedy = match job_run.status.is_finished() {
+            true => String::new(),
+            false => " One already under way has to be stopped instead.".to_string(),
+        };
+
+        anyhow::bail!(
+            "Job run {} is {} and can no longer be deleted. Only a run still waiting for \
+             its time can be.{}",
+            job_run_id,
+            format::job_run_word(job_run.status),
+            remedy,
+        );
+    }
+
+    if !crud.delete_job_run(&mut *conn, job_run_id).await? {
+        anyhow::bail!(
+            "Job run {} came due while it was being deleted, and was left alone",
+            job_run_id,
+        );
+    }
+
+    select_job_run(crud, &mut *conn, job_run_id).await
+}
+
+/// What becomes of the occurrence a deleted run was holding. The Scheduler fills one again
+/// only if both halves hold, and only the first is obvious: the run has to belong to a
+/// schedule, and its instant has to be still ahead of the clock - `get_next_runs(Some(now),
+/// submit_ahead)` derives occurrences forward from now and never looks behind it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DeletedOccurrence {
+    /// A schedule owns it and it is still ahead: the next pass writes it again.
+    Resubmitted,
+    /// Submitted by hand, so no schedule has an occurrence to fill.
+    NotScheduled,
+    /// Its instant has gone by, and the Scheduler only ever looks forward.
+    AlreadyPassed,
+}
+
+pub(crate) fn deleted_occurrence(job_run: &JobRun, now: DateTime<Utc>) -> DeletedOccurrence {
+    match (job_run.schedule_id.is_some(), job_run.scheduled_at > now) {
+        (false, _) => DeletedOccurrence::NotScheduled,
+        (true, false) => DeletedOccurrence::AlreadyPassed,
+        (true, true) => DeletedOccurrence::Resubmitted,
+    }
+}
+
 /// The words a run's status is stored and filtered by, so `job-run list --status` and the
 /// MCP `list_job_runs` tool accept exactly what the UI's own filter does.
 ///
@@ -128,6 +197,7 @@ mod tests {
     use super::*;
     use crate::crud::job_run::{UpdateJobRunsData, UpdateJobRunsDataFilter, UpdateJobRunsDataInput};
     use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
+    use crate::crud::task_run::TaskRunStatus;
     use crate::shared::wait::wait_for_job_run;
     use crate::test_support::TestDb;
 
@@ -253,6 +323,131 @@ mod tests {
 
         assert_eq!(settled.status, JobRunStatus::Aborted);
         assert!(job_run_stop(&db, job_run.id).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_scheduled_job_run_is_deleted_and_comes_back_tombstoned() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Scheduled).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let deleted = delete_job_run(&db.crud, &mut conn, job_run.id).await.unwrap();
+
+        assert_eq!(deleted.status, JobRunStatus::Deleted);
+        assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Deleted);
+    }
+
+    /// The guard the whole delete rests on. A queued run is already the dispatcher's, and
+    /// the message has to send the caller to the stop, which is what deals with one under
+    /// way.
+    #[tokio::test]
+    async fn a_run_that_has_left_scheduled_is_refused_and_told_to_stop_it_instead() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Queued).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Planned).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let error = delete_job_run(&db.crud, &mut conn, job_run.id)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains(&job_run.id.to_string()), "{error}");
+        assert!(error.contains("queued"), "{error}");
+        assert!(error.contains("stopped"), "{error}");
+
+        assert_eq!(db.job_run(job_run.id).await.status, JobRunStatus::Queued);
+        assert_eq!(db.task_run(task_run.id).await.status, TaskRunStatus::Planned);
+    }
+
+    /// A run that has settled cannot be stopped either, so pointing at the stop would send
+    /// the reader to a second refusal. Only a run still under way gets that suggestion.
+    #[tokio::test]
+    async fn a_run_that_has_already_settled_is_not_pointed_at_the_stop() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Succeeded).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let error = delete_job_run(&db.crud, &mut conn, job_run.id)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("succeeded"), "{error}");
+        assert!(!error.contains("stopped"), "a settled run cannot be stopped either: {error}");
+    }
+
+    #[tokio::test]
+    async fn deleting_a_job_run_that_is_not_there_says_so() {
+
+        let db = TestDb::new().await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let error = delete_job_run(&db.crud, &mut conn, 404)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("404"), "{error}");
+        assert!(error.contains("not found"), "{error}");
+    }
+
+    /// The promise the delete is allowed to make: a schedule owns the occurrence and it is
+    /// still ahead, so the next pass writes it again.
+    #[tokio::test]
+    async fn a_scheduled_occurrence_still_ahead_is_written_again() {
+
+        let db = TestDb::new().await;
+        let now = Utc::now();
+
+        let job_run = db.insert_job_run_at(
+            JobRunStatus::Scheduled,
+            now + chrono::TimeDelta::hours(1),
+            Some("nightly"),
+        ).await;
+
+        assert_eq!(deleted_occurrence(&job_run, now), DeletedOccurrence::Resubmitted);
+    }
+
+    /// A run submitted by hand carries no schedule_id, so there is no occurrence for any
+    /// schedule to fill - the case a delete used to promise a resubmission for anyway.
+    #[tokio::test]
+    async fn an_ad_hoc_run_leaves_no_occurrence_behind() {
+
+        let db = TestDb::new().await;
+        let now = Utc::now();
+
+        let job_run = db.insert_job_run_at(
+            JobRunStatus::Scheduled,
+            now + chrono::TimeDelta::hours(1),
+            None,
+        ).await;
+
+        assert_eq!(deleted_occurrence(&job_run, now), DeletedOccurrence::NotScheduled);
+    }
+
+    /// The Scheduler derives its occurrences forward from now, so an instant already gone by
+    /// is never submitted again however the run holding it ended - which is reachable, since
+    /// a run stays Scheduled until the releaser's next pass picks it up.
+    #[tokio::test]
+    async fn an_occurrence_whose_instant_has_passed_is_not_written_again() {
+
+        let db = TestDb::new().await;
+        let now = Utc::now();
+
+        let job_run = db.insert_job_run_at(
+            JobRunStatus::Scheduled,
+            now - chrono::TimeDelta::seconds(1),
+            Some("nightly"),
+        ).await;
+
+        assert_eq!(deleted_occurrence(&job_run, now), DeletedOccurrence::AlreadyPassed);
     }
 
     async fn job_run_stop(db: &TestDb, job_run_id: i64) -> Option<crate::crud::job_run_stop::JobRunStop> {

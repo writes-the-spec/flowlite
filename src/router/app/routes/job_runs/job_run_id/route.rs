@@ -12,6 +12,7 @@ use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput}
 use crate::crud::task_run::{TaskRun, SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRunStatus};
 use crate::router::app::app_state::AppState;
 use crate::shared::format;
+use crate::shared::job_run::{deleted_occurrence, DeletedOccurrence};
 
 pub struct JobRunDisplay {
     pub id: i64,
@@ -60,6 +61,9 @@ struct JobRunIdRouteTemplate {
     polling: bool,
     refresh_seconds: u32,
     deletable: bool,
+    /// The second sentence of the delete dialog: what becomes of the occurrence, which is
+    /// the whole reason to reach for Delete rather than Skip.
+    delete_note: &'static str,
     skippable: bool,
     stoppable: bool,
     rerunnable: bool,
@@ -207,6 +211,7 @@ pub async fn job_run_id_route(
     }).await.unwrap_or_default();
 
     let controls = job_run_controls(job_run.status);
+    let delete_note = delete_note(deleted_occurrence(&job_run, now));
 
     let template = JobRunIdRouteTemplate {
         current_route: "home",
@@ -234,6 +239,7 @@ pub async fn job_run_id_route(
         polling: matches!(job_run.status, JobRunStatus::Scheduled | JobRunStatus::Queued | JobRunStatus::Running),
         refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
         deletable: controls.deletable,
+        delete_note,
         skippable: controls.skippable,
         stoppable: controls.stoppable,
         rerunnable: controls.rerunnable,
@@ -373,6 +379,20 @@ pub async fn stop_job_run_route(
     }
 }
 
+/// What the delete dialog promises about the occurrence. Only a run a schedule owns, whose
+/// instant is still ahead, is written again - so only that run may be offered it, or the
+/// dialog talks a user into a delete on the strength of a run that never comes back.
+fn delete_note(occurrence: DeletedOccurrence) -> &'static str {
+    match occurrence {
+        DeletedOccurrence::Resubmitted =>
+            "Its schedule submits the occurrence again on its next pass, under the job as it now stands.",
+        DeletedOccurrence::NotScheduled =>
+            "It was submitted by hand rather than by a schedule, so nothing writes it again.",
+        DeletedOccurrence::AlreadyPassed =>
+            "Its instant has already gone by, and the scheduler only fills occurrences still ahead, so it will not be written again.",
+    }
+}
+
 /// Which of the four buttons a run's status offers. One function, because "may this be
 /// stopped?" and "may this be deleted?" are the same question asked at two ends of a run's
 /// life, and answering them in separate places is how a run comes to offer both.
@@ -405,6 +425,16 @@ fn job_run_controls(status: JobRunStatus) -> JobRunControls {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dialog may promise a resubmission only where there is one to promise: an ad-hoc
+    /// run carries no schedule, and a run whose instant has gone by is behind the point the
+    /// Scheduler derives occurrences from.
+    #[test]
+    fn the_delete_dialog_promises_a_resubmission_only_where_one_follows() {
+        assert!(delete_note(DeletedOccurrence::Resubmitted).contains("submits the occurrence again"));
+        assert!(delete_note(DeletedOccurrence::NotScheduled).contains("nothing writes it again"));
+        assert!(delete_note(DeletedOccurrence::AlreadyPassed).contains("not be written again"));
+    }
 
     /// A scheduled run has no process and no output, and deleting it hands its occurrence
     /// back to the schedule — the one status where that is true.

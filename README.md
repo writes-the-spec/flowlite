@@ -167,7 +167,14 @@ flowlite job-run delete 42
 The next scheduler pass finds no run standing for that occurrence and submits it again,
 carrying the job as the restarted server now reads it. Only a run still `scheduled` can be
 deleted — one already queued or running is the dispatcher's, and `job-run stop` is what
-calls that off. The run page on the dashboard offers the same three, one per stage of a
+calls that off.
+
+Two things have to hold for the occurrence to come back, and the command says which way it
+went. The run has to belong to a schedule: one submitted by hand with `job submit
+--schedule-at` carries no schedule, so deleting it frees nothing and submitting it again is
+yours to do. And its instant has to be still ahead, because the scheduler derives
+occurrences forward from now — a run deleted in the last seconds before its own time is not
+written back either. The run page on the dashboard offers the same three, one per stage of a
 run's life: **Delete** while it is scheduled, **Stop run** once it is queued or running,
 and **Rerun** once it has finished.
 
@@ -848,7 +855,7 @@ No port, no HTTP and nothing to start first: the client spawns the binary, talks
 over its stdio, and the process exits when the client closes stdin. The `init` line is
 optional, since an agent handed an empty directory can call `init_data_dir` itself.
 
-Nine tools, each a projection of a command that already exists:
+Ten tools, each a projection of a command that already exists:
 
 | Tool | Answers |
 |---|---|
@@ -859,6 +866,7 @@ Nine tools, each a projection of a command that already exists:
 | `get_job_run` | What happened to run 42, task by task? |
 | `get_job_run_logs` | What did each attempt write to stdout and stderr? |
 | `stop_job_run` | Stop run 42, and tell me what it settled to. |
+| `delete_job_run` | Remove run 42 before it is due, so its schedule writes it again. |
 | `get_serve_status` | Is anything actually serving this directory? |
 | `list_limits` | What is a run waiting behind? |
 
@@ -875,6 +883,11 @@ way, 20 runs by default and 200 at most.
 `{"job_run_id": 42, "stop_requested": true}` unless you passed `--wait`. One shape either
 way means an agent reads `.status` off the result instead of branching on which argument it
 sent.
+
+`delete_job_run` is the other half of the stop, and the two differ in what they leave
+behind: a stop says the occurrence is never to run, a delete hands it back to the schedule.
+It returns the deleted run, with a second block saying so wherever nothing will write the
+occurrence again — an ad-hoc run, or one whose instant has gone by.
 
 `get_serve_status` and `list_limits` are the pair an agent reaches for when a run does not
 progress: the first says whether anything is serving the directory at all, the second what
