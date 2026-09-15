@@ -178,7 +178,7 @@ mod tests {
     /// which is what makes a scheduled run and a --schedule-at run the same object, and gives
     /// the pipeline exactly one door into queued.
     #[tokio::test]
-    async fn a_submitted_run_starts_as_scheduled_and_keeps_its_due_time() {
+    async fn a_new_run_starts_as_scheduled_and_keeps_its_due_time() {
 
         // `new_with_migrated_mem`, not `new`: `submit_job` reads the job's config out of
         // `mem.job`, and `mem` is one shared-cache name for the whole test binary - seeding

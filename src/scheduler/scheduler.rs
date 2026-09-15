@@ -296,7 +296,7 @@ mod tests {
 
     /// Once the releaser has taken an occurrence, the desired set has moved on by one and
     /// the next pass submits the new tail - which is the whole of "keep submit_ahead
-    /// occurrences submitted", with no advancing cursor.
+    /// occurrences scheduled", with no advancing cursor.
     #[tokio::test]
     async fn a_released_occurrence_is_topped_up_on_the_next_pass() {
 
@@ -333,16 +333,16 @@ mod tests {
 
         db.scheduler().handle(&schedule).await.unwrap();
 
-        let submitted = outstanding(&db, "nightly").await;
-        assert_eq!(submitted.len(), 1);
-        let occurrence = submitted[0].scheduled_at;
+        let scheduled = outstanding(&db, "nightly").await;
+        assert_eq!(scheduled.len(), 1);
+        let occurrence = scheduled[0].scheduled_at;
 
         // The stop path, run through the real releaser: a stopped run is skipped however
         // far off its instant is.
-        db.insert_job_run_stop(submitted[0].id).await;
-        db.job_run_releaser().handle(&submitted[0]).await.unwrap();
+        db.insert_job_run_stop(scheduled[0].id).await;
+        db.job_run_releaser().handle(&scheduled[0]).await.unwrap();
 
-        assert_eq!(db.job_run(submitted[0].id).await.status, JobRunStatus::Skipped);
+        assert_eq!(db.job_run(scheduled[0].id).await.status, JobRunStatus::Skipped);
 
         db.scheduler().handle(&schedule).await.unwrap();
 
@@ -365,12 +365,12 @@ mod tests {
 
         db.scheduler().handle(&schedule).await.unwrap();
 
-        let submitted = outstanding(&db, "nightly").await;
-        assert_eq!(submitted.len(), 1);
-        let occurrence = submitted[0].scheduled_at;
+        let scheduled = outstanding(&db, "nightly").await;
+        assert_eq!(scheduled.len(), 1);
+        let occurrence = scheduled[0].scheduled_at;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
-        assert!(db.crud.delete_job_run(&mut conn, submitted[0].id).await.unwrap());
+        assert!(db.crud.delete_job_run(&mut conn, scheduled[0].id).await.unwrap());
 
         db.scheduler().handle(&schedule).await.unwrap();
 

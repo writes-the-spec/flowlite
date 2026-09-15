@@ -223,7 +223,7 @@ impl TestDb {
     }
 
     /// The same schedule, retired on the given day — for the case where the cron runs out
-    /// of occurrences and there is nothing left to keep submitted.
+    /// of occurrences and there is nothing left to keep scheduled.
     pub async fn seed_schedule_ending(&self, schedule_id: &str, cron: &str, submit_ahead: u32, end_date: NaiveDate) -> Schedule {
         self.seed_schedule_with(schedule_id, cron, submit_ahead, false, Some(end_date), &["job"]).await
     }

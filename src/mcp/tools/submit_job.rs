@@ -55,7 +55,7 @@ pub struct SubmitJob {
     /// combined with wait_seconds.
     pub schedule_at: Option<String>,
     /// Wait up to this many seconds for the run to finish before returning it. Absent or 0
-    /// returns the submitted run at once. A value above 300 waits 300. If the wait runs out
+    /// returns the run at once, still `scheduled`. A value above 300 waits 300. If the wait runs out
     /// the run comes back unfinished rather than as an error.
     pub wait_seconds: Option<u64>,
 }
