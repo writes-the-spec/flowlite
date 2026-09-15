@@ -436,7 +436,7 @@ mod tests {
     }
 
     /// This reconcile only ever adds. A run the schedule has stopped asking for - here
-    /// because submit_ahead came back down - stays submitted and will be released and
+    /// because submit_ahead came back down - stays `Scheduled` and will be released and
     /// executed like any other.
     #[tokio::test]
     async fn lowering_submit_ahead_leaves_the_runs_already_submitted() {

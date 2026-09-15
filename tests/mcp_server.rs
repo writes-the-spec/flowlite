@@ -475,7 +475,7 @@ fn submitting_an_inline_yaml_definition_succeeds() {
 /// The tool's half of --schedule-at: the run comes back written but not started, which is
 /// the whole difference between "queued" and "not due".
 #[test]
-fn submitting_with_a_future_schedule_at_returns_a_submitted_run() {
+fn submitting_with_a_future_schedule_at_returns_a_scheduled_run() {
     let dir = data_dir("submit-schedule-at");
     install_job(&dir, "hello.yaml", HELLO);
 
@@ -635,7 +635,7 @@ fn a_param_the_job_does_not_declare_is_refused() {
 }
 
 /// Submitting work for a server that is not up yet is legitimate, but an agent that got back
-/// `submitted` with no warning would poll a run that cannot start - so the JSON is followed
+/// `scheduled` with no warning would poll a run that cannot start - so the JSON is followed
 /// by a second content block naming the directory, and only while nothing is serving it.
 ///
 /// A warned result carries no `structuredContent` at all: a client that surfaces that field
@@ -931,7 +931,7 @@ fn stop_job_run_with_wait_seconds_on_an_unserved_directory_writes_no_stop() {
 }
 
 /// `stop_job_run` warns for the same reason `submit_job` does: without a wait the run comes
-/// back `submitted`, `queued` or `running`, and against a directory nothing is serving that
+/// back `scheduled`, `queued` or `running`, and against a directory nothing is serving that
 /// status will never change, because only the serve process reads the stop row. `.status` is
 /// what this tool points a caller at, so silence here was a misleading answer, not a missing
 /// one.
@@ -1052,7 +1052,7 @@ fn init_data_dir_refuses_an_argument_naming_another_directory() {
     assert_eq!(result["isError"], json!(true), "{result}");
 }
 
-/// The question an agent has to be able to ask after a submit comes back `submitted`: is
+/// The question an agent has to be able to ask after a submit comes back `scheduled`: is
 /// anything actually going to run this? `submit_job`'s warning says so once, at the moment
 /// of writing; this is how the agent checks for itself afterwards.
 #[test]

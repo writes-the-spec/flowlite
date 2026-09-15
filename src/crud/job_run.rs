@@ -477,7 +477,7 @@ mod tests {
     /// Nothing has started, and something still will: a submitted run is the one status
     /// that is waiting on the clock rather than on a slot or on a process.
     #[test]
-    fn a_submitted_run_is_not_finished() {
+    fn a_scheduled_run_is_not_finished() {
         assert!(!JobRunStatus::Scheduled.is_finished());
     }
 
@@ -485,12 +485,12 @@ mod tests {
     /// `ALL` rather than each keeping a list, so a status missing from it is a status one
     /// surface can name and another cannot.
     #[test]
-    fn submitted_is_one_of_the_statuses_a_caller_can_name() {
+    fn scheduled_is_one_of_the_statuses_a_caller_can_name() {
         assert!(JobRunStatus::ALL.contains(&JobRunStatus::Scheduled));
     }
 
     #[test]
-    fn a_submitted_run_is_spelled_the_way_it_is_stored() {
+    fn a_scheduled_run_is_spelled_the_way_it_is_stored() {
         assert_eq!(JobRunStatus::Scheduled.to_string(), "scheduled");
     }
 
@@ -794,11 +794,11 @@ mod tests {
         assert_eq!(runs[0].id, nightly.id);
     }
 
-    /// The guard that keeps the Scheduler's reconcile from ever deleting something that ran.
+    /// The guard that keeps a status-filtered delete from ever reaching something that ran.
     /// It is asserted in SQL rather than in the caller because the caller's view of the row
     /// can be one poll pass out of date: JobRunReleaser may have promoted it in between.
     #[tokio::test]
-    async fn a_guarded_delete_cannot_reach_a_run_that_is_no_longer_submitted() {
+    async fn a_guarded_delete_cannot_reach_a_run_that_is_no_longer_scheduled() {
 
         let db = TestDb::new().await;
 
@@ -830,6 +830,6 @@ mod tests {
             offset: None,
         }).await.unwrap();
 
-        assert!(still_there.is_some(), "a run that is no longer submitted must survive the reconcile's delete");
+        assert!(still_there.is_some(), "a run that is no longer scheduled must survive a delete filtered on Scheduled");
     }
 }

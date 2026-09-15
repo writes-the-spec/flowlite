@@ -37,7 +37,7 @@ impl JobRunReleaser {
     /// Settles a submitted run as whatever `derive_next_status` decides. Decision and write
     /// are split on purpose: deriving only reads, and each `set_to_*` just trusts the result
     /// rather than re-deriving any part of it.
-    async fn handle_submitted_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
+    async fn handle_scheduled_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         match self.derive_next_status(job_run).await {
             Ok(JobRunStatus::Skipped) => self.set_to_skipped(job_run).await,
@@ -47,7 +47,7 @@ impl JobRunReleaser {
         }
     }
 
-    /// Derives a submitted run's next status without writing anything: skipped if stopped,
+    /// Derives a scheduled run's next status without writing anything: skipped if stopped,
     /// queued if due, else left submitted.
     async fn derive_next_status(&self, job_run: &JobRun) -> anyhow::Result<JobRunStatus> {
 
@@ -122,7 +122,7 @@ impl JobRunReleaser {
 
     /// Every submitted run, not only the due ones — a stopped run whose time has not come
     /// still needs settling.
-    async fn get_submitted_job_runs(&self) -> anyhow::Result<Vec<JobRun>> {
+    async fn get_scheduled_job_runs(&self) -> anyhow::Result<Vec<JobRun>> {
 
         self.crud.select_job_runs(
             &*self.conn_pool,
@@ -175,11 +175,11 @@ impl Service for JobRunReleaser {
     }
 
     async fn select(&self) -> anyhow::Result<Vec<JobRun>> {
-        self.get_submitted_job_runs().await
+        self.get_scheduled_job_runs().await
     }
 
     async fn handle(&self, job_run: &JobRun) -> anyhow::Result<()> {
-        self.handle_submitted_job_run(job_run).await
+        self.handle_scheduled_job_run(job_run).await
     }
 }
 
