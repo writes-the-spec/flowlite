@@ -330,10 +330,11 @@ pub async fn stop_job_run_route(
         }
     };
 
-    // A settled run's stop row would never be read, so none is written. The button only
-    // renders while a run is running, so arriving here means a page that has gone stale -
-    // which is not an error worth a dead end, and the run page the redirect lands on
-    // already says what actually happened.
+    // A settled run's stop row would never be read, so none is written. Every button that
+    // reaches this route - the stop on a queued or running run, the skip in the delete
+    // dialog on a scheduled one - renders only on a run that is still going, so arriving
+    // here means a page that has gone stale; not an error worth a dead end, and the run
+    // page the redirect lands on already says what actually happened.
     if job_run.status.is_finished() {
         return Redirect::to(&format!("/job-runs/{}", job_run_id)).into_response();
     }

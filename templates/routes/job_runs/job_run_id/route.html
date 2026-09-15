@@ -203,11 +203,16 @@
     {% if deletable %}
     <dialog id="delete_run">
         <h2 class="dialog__title">Delete run {{ job_run.id }}?</h2>
-        <p class="dialog__body">Nothing of it has run yet. The run is kept as a record, marked deleted, and its schedule submits the occurrence again on its next pass — under the job as the running server read it. To call the occurrence off for good, stop it once it is queued instead.</p>
+        <p class="dialog__body">Nothing of it has run yet. Deleting keeps the run as a record and hands the occurrence back to its schedule, which submits it again under the job as it now stands. Skipping calls the occurrence off for good.</p>
 
         <div class="dialog__actions">
             <form method="dialog">
                 <button class="btn btn--quiet">Keep it</button>
+            </form>
+            {# A stop on a still-scheduled run is what skips it: JobRunReleaser reads the stop
+               row before it reads the clock, so the occurrence never comes due. #}
+            <form action="/job-runs/{{ job_run.id }}/stop" method="POST">
+                <button type="submit" class="btn">Skip run</button>
             </form>
             <form action="/job-runs/{{ job_run.id }}/delete" method="POST">
                 <button type="submit" class="btn btn--danger">Delete run</button>
