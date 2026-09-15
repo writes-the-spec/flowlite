@@ -30,9 +30,6 @@ cargo install --git https://github.com/writes-the-spec/flowlite
 
 Or clone and `cargo build --release`, which leaves the binary at `target/release/flowlite`.
 
-Then `flowlite init` lays out a data directory to work in, with an example job and an
-example schedule already in it — that is what [Quick start](#quick-start) picks up from.
-
 ## Quick start
 
 Lay out a data directory with an example job and an example schedule in it:
@@ -43,8 +40,9 @@ flowlite init
 
 That writes `jobs/hello.yaml` (`.yml` works too), `schedules/daily-hello.yaml` and a
 `config.toml` that is entirely comments — a map of what can be set and what each key
-defaults to, so the directory behaves exactly as one with no `config.toml` at all. The job
-it leaves behind:
+defaults to, so the directory behaves exactly as one with no `config.toml` at all. `init`
+never overwrites: a file already there is kept and reported as kept. The job it leaves
+behind:
 
 ```yaml
 id: hello-world
@@ -55,11 +53,12 @@ tasks:
     command: echo "hello from flowlite"
 ```
 
-Start the server — the scheduler, the orchestrator and the UI — from the directory `jobs/`
-sits in:
+Start the server — the scheduler, the orchestrator and the UI — then submit the job:
 
 ```bash
 flowlite serve
+flowlite job submit hello-world
+flowlite job list
 ```
 
 flowlite reads `jobs/`, `schedules/` and an optional `config.toml` from its data directory,
@@ -71,16 +70,6 @@ command, so the directory need not exist yet:
 flowlite --data-dir /var/lib/flowlite init
 flowlite --data-dir /var/lib/flowlite serve
 ```
-
-Submit the job and check on it:
-
-```bash
-flowlite job submit hello-world
-flowlite job list
-```
-
-`init` never overwrites: a file already there is kept and reported as kept, so it is safe
-to re-run in a directory you have been working in.
 
 ## Jobs
 
@@ -106,14 +95,15 @@ tasks:
     command: make deploy
 ```
 
-`test` only runs if `build` succeeds; `deploy` only runs if `test` succeeds, and everything
-downstream of a task that did not succeed is skipped.
+A task runs only if everything it depends on succeeded; everything downstream of a task
+that did not succeed is skipped.
 
 A job's remaining keys have sections of their own: `parameters`, `env`, `secret_env` and
 `working_dir` under [Command inputs](#command-inputs), `timeout`, `max_retries` and
 `retry_delay` under [Timeouts and retries](#timeouts-and-retries), `on_failure` and
-`on_success` under [Run notifications](#run-notifications), and `max_parallel_runs` under
-[Overlapping runs](#overlapping-runs).
+`on_success` under [Run notifications](#run-notifications), `max_parallel_runs` under
+[Overlapping runs](#overlapping-runs), `limits` under
+[Concurrency limits](#concurrency-limits) and `keep_runs` under [Retention](#retention).
 
 ## Schedules
 
@@ -140,27 +130,26 @@ jobs:
 
 One schedule may fire several jobs; each entry names a job id and may override that job's
 parameters, and a job id may appear only once. `timezone` left out falls back to
-`[schedule_defaults]`, and a disabled schedule is skipped rather than fired and discarded.
+`[schedule_defaults]`.
 
-`submit_ahead` is how many upcoming occurrences are written as runs before they are due —
-one by default, so the next run of every schedule is visible in `job-run list` and on the
-dashboard ahead of time. A larger number shows more of the future, at the cost of that many
-standing rows per schedule. Runs written ahead sit in the `submitted` status and start
-running at their own instant; taking a schedule's YAML away, disabling it or editing its
-cron takes the outstanding ones back.
+`submit_ahead` writes upcoming occurrences as runs before they are due, so the next run of
+every schedule is visible in `job-run list` and on the dashboard ahead of time. A larger
+number shows more of the future, at the cost of that many standing rows per schedule. Runs
+written ahead sit in the `submitted` status and start at their own instant; taking a
+schedule's YAML away, disabling it or editing its cron takes the outstanding ones back.
+
+### When an edit takes effect
 
 A run **snapshots the job as it stands when the run is written**, not as it stands when it
 starts. With `submit_ahead: 1` and a 03:00 cron, tonight's run was written just after 03:00
-yesterday, so editing that job's YAML this morning does not change it. A running server makes
-this worse, not better: the YAML is read once, at startup, into an in-memory schema with no
-watcher and nothing that reloads it, so every run a server submits carries the file as it
-stood when *that server* started, however long ago that was — not the file on disk now. An
-edit takes effect only once the server has been restarted, and even then only for runs whose
-occurrence changes as a result: the reconcile replaces an outstanding run whose occurrence the
-schedule no longer wants, but a run whose occurrence is unchanged keeps the definition it was
-already submitted with. There is no user-facing way to delete a run to force this sooner — no
-CLI command, MCP tool or dashboard action does it; restarting the server is what makes an edit
-current.
+yesterday, so editing that job's YAML this morning does not change it. The YAML is also read
+once, at startup, with no watcher, so every run a server submits carries the file as it
+stood when *that server* started.
+
+An edit therefore takes effect once the server has been restarted, and then only for runs
+whose occurrence changes as a result: the reconcile replaces an outstanding run the schedule
+no longer wants, while a run whose occurrence is unchanged keeps the definition it was
+submitted with. Nothing user-facing deletes a run to force this sooner.
 
 ## Command inputs
 
@@ -188,10 +177,8 @@ tasks:
 ```
 
 A job's `env:` applies to every one of its tasks, and a task's own wins any name both set —
-a task cannot opt out of the job's block, only override a name in it. The two are merged at
-submit time, so a task run records the environment it will actually run with and a rerun
-replays exactly that. `working_dir` left empty, the default, inherits flowlite's own
-working directory.
+a task cannot opt out of the job's block, only override a name in it. `working_dir` left
+empty, the default, inherits flowlite's own working directory.
 
 A declared parameter reaches the command **prefixed and upper-cased**: `region` becomes
 `FLOWLITE_PARAM_REGION`. The prefix is what stops a parameter named `path` or `home` from
@@ -205,8 +192,7 @@ flowlite job submit daily-etl --param region=eu-west-1
 
 `--param name=value` can be repeated, splitting on the first `=` so a value may contain
 one, and a later repeat of the same name wins. Naming a parameter the job doesn't declare
-is refused, naming the job, the bad key and the declared names — a typo should fail loudly
-rather than deliver nothing to the command.
+is refused, naming the job, the bad key and the declared names.
 
 ### Precedence
 
@@ -221,18 +207,14 @@ Where a name collides, later wins, applied in this order:
 
 Steps 2 and 3 are merged once, at submit time, onto `task_run.env` (`secret_env:` the same
 way, onto `task_run.secret_env`); step 4 resolves those references into values, and steps 5
-and 6 are composed at spawn. A plain `env:` value can therefore never shadow a credential —
-a secret is layered in after both `env:` blocks — and because a name can never appear in
-both blocks at the same level (see [Secrets](#secrets)), this is never a tie-break between
-`env:` and `secret_env:`, only a sequence: a job's default in one block and a task's
-override in the other resolve exactly one way. Metadata is last so nothing a user writes
-can make a command lie about which run it belongs to.
+and 6 are composed at spawn. So a plain `env:` value can never shadow a credential, and
+metadata is last so nothing a user writes can make a command lie about which run it belongs
+to.
 
-**A command does not inherit flowlite's own configuration.** The `FLOWLITE_*` namespace in
-a command's environment is flowlite's to state, so every such variable is stripped from the
-child before the layers above are applied — a server started with
-`FLOWLITE_SMTP__PASSWORD=...` or `FLOWLITE_SLACK__TOKEN=...` does not hand that credential
-to every command it spawns. What a command is meant to have, flowlite injects by name.
+**A command does not inherit flowlite's own configuration.** Every `FLOWLITE_*` variable is
+stripped from the child before the layers above are applied — a server started with
+`FLOWLITE_SMTP__PASSWORD=...` does not hand that credential to every command it spawns.
+What a command is meant to have, flowlite injects by name.
 
 ### Injected variables
 
@@ -253,14 +235,10 @@ a schedule declaring `slice: "2026-09-08"` is wrong on every occurrence after th
 `FLOWLITE_SCHEDULED_AT` is what tells a recurring job which occurrence it is running; reach
 for it whenever the question is "which day, hour or slice is this."
 
-A rerun replays the original run's parameters and `FLOWLITE_SCHEDULED_AT` unchanged, not
-the job's current defaults — see [Reruns](#reruns).
-
 ### Secrets
 
 `secret_env:` maps an environment variable to the *name* of a secret, not its value.
-It is declared on a job or a task exactly like `env:`, and merged the same way — a task's
-own wins any name both levels set:
+It is declared on a job or a task exactly like `env:`, and merged the same way:
 
 ```yaml
 id: nightly-sync
@@ -275,47 +253,34 @@ tasks:
 ```
 
 The command never names the password, because `psql` already reads `PGPASSWORD` out of its
-own environment. That is where composition belongs: the command is a shell, which is
-already better at building a connection string than a YAML parser would be — which is why
-there is no `${...}` interpolation inside `env:` or `secret_env:`. A block states a fixed
-name; it is not a second templating language to learn.
+own environment. That is where composition belongs — which is why there is no `${...}`
+interpolation inside `env:` or `secret_env:`: a block states a fixed name, not a second
+templating language to learn.
 
-`warehouse_pw` is a name, resolved against `[secrets]` in `config.toml` or
+`warehouse_pw` is resolved against `[secrets]` in `config.toml` or
 `FLOWLITE_SECRETS__WAREHOUSE_PW` in the server's own environment — see
-[Configuration](#configuration). The name is what travels: it is what a run stores, what the
-dashboard shows, and what `--json` returns. The value is looked up once, when the command is
-spawned, and exists nowhere but that one process's environment — not the database, not a
-page, not a rerun's row.
+[Configuration](#configuration). The name is what travels: it is what a run stores, what
+the dashboard and the task pages show (`PGPASSWORD ← warehouse_pw`), and what `--json`
+returns. The value is looked up once, when the command is spawned, and exists nowhere but
+that one process's environment.
+
+That makes `env:` the right place for a value you are willing to commit and see on a page —
+a hostname, a flag, a timezone — since merged `env:` values are shown as written on the run
+and task pages. For a credential, reach for `secret_env:`.
 
 Five things are refused when a job's YAML is read, before it is ever served:
 
 - a variable name that is not a valid environment variable name;
-- a secret name outside `[a-z0-9_]+` — `config.toml` can quote a name like `"Warehouse-PW"`,
-  but `FLOWLITE_SECRETS__*` cannot reach it, so it is refused rather than shipped as a name
-  that works on a development box and not in production;
-- a secret name containing `__`, for the same reason even though every character in it is
-  allowed: `__` is the separator that splits `FLOWLITE_SECRETS__*` into nested keys, so
-  `FLOWLITE_SECRETS__WAREHOUSE__PW` sets `secrets.warehouse.pw` and never the name
-  `warehouse__pw`;
+- a secret name outside `[a-z0-9_]+`, or containing `__`. `config.toml` can quote a name
+  like `"Warehouse-PW"`, but `FLOWLITE_SECRETS__*` cannot reach it, and `__` is the
+  separator that form uses for nested keys — `FLOWLITE_SECRETS__WAREHOUSE__PW` sets
+  `secrets.warehouse.pw`, never the name `warehouse__pw`. Either way the name would work on
+  a development box and be unreachable in production;
 - a variable name starting with `FLOWLITE_` — run metadata is applied last under that
   prefix and would silently win, leaving the task's credential quietly missing;
 - the same variable name in both `env:` and `secret_env:` **at the same level**. Across
   levels it is intentional layering — a job declaring a default that a task replaces with a
-  secret — but at one level it is a contradiction the author should see rather than a
-  precedence rule to learn.
-
-```
-Invalid Job YAML at /srv/flowlite/jobs/nightly.yaml
-
-Caused by:
-    Job 'nightly-sync' task 'load' names secret 'Warehouse-PW' for variable 'PGPASSWORD',
-    which is not a valid secret name. A secret name may contain only lowercase ASCII
-    letters, digits and underscores, and may not contain a double underscore: config.toml
-    can hold any other character but FLOWLITE_SECRETS__* cannot reach it, and __ is the
-    separator that form uses for nested keys, so FLOWLITE_SECRETS__A__B sets a.b rather
-    than a__b. Either way the name would work on a development box and be unreachable in
-    production.
-```
+  secret — but at one level it is a contradiction the author should see.
 
 `serve` also refuses to start if a job names a secret that nothing defines — a missing
 *value*, not just a malformed name — so a typo is caught before 03:00 rather than at it:
@@ -331,21 +296,6 @@ Caused by:
 That check runs only in `serve`. `job-run list` and the other read commands work with no
 secrets in the environment at all, because reading a run's status must never require the
 credentials that run used.
-
-The task page and the task-run page each show the reference and never the value —
-`PGPASSWORD ← warehouse_pw` — which is what lets either page say which credential a run
-used: there is no value on the page to leak. `--json` carries the same map.
-
-### `env:` is for what you'd commit; `secret_env:` for what you wouldn't
-
-The merged `env:` values are shown as written on the run and task pages. The YAML is
-already plaintext on disk, so this leaks nothing a reader of the data directory couldn't
-see anyway, and hiding it would make a wrong value undebuggable from the run that used it.
-
-That makes `env:` the right place for a value you are willing to commit and see on a page —
-a hostname, a flag, a timezone. For a credential, reach for `secret_env:` instead: it stores
-a name rather than a value, and the value it resolves is never written to the database or
-shown anywhere.
 
 ## Timeouts and retries
 
@@ -386,14 +336,12 @@ tasks:
     command: ./sync.sh
 ```
 
-The two blocks take the same channels and are addressed independently: a failure wakes
-whoever is on call, a success reassures whoever is waiting on the data. Each channel is
-delivered and recorded **separately**, so a Slack workspace that is down does not swallow
-the mail, and each says on its own row whether it landed.
+Each channel is delivered and recorded **separately**, so a Slack workspace that is down
+does not swallow the mail, and each says on its own row whether it landed.
 
 The message carries the run's status and timings, every task and how it ended, and — for a
-run that broke — the **output of the tasks that broke**, so the alert itself usually says
-what went wrong without opening the dashboard:
+run that broke — the **output of the tasks that broke**, so the alert usually says what went
+wrong without opening the dashboard:
 
 ```
 Job run 42 of 'Nightly Sync' (nightly-sync) failed.
@@ -421,68 +369,46 @@ psycopg2.OperationalError: connection refused
 Run `flowlite job-run logs 42` for every task and attempt.
 ```
 
-A success is the same message without the quoted output, since there is none. A scheduled
-run also carries the instant it fired for, and a run with parameters the values it was
-submitted with.
+A success is the same message without the quoted output. A scheduled run also carries the
+instant it fired for, and a run with parameters the values it was submitted with.
 
-Mail sends that text with an HTML rendering of the same facts alongside it, so a client
-that will not show markup still shows the message. Slack gets the same facts as Block Kit —
-a header, the summary as fields, one status emoji per task, and each quoted stream in a
-code block. The quoted output is capped shorter in Slack than in mail by default, because a
-chat message is read in a scroll and the mail is where the long tail belongs.
+Mail sends that text with an HTML rendering of the same facts alongside it. Slack gets the
+same facts as Block Kit, with the output capped shorter than in mail by default — a chat
+message is read in a scroll, and the mail is where the long tail belongs.
 
 **`on_failure:` means a real failure** — `failed`, `timed out` and `invalid`, never
 `aborted`. A run you stopped yourself is not news, and neither block is told about one. An
 `invalid` run is the opposite case: nobody chose it, so it is the ending most worth being
 told about — see [When flowlite loses track of a run](#when-flowlite-loses-track-of-a-run).
 
+A run records who it will tell **when it is submitted**, alongside the commands and
+parameters it snapshots. So editing either block does not change a run already in flight, a
+rerun tells whoever the original run would have told, and a run whose job YAML has since
+been deleted still reaches somebody. A run that named both blocks carries a record for
+each, and its one ending settles them in opposite directions: the block it matched is
+delivered, the other closed as nothing to report.
+
+Each send is tried **once**. A send that fails is recorded against the run with the error
+and reported in the server log, rather than being retried against a relay that may be down
+for hours. Slack is recorded on what it *said*, not on the status code — it refuses an
+unknown conversation with `ok: false` inside a 200, and one conversation refusing does not
+stop the others from getting the alert. Delivery runs as its own background service, so an
+unreachable mail server never holds up the runs themselves.
+
 ### Where the mail server and the Slack token go
 
 Who to tell is a property of the job, so it lives in the job's YAML. *Where mail goes out
-through* is a property of the machine, so it lives in `config.toml`:
+through* is a property of the machine, so it lives in `[smtp]` and `[slack]` in
+`config.toml` — see [Configuration](#configuration), which also covers why the password and
+the token belong in flowlite's environment rather than in that file.
 
-```toml
-[smtp]
-host = "smtp.example.com"
-port = 587                          # default
-from = "flowlite@example.com"
-username = "flowlite@example.com"   # omit for a relay that authenticates nobody
-encryption = "starttls"             # or "tls" for implicit TLS on 465, "none" for a local MTA
-```
-
-The password is deliberately **not** a key you should write in the file. Every config key
-can be set as an environment variable, so put it in flowlite's own environment:
-
-```bash
-FLOWLITE_SMTP__PASSWORD=... flowlite serve
-```
-
-That keeps it out of a file that sits beside your jobs in version control — and out of the
-dashboard, which renders `env:` as written on purpose.
-
-Slack is the same split. `[slack]` holds a bot token with `chat:write`, and the token is
-the same kind of secret as the password:
-
-```toml
-[slack]
-timeout_seconds = 10                # default; how long one post may take
-max_output_bytes = 2048             # default; the most of one stream a post quotes
-```
-
-```bash
-FLOWLITE_SLACK__TOKEN=xoxb-... flowlite serve
-```
-
-The token alone is enough — with no `[slack]` table in the file at all, that variable
-configures the channel.
-
-A bot token rather than an incoming webhook on purpose: a webhook URL *is* its
-destination, so a job naming a second conversation would carry a second secret URL in its
-YAML — the thing this split exists to prevent. With a token a job names `#oncall` and
-nothing else; invite the bot to each conversation you want it to post in.
+Slack wants a bot token with `chat:write` rather than an incoming webhook on purpose: a
+webhook URL *is* its destination, so a job naming a second conversation would carry a second
+secret URL in its YAML. With a token a job names `#oncall` and nothing else; invite the bot
+to each conversation you want it to post in.
 
 **A job that names a recipient of a channel `config.toml` does not configure refuses to
-start**, naming the job and the file:
+start**, naming the job, the block and the file:
 
 ```
 Invalid notifications of job 'nightly-sync' at /srv/flowlite/jobs/nightly.yaml
@@ -492,34 +418,15 @@ Caused by:
     can be sent by slack. Add one, or remove the recipients.
 ```
 
-The block is named as well as the channel, since the two are checked separately — a job
-may ask for mail on a failure and Slack on a success, and only one be deliverable here. A
-notification that silently never leaves is the one failure you cannot see from the run
-afterwards, so it is a startup error rather than a surprise at 03:00.
-
-Each send is tried **once**. A send that fails is recorded against the run with the error
-and reported in the server log, rather than being retried against a relay that may be down
-for hours. Slack is recorded on what it *said*, not on the status code — it refuses an
-unknown conversation with `ok: false` inside a 200, and one conversation refusing does not
-stop the others from getting the alert.
-
-A run records who it will tell **when it is submitted**, alongside the commands and
-parameters it snapshots. So editing either block does not change a run already in flight, a
-rerun tells whoever the original run would have told, and a run whose job YAML has since
-been deleted still reaches somebody. A run that named both carries a record for each, and
-its one ending settles them in opposite directions: the block it matched is delivered, the
-other closed as nothing to report.
-
-Delivery runs as its own background service, so an unreachable mail server never holds up
-the runs themselves.
+The blocks are checked separately, since a job may ask for mail on a failure and Slack on a
+success and only one be deliverable here. A notification that silently never leaves is the
+one failure you cannot see from the run afterwards, so it is caught at startup.
 
 ## Overlapping runs
 
 A job runs one at a time by default. A run created while another is still going is not
 rejected — it waits as a queued job run and starts as soon as the earlier one finishes,
-oldest waiting run first.
-
-Raise or lift the limit per job:
+oldest waiting run first. Raise or lift the limit per job:
 
 ```yaml
 id: nightly-sync
@@ -530,10 +437,9 @@ tasks:
     command: ./sync.sh
 ```
 
-The limit is enforced in one place, when a queued run is picked up to start, so every way
-of creating a run is held to it alike — `job submit`, a rerun, and the scheduler. A job
-that takes longer than its schedule interval will therefore queue up runs and work
-through them back to back.
+The limit is enforced in one place, when a queued run is picked up to start, so `job
+submit`, a rerun and the scheduler are all held to it alike. A job that takes longer than
+its schedule interval will therefore queue up runs and work through them back to back.
 
 ## Concurrency limits
 
@@ -544,20 +450,16 @@ belong to.
 ```toml
 [orchestrator]
 max_running_attempts = 32   # 0 for no limit
-```
 
-That is the one ceiling with no name — every attempt anywhere counts against it.
-`[concurrency_limits]` adds ceilings with a name, for a resource narrower than "the whole
-server":
-
-```toml
 [concurrency_limits]
-warehouse = 3   # 0 for no limit, same as above
+warehouse = 3               # 0 for no limit
 ```
 
-A task opts into one with `limits:`, at job level, task level, or both. A job's limits are
-claimed by *every* one of its tasks; a task's own are added to them, not substituted for
-them:
+`max_running_attempts` is the one ceiling with no name — every attempt anywhere counts
+against it. `[concurrency_limits]` adds ceilings with a name, for a resource narrower than
+"the whole server". A task opts into one with `limits:`, at job level, task level, or both;
+a job's limits are claimed by *every* one of its tasks, and a task's own are added to them,
+not substituted for them:
 
 ```yaml
 id: nightly-sync
@@ -569,31 +471,13 @@ tasks:
     limits: [openai_api]  # this task claims warehouse AND openai_api
 ```
 
-A limit name that is not a key of `[concurrency_limits]` is a **startup error** — the same
-reason a `secret_env:` naming a value nothing defines fails `serve` rather than the run that
-needed it. A typo cannot silently become a task with no limit at all.
+A limit name that is not a key of `[concurrency_limits]` is a **startup error**, so a typo
+cannot silently become a task with no limit at all. This is the same split `secret_env:`
+draws between a name and a value: **the number is config, the name is YAML.** A job file
+names the resource it competes for; how much of it exists is answered per deployment.
 
-This is the split `secret_env:` already draws between a credential's name and its value
-(see [Secrets](#secrets) and
-[`env:` is for what you'd commit...](#env-is-for-what-youd-commit-secret_env-for-what-you-wouldnt)):
-**the number is config, the name is YAML.** A job file names the resource it competes for
-and stays committable as-is; how much of that resource exists is a `config.toml` question,
-answered per deployment without editing a single job.
-
-`global` is reserved and rejected in `[concurrency_limits]`, because `flowlite limits`
-prints the combined cap across every job under that name:
-
-```bash
-$ flowlite limits
-NAME         IN USE  MAX
-global            0   32
-openai_api        0    -
-warehouse         0    3
-```
-
-A row whose in-use count has reached a non-zero max is marked `FULL`, which is the answer to
-"why is nothing running": every task claiming that name is waiting for a slot, and the run
-holding one has to finish before the next starts.
+`flowlite limits` prints the combined cap across every job under the reserved name
+`global`, which is why `global` is rejected as a key of `[concurrency_limits]`:
 
 ```bash
 $ flowlite limits
@@ -603,20 +487,16 @@ openai_api        0    -
 warehouse         3    3  FULL
 ```
 
-A limit configured `0` means no ceiling at all, not zero slots, and this table renders it as
-`-` rather than a number it could be confused with — the dashboard's own panel spells the
-same `0` out as `unlimited`. A `0` limit is therefore never `FULL`, however much is running
-under it. `--json` keeps it as the number `0` either way, so a script comparing it against
-`in_use` never has to special-case a dash:
-
-```bash
-flowlite limits --json
-```
+A row whose in-use count has reached a non-zero max is marked `FULL`, which is the answer to
+"why is nothing running". A limit configured `0` means no ceiling at all, not zero slots,
+and renders as `-` rather than a number it could be confused with — the dashboard's own
+panel spells it out as `unlimited`. A `0` limit is therefore never `FULL`. `flowlite limits
+--json` keeps it as the number `0`, so a script comparing it against `in_use` never has to
+special-case a dash.
 
 It reads `config.toml` for the maxima and the on-disk database for the counts directly, so
-it answers for a data directory whose server is down as readily as one whose server is
-up — needing no running `serve` at all, the same guarantee `status` makes by reading the
-lock file instead of asking the process.
+it answers for a data directory whose server is down as readily as one whose server is up —
+the same guarantee `status` makes by reading the lock file instead of asking the process.
 
 ## Runs from the command line
 
@@ -632,15 +512,12 @@ echo $?     # 0 only when the run succeeded
 Every ending that is not a success exits 1 — failed, timed out, aborted, skipped or invalid
 — so a Makefile, a CI step or a parent job can treat a flowlite run like any other command.
 The wait polls the run's row, so it works from a different process, shell or container to
-the one running `flowlite serve` — and is refused outright when nothing is serving the
-data directory, because the row it would poll has no writer and the command would
-otherwise block for ever. Only the wait is refused: submitting into a directory whose
-server is down still queues the run for whenever it comes up.
+the one running `flowlite serve`, and is refused outright when nothing is serving the data
+directory, since the row it would poll has no writer. Only the wait is refused: submitting
+into a directory whose server is down still queues the run.
 
 `--schedule-at` dates a run rather than submitting it for now. It takes an RFC3339 instant
-with an explicit offset — `2026-09-15T09:00:00Z` or `2026-09-15T09:00:00+02:00` — and a
-bare `2026-09-15 09:00` is refused rather than guessed at, since an instant with no offset
-means different things to different readers:
+with an explicit offset, and a bare `2026-09-15 09:00` is refused rather than guessed at:
 
 ```bash
 flowlite job submit nightly --schedule-at 2026-09-15T09:00:00+02:00
@@ -648,9 +525,8 @@ flowlite job submit nightly --schedule-at 2026-09-15T09:00:00+02:00
 
 The run is written straight away and sits in the `submitted` status until its instant
 arrives, which is also what a schedule's own runs do. An instant in the past is due
-immediately, so it may be combined with `--wait`; one in the future may not, and is refused
-rather than accepted — both waits poll for a finished status, and a run that is not due yet
-could only burn the whole timeout and then report a perfectly healthy run.
+immediately, so it may be combined with `--wait`; one in the future may not, since the wait
+could only burn its whole timeout and then report a perfectly healthy run.
 
 The run history is readable without opening the dashboard:
 
@@ -664,19 +540,17 @@ flowlite job-run stop 42 --wait                        # ...and block until it h
 
 `stop` writes a request rather than killing anything itself — the `serve` process notices
 it on a later pass and kills the task's process group. A run that has already finished is
-refused rather than silently accepted.
-
-Without `--wait` the command returns once that request is written, while the run is still
-going. `--wait` blocks until the run has settled, which is what a caller that means to
-start something else next wants:
+refused rather than silently accepted. Without `--wait` the command returns once that
+request is written, while the run is still going; `--wait` blocks until the run has
+settled, which is what a caller that means to start something else next wants:
 
 ```bash
 flowlite job-run stop 42 --wait && flowlite job-run rerun 42
 ```
 
 Unlike `job submit --wait` it exits 0 whichever status the run settled to: the stop did
-what it was asked either way, and how the run itself ended is the run's outcome to report,
-not this command's. It makes the same unserved-directory check, and refuses the same way.
+what it was asked either way. It makes the same unserved-directory check, and refuses the
+same way.
 
 ### A run from a file
 
@@ -694,16 +568,14 @@ produces is an ordinary run — it has an id, it shows in `job-run list`, `--wai
 `--json` mean the same thing, and the dashboard renders it like any other.
 
 This is for the one-off: a backfill, a migration, a pipeline an agent generated to run once.
-Anything you want to keep, or to schedule, is a file under `jobs/` and `flowlite job submit
-<id>` — a schedule names an installed job by id, and a definition that was never installed
-has no id to name.
+Anything you want to keep, or to schedule, is a file under `jobs/` — a schedule names an
+installed job by id, and a definition that was never installed has no id to name.
 
-The file is held to every rule an installed job is held to. A cycle, a duplicate task id, a
-dependency on a task that isn't there, a notification channel this box cannot send on, a
-`limits:` name that `[concurrency_limits]` does not define, or a `secret_env:` naming a
-secret that nothing configures — each is refused before any run is written, naming the file
-rather than a job in the data directory. An id that is already a job in the data directory
-is refused too, since that id is what every filter and link resolves through afterwards:
+The file is held to every rule an installed job is held to: a cycle, a duplicate task id, a
+dependency on a task that isn't there, a notification channel this box cannot send on, an
+undefined `limits:` name, or a `secret_env:` naming a secret nothing configures is refused
+before any run is written, naming the file. An id that is already a job in the data
+directory is refused too, since that id is what every filter and link resolves through:
 
 ```
 $ flowlite job submit -f etl.yaml
@@ -719,9 +591,9 @@ rm ./once.yaml
 flowlite job-run rerun 42                                # still replays what run 42 ran
 ```
 
-`max_parallel_runs` does not apply to such a run — it bounds concurrent runs of one job, and
-there is no other run of a definition that exists for one command. The global
-`max_running_attempts` cap and any named `limits:` it claims still do.
+`max_parallel_runs` does not apply to such a run — there is no other run of a definition
+that exists for one command. The global `max_running_attempts` cap and any named `limits:`
+it claims still do.
 
 ### JSON output
 
@@ -765,27 +637,19 @@ flowlite job-run rerun 42
 
 A rerun replays **the definition the original run executed, not the current YAML.** Every
 run snapshots its own commands, `depends_on` edges, timeouts and retry settings, resolved
-`parameters`, and the `env`, `secret_env` and `working_dir` of every task, plus the
-`FLOWLITE_SCHEDULED_AT` it fired for. So an old run reruns its old config for the same
-occurrence, and a run whose job YAML has since been edited or deleted is still rerunnable.
+`parameters`, the `env`, `secret_env` and `working_dir` of every task, and the
+`FLOWLITE_SCHEDULED_AT` it fired for — so a run whose job YAML has since been edited or
+deleted is still rerunnable. To run the job as it is defined now, `flowlite job submit <id>`.
 
-**A run is rerunnable for as long as it is retained, and no longer.** Retention deletes old
-finished runs (see [Retention](#retention)), and deleting a run deletes the config snapshot
-this replays — so `job-run rerun` on a deleted run fails the same way it does for an id that
-never existed.
+`secret_env:` is the one exception: what is frozen is the secret's *name*, not its value. A
+rerun resolves that name against whatever `[secrets]` or `FLOWLITE_SECRETS__*` currently
+holds, so rotating a credential changes what the next rerun uses — the opposite of `env:`,
+whose literal values really are frozen forever, and deliberately so: replaying a leaked
+password would be the worst thing a rerun could do.
 
-`secret_env:` is the one exception to "replays exactly that": what is frozen is the
-secret's *name*, not its value. A rerun resolves that name against whatever `[secrets]` or
-`FLOWLITE_SECRETS__*` currently holds, so rotating a credential changes what the next rerun
-uses without touching the run's row at all — the opposite of `env:`, whose literal values
-really are frozen forever, and deliberately so: replaying a leaked password would be the
-worst thing a rerun could do.
-
-To run the job as it is defined now, submit it instead:
-
-```bash
-flowlite job submit hello-world
-```
+**A run is rerunnable for as long as it is retained, and no longer.** Retention (below)
+deletes the config snapshot along with the run, so `job-run rerun` on a deleted run fails
+the same way it does for an id that never existed.
 
 ## Retention
 
@@ -793,16 +657,9 @@ A long-lived data directory accumulates job runs forever unless something prunes
 `RetentionService` does, on the same poller every other background service runs on, inside
 `flowlite serve`. A run becomes a candidate for deletion once it is **finished**, and never
 before — never `Queued` or `Running`, and never one that still owes an undelivered
-notification (see [Run notifications](#run-notifications)).
+notification.
 
-Each job keeps its own newest runs:
-
-```toml
-[job_defaults]
-keep_runs = 100   # 0 keeps every run of that job
-```
-
-A job overrides it in its own YAML:
+Each job keeps its own newest runs, from `[job_defaults] keep_runs` or its own YAML:
 
 ```yaml
 id: nightly-sync
@@ -824,9 +681,8 @@ max_deletes_per_pass = 100     # the most runs one pass deletes, 0 for no cap
 
 `keep_runs_total` is enforced oldest-first across every job, *after* each job's own
 `keep_runs` — the two rules stack rather than compete. `max_deletes_per_pass` exists so the
-first pass after turning this on against an already-large backlog cannot hold the single
-SQLite writer for minutes; a large backlog is worked down one pass at a time instead of all
-at once.
+first pass against an already-large backlog cannot hold the single SQLite writer for
+minutes.
 
 **Deleting rows frees SQLite's pages for reuse but does not shrink `flowlite.db`** — the
 database stops growing rather than gets smaller. Get the space back with the server
@@ -848,8 +704,7 @@ for the row at all.
 The case that actually happens is a restart with work in flight. Shutting `serve` down
 kills the process groups it spawned and leaves those attempts marked running on purpose; a
 crash or a `kill -9` leaves them with the processes still alive. Either way the next start
-has no exit status to read and no process to wait on, so no honest outcome can be
-claimed:
+has no exit status to read and no process to wait on, so no honest outcome can be claimed:
 
 ```bash
 flowlite job-run list --status invalid
@@ -863,12 +718,10 @@ it yourself once you have checked.
 **The command it left behind is killed on the next start.** Each attempt records the
 process group flowlite spawned for it, so a restart finds a command a crash left running
 and kills the whole tree, naming the group in the log. What that command had already done
-stays unknown, which is why the run is `invalid` rather than `aborted`.
-
-One case is refused rather than guessed at: an attempt that started before the machine last
-booted cannot still own its recorded group id — the number has been recycled — so nothing
-is signalled and the log says the command may still be running. Signalling a stranger's
-process tree is worse than leaking one.
+stays unknown, which is why the run is `invalid` rather than `aborted`. One case is refused
+rather than guessed at: an attempt that started before the machine last booted cannot still
+own its recorded group id — the number has been recycled — so nothing is signalled and the
+log says the command may still be running.
 
 ## One server per data directory
 
@@ -902,9 +755,9 @@ removing `serve.lock` out from under a running server (`git clean -xdf`, say) le
 ### Running several services
 
 A second project is a second data directory, with its own database, its own port and its
-own `serve`. flowlite does not manage the set of them: `-D` / `--data-dir` names the one you
-mean, and whatever already supervises processes on your machine starts them. A systemd
-template unit is usually all it takes:
+own `serve`. flowlite does not manage the set of them: `-D` names the one you mean, and
+whatever already supervises processes on your machine starts them. A systemd template unit
+is usually all it takes:
 
 ```ini
 # /etc/systemd/system/flowlite@.service
@@ -928,36 +781,29 @@ job's dependency graph and the output of any task.
 
 It has a dark palette and a light one, and by default follows whichever the viewer's own
 OS asks for — so a shared instance leaves the choice to whoever opens it. `[ui] theme` takes
-`dark` or `light` to overrule that and look the same everywhere. The palette is the whole of
-it: one stylesheet, both themes, no build step.
+`dark` or `light` to overrule that. One stylesheet, both themes, no build step.
 
-It offers three writes, each the browser equivalent of a command: **Stop** and **Rerun** on a
-run's page, and **Submit run** on a job's page — `job-run stop`, `job-run rerun` and
-`job submit`. Every one asks for confirmation first, and there is still no build step and
-nothing to configure.
+It offers three writes, each the browser equivalent of a command and each asking for
+confirmation first: **Stop** and **Rerun** on a run's page, and **Submit run** on a job's
+page. **Submit is the one that is not idempotent** — stop writes a stop row and rerun
+replays a fixed snapshot, but submitting twice is two runs. What that costs is bounded
+rather than free: the extra run queues, since `max_parallel_runs` and
+`max_running_attempts` decide what actually executes.
 
-**Submit is the one that is not idempotent.** Stop writes a stop row and rerun replays a
-fixed snapshot, so pressing either twice changes nothing the first press did not; submitting
-twice is two runs. What that costs is bounded rather than free: the extra run queues, since
-`max_parallel_runs` and `max_running_attempts` decide what actually executes.
-
-Because a button now starts work, the three POST routes refuse a request another site caused
-your browser to make — a cross-origin form post is sent without a preflight, so without that
-check any page you happened to be visiting could submit a run on your machine. A request with
-no browser headers at all, such as `curl` or a script, is still allowed: this guards a browser
-against being used as a deputy, not the port against someone who can already reach it.
+Because a button starts work, the three POST routes refuse a request another site caused
+your browser to make — otherwise any page you happened to be visiting could submit a run on
+your machine. A request with no browser headers at all, such as `curl` or a script, is still
+allowed: this guards a browser against being used as a deputy, not the port against someone
+who can already reach it.
 
 The submit dialog lists the job's declared parameters with their defaults filled in, and each
-is editable for that run. Only the values are: the names come from the job's `parameters:`
-block, so the browser can change what a run is submitted with but not what the job accepts —
-that stays a file in git. The run records the values it was submitted with, so a rerun
-replays them.
+value is editable for that run. The names are not: they come from the job's `parameters:`
+block, so the browser can change what a run is submitted with but not what the job accepts.
 
 ## Driving flowlite from an agent
 
 `flowlite mcp` speaks the Model Context Protocol on stdin and stdout, so an agent drives
-flowlite through the same reads and writes the CLI makes. Set a directory up and install
-it:
+flowlite through the same reads and writes the CLI makes:
 
 ```bash
 flowlite -D ./data init
@@ -965,8 +811,7 @@ claude mcp add flowlite -- flowlite -D ./data mcp
 ```
 
 No port, no HTTP and nothing to start first: the client spawns the binary, talks JSON-RPC
-over its stdio, and the process exits when the client closes stdin. `-D` / `--data-dir`
-names the directory, the same way every other command learns it — and the `init` line is
+over its stdio, and the process exits when the client closes stdin. The `init` line is
 optional, since an agent handed an empty directory can call `init_data_dir` itself.
 
 Nine tools, each a projection of a command that already exists:
@@ -987,30 +832,23 @@ Each returns the JSON its `--json` twin prints, so an agent and a shell script r
 run read the same fields. Three differ, each for a stated reason.
 
 `get_job_run_logs` differs only in length: it keeps the last `max_bytes` of each stream,
-20000 by default and 200000 at most, and says on a marker line how many bytes it dropped. A
-terminal has a scrollback and a `| tail`; a context window has neither, so asking for more
-than the cap gets the cap rather than an error — the default is a floor you can raise, not
-one you can remove. `list_job_runs` bounds its page the same way, 20 runs by default and
-200 at most.
+20000 by default and 200000 at most, and says on a marker line how many bytes it dropped —
+a terminal has a scrollback and a `| tail`, a context window has neither. Asking for more
+than the cap gets the cap rather than an error. `list_job_runs` bounds its page the same
+way, 20 runs by default and 200 at most.
 
 `stop_job_run` returns the whole run, waited or not, where `job-run stop --json` prints
 `{"job_run_id": 42, "stop_requested": true}` unless you passed `--wait`. One shape either
 way means an agent reads `.status` off the result instead of branching on which argument it
-sent — the same reason `job submit --json` reads the run back and prints it with and without
-`--wait`.
+sent.
 
 `get_serve_status` and `list_limits` are the pair an agent reaches for when a run does not
-progress: the first says whether anything is serving the directory at all — the reason a
-run can sit `submitted` past its due time, or `queued` and never start — the second, once
-something is serving it, what a `queued` run is waiting behind. `submit_job` warns about an
-unserved directory once, at the moment it writes; these are how the agent checks for itself
-at any point after.
+progress: the first says whether anything is serving the directory at all, the second what
+a `queued` run is waiting behind.
 
-`init_data_dir` has no `--json` twin to match, because `flowlite init` prints prose rather
-than rows — it is `serve`-shaped, not `job list`-shaped. It takes no arguments at all: the
-directory is the one `-D` named when the server was started, as it is for every other tool,
-so an agent cannot point it somewhere nobody asked for. Nothing is overwritten, and the
-result says which files it wrote and which were already there:
+`init_data_dir` takes no arguments: the directory is the one `-D` named, so an agent cannot
+point it somewhere nobody asked for. Nothing is overwritten, and the result says which files
+it wrote and which were already there:
 
 ```json
 {
@@ -1034,24 +872,20 @@ data directory, so nothing has to be restarted first.
 { "yaml": "id: probe\ntasks:\n  - id: ..." }     // the definition itself, inline
 ```
 
-The last two are [a run from a file](#a-run-from-a-file) reached two ways — nothing is
-installed, and the run stays inspectable and rerunnable afterwards because it snapshots the
-definition it executed. `params` is a JSON object rather than repeated `name=value` strings,
-and a name the job does not declare is refused exactly as `--param` refuses it.
+The last two are [a run from a file](#a-run-from-a-file) reached two ways. `params` is a
+JSON object rather than repeated `name=value` strings, and a name the job does not declare
+is refused exactly as `--param` refuses it.
 
 `submit_job`, `get_job_run` and `stop_job_run` each take `wait_seconds`, which is how an
-agent gets an outcome in one call instead of a polling loop. It polls the run's row and
-returns as soon as the run settles; if the time runs out first the run comes back merely
-unfinished rather than as an error, because its id is what lets the agent ask again. A value
-above 300 clamps to 300 rather than being refused.
+agent gets an outcome in one call instead of a polling loop. It returns as soon as the run
+settles; if the time runs out first the run comes back merely unfinished rather than as an
+error, since its id is what lets the agent ask again. A value above 300 clamps to 300.
 
 **A submit into a directory nothing is serving writes a run that will not start.** It is
-allowed, for the same reason the command line allows it — work submitted for a server that is
-not up yet is legitimate — and the tool result says so in a line beside the JSON. The run
-stays `submitted`, however far past its due time, since nothing is there to release it into
-`queued`; run `flowlite serve` against that directory and it is picked up from there. A
-`wait_seconds` above 0 is refused there outright, since nothing would ever settle the row it
-would poll.
+allowed, as on the command line, and the tool result says so beside the JSON: the run stays
+`submitted` however far past its due time, and is picked up once `flowlite serve` runs
+against that directory. A `wait_seconds` above 0 is refused there outright, since nothing
+would ever settle the row it would poll.
 
 ## Configuration
 
@@ -1073,7 +907,7 @@ max_running_attempts = 32       # running task attempts across every job, 0 for 
 page_size = 25                  # rows per page on the run, job and schedule lists
 max_page_size = 100             # the largest ?page_size= the run list accepts
 refresh_interval_seconds = 3    # how often a page showing a live run refreshes
-theme = "auto"                  # dashboard palette: auto follows the viewer's OS, or dark, or light
+theme = "auto"                  # auto follows the viewer's OS, or dark, or light
 
 [job_defaults]
 timeout_seconds = 3600          # what a task with no timeout: gets
@@ -1090,6 +924,11 @@ keep_runs_total = 10000         # the most finished runs kept across every job, 
 max_deletes_per_pass = 100      # the most runs one pass deletes, 0 for no cap
 ```
 
+`[job_defaults]` and `[schedule_defaults]` fill in what a job's or schedule's YAML leaves
+out, and they are read when the YAML is — at startup. So a task with no `timeout:` takes
+its timeout from the data directory it was read in, and a run already submitted keeps the
+value it was submitted with.
+
 `[smtp]` and `[slack]` are the sections with no defaults, because there is no default mail
 server and no default workspace: leave one out and that channel is off entirely. See
 [Run notifications](#run-notifications).
@@ -1100,15 +939,27 @@ host = "smtp.example.com"       # required
 from = "flowlite@example.com"   # required
 port = 587
 username = ""                   # empty for a relay that authenticates nobody
-encryption = "starttls"         # "starttls", "tls" or "none"
+encryption = "starttls"         # "starttls", "tls" (implicit, on 465) or "none"
 max_output_bytes = 4096         # per stream, per failed task, in the message
+
+[slack]
+timeout_seconds = 10            # how long one post may take
+max_output_bytes = 2048         # the most of one stream a post quotes
 ```
 
+The password and the token belong in the environment rather than the file:
+
+```bash
+FLOWLITE_SMTP__PASSWORD=... FLOWLITE_SLACK__TOKEN=xoxb-... flowlite serve
+```
+
+The token alone is enough for Slack — with no `[slack]` table in the file at all, that
+variable configures the channel.
+
 `[secrets]` is where a job's `secret_env:` resolves its values, by name — see
-[Secrets](#secrets). Leaving it out is fine for a job that names none; what it holds is the
-same argument `[smtp]`'s `password` makes for staying out of the file: a value here sits in
-the data directory beside the `jobs/` you were told to commit. Both sources reach the same
-map, so use whichever suits the box:
+[Secrets](#secrets). Both sources reach the same map, so use whichever suits the box: the
+file suits a development box, the environment variable a real one, for the same reason the
+SMTP password does.
 
 ```toml
 [secrets]
@@ -1119,31 +970,16 @@ warehouse_pw = "hunter2"
 FLOWLITE_SECRETS__WAREHOUSE_PW=hunter2 flowlite serve
 ```
 
-The file suits a development box; the environment variable suits a real one, for the same
-reason the SMTP password does. A secret name is restricted to `[a-z0-9_]+` with no `__` in
-it precisely so either spelling reaches the same name — `config.toml` can quote a name
-`FLOWLITE_SECRETS__*` could never spell, and `__` inside a name is how that form separates
-nested keys rather than part of the name.
-
-`[concurrency_limits]` is where a job's `limits:` resolves the name it claims to a maximum
-— see [Concurrency limits](#concurrency-limits). It is read the same two ways as
-`[secrets]`, a name here or `FLOWLITE_CONCURRENCY_LIMITS__WAREHOUSE=3` in the environment,
-but there is nothing to hide in it: unlike a credential, a wrong limit should be visible
-rather than redacted.
+`[concurrency_limits]` resolves the name a job's `limits:` claims to a maximum — see
+[Concurrency limits](#concurrency-limits). It is read the same two ways
+(`FLOWLITE_CONCURRENCY_LIMITS__WAREHOUSE=3`), but there is nothing to hide in it: unlike a
+credential, a wrong limit should be visible rather than redacted. `global` is reserved here
+and refused at startup.
 
 ```toml
 [concurrency_limits]
 warehouse = 3   # 0 for no limit
 ```
-
-`global` is reserved here and refused at startup — `flowlite limits` prints the combined
-cap across every job under that name, and a job-named limit sharing it would make that row
-ambiguous.
-
-`[job_defaults]` and `[schedule_defaults]` fill in what a job's or schedule's YAML leaves
-out, and they are read when the YAML is — at startup. So a task with no `timeout:` takes
-its timeout from the data directory it was read in, and a run already submitted keeps the
-value it was submitted with.
 
 The data directory itself is the one thing not worth setting here (`data_dir` in a file
 inside it is circular); pass `-D` / `--data-dir` / `FLOWLITE_DATA_DIR`.
@@ -1153,9 +989,7 @@ inside it is circular); pass `-D` / `--data-dir` / `FLOWLITE_DATA_DIR`.
 flowlite keeps two schemas, and they upgrade differently.
 
 The **memory** schema holds jobs, schedules and tasks, and is rebuilt from your YAML into a
-fresh in-memory database on every start. Nothing has ever persisted one of its migrations,
-so while flowlite is pre-release a change there edits the migration that created the table,
-and an upgrade asks nothing of you.
+fresh in-memory database on every start, so an upgrade asks nothing of you.
 
 The **disk** schema holds run history, which outlives the process. Once flowlite is
 released, a change there will be a new migration file rather than an edit, because `sqlx`
@@ -1166,11 +1000,11 @@ refuse to start:
 migration 20260703234500 was previously applied but has been modified
 ```
 
-**While flowlite is pre-release, the disk schema is edited in place too**, on the same
-reasoning as the memory one: a history of how the tables got here is worth less than a
-history that describes them as they are. This release does exactly that — `secret_env`,
-`process_group_id`, `notify_on` and `limits` moved into the `CREATE TABLE` files that
-declare their tables, and the four migrations that used to add them are gone.
+**While flowlite is pre-release, the disk schema is edited in place too**: a history of how
+the tables got here is worth less than one that describes them as they are. This release
+does exactly that — `secret_env`, `process_group_id`, `notify_on` and `limits` moved into
+the `CREATE TABLE` files that declare their tables, and the four migrations that used to add
+them are gone.
 
 So an upgrade across a pre-release version can ask something of you. Start the new binary;
 if it refuses with the checksum error above, the remedy is to delete the database:
@@ -1182,7 +1016,7 @@ rm <data_dir>/flowlite.db
 **That is not a safe operation — it is the cost of a pre-release schema.** Jobs and
 schedules survive it, since they are read from the YAML on every start. The run history
 does not, and nothing recreates a run. If a run history matters to you, copy the file
-before upgrading; once flowlite is released this stops being a thing an upgrade does.
+before upgrading.
 
 This release also adds `max_running_attempts`, which defaults to `32`. A deployment that
 previously fanned a wide job out past that will now run 32 attempts at a time and queue the
