@@ -24,7 +24,7 @@ One execution of a [`job`](job.md). Created `Submitted`, released to `Queued` by
 
 `RetentionService` ([src/retention/service.rs](../../../../src/retention/service.rs)), through `CRUD::delete_job_runs_with_children` ([src/crud/multistatements/](../../../../src/crud/multistatements/delete_job_runs_with_children.rs)) — never a run still `Submitted`, `Queued` or `Running`, and never one still owing a `Pending` row in [`job_run_notification`](job_run_notification.md). Deleting a run deletes this row and, in the same transaction, every row across the other five tables here that carries its `job_run_id`.
 
-The [Scheduler](../../scheduler/SKILL.md) also deletes rows here, through the same `delete_job_runs_with_children` — a `Submitted` run still in the future that its schedule no longer wants, because `submit_ahead` fell or the cron changed, or because the schedule itself left the YAML. That is the one case a `Submitted` row is deleted rather than left to run: never one already due, which belongs to `JobRunReleaser` from that moment on.
+**Retention is the only thing that deletes a row here.** The [Scheduler](../../scheduler/SKILL.md) only ever adds: a `Submitted` run whose schedule has stopped wanting it — `submit_ahead` fell, the cron changed, the job left `jobs:`, the schedule was disabled or its YAML deleted — is left where it is and will be released and executed like any other. Stopping it (see [`job_run_stop`](job_run_stop.md)) is the only way to call one off.
 
 `[job_defaults] keep_runs` (or a job's own `keep_runs` override on [`mem.job`](job.md)) bounds how many of a job's newest finished runs survive; `[retention] keep_runs_total` is the ceiling across every job, oldest first, enforced after each job's own number. See [Retention](../../../../README.md#retention).
 
@@ -32,6 +32,6 @@ Deleting a run also deletes the config snapshot a rerun would replay, so `job-ru
 
 ## Read by
 
-`JobRunReleaser`, `JobRunDispatcher` and `JobRunMonitor` (the three that update it), `CRUD::is_job_at_max_parallel_runs` (counting this job's `Running` rows), the [Scheduler](../../scheduler/SKILL.md) (its own `Submitted` runs, to reconcile them against what a schedule now wants), the `job-run` CLI commands, and the home and job-run web routes.
+`JobRunReleaser`, `JobRunDispatcher` and `JobRunMonitor` (the three that update it), `CRUD::is_job_at_max_parallel_runs` (counting this job's `Running` rows), the [Scheduler](../../scheduler/SKILL.md) (one lookup per (`schedule_id`, `job_id`, `scheduled_at`), asking whether it has already submitted that occurrence — across every status, not just `Submitted`), the `job-run` CLI commands, and the home and job-run web routes.
 
 There is no `job_id` foreign key, but no run is created for a job that isn't there either: `submit_job` selects `mem.job` first and bails with `Job '<id>' not found`.
