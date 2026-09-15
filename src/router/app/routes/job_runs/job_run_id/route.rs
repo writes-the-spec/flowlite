@@ -261,6 +261,20 @@ pub async fn rerun_job_run_route(
         }
     };
 
+    // The button renders only on a rerunnable run, so arriving on one that is not means a
+    // page that has gone stale - or a POST that never came from the page at all. Either
+    // way the run page the redirect lands on says what the run actually is.
+    match crate::shared::job_run::select_job_run(&crud, &mut conn, job_run_id).await {
+        Ok(job_run) if !job_run.status.is_rerunnable() => {
+            return Redirect::to(&format!("/job-runs/{}", job_run_id)).into_response();
+        }
+        Ok(_) => {}
+        Err(err) => {
+            eprintln!("Error rerunning job run: {}", err);
+            return Html("Error rerunning job run").into_response();
+        }
+    }
+
     let result = crud.rerun_job(&mut conn, job_run_id).await;
 
     match result {
@@ -380,9 +394,11 @@ fn job_run_controls(status: JobRunStatus) -> JobRunControls {
         // Queued too, not only Running: a queued run is due and starts on the next pass,
         // and waiting for it to start before offering the stop is offering it too late.
         stoppable: matches!(status, JobRunStatus::Queued | JobRunStatus::Running),
-        // A rerun replays the run's own snapshot, which is only an answer once the run is
-        // over. A `Deleted` run counts: its rows are all still there.
-        rerunnable: status.is_finished(),
+        // Two halves. A rerun replays the run's own snapshot, which is only an answer once
+        // the run is over - a button offered earlier is how the same work comes to run
+        // twice. And a `Deleted` run is over but not rerunnable: its schedule writes the
+        // occurrence again on its own.
+        rerunnable: status.is_finished() && status.is_rerunnable(),
     }
 }
 
@@ -440,8 +456,29 @@ mod tests {
     /// over. Offering it earlier invites two runs of the same work at once.
     #[test]
     fn only_a_finished_run_offers_rerun() {
-        for status in JobRunStatus::ALL {
-            assert_eq!(job_run_controls(status).rerunnable, status.is_finished(), "{status}");
+        for status in JobRunStatus::ALL.into_iter().filter(|status| !status.is_finished()) {
+            assert!(!job_run_controls(status).rerunnable, "{status}");
+        }
+    }
+
+    /// Finished, and still no rerun: the occurrence a deleted run held is the schedule's
+    /// again, so the button would submit a second copy of what is already coming back.
+    /// The one status where the page's two halves part company.
+    #[test]
+    fn a_deleted_run_offers_no_rerun_though_it_is_finished() {
+        assert!(JobRunStatus::Deleted.is_finished());
+        assert!(!job_run_controls(JobRunStatus::Deleted).rerunnable);
+    }
+
+    /// Every settled status but that one still offers it.
+    #[test]
+    fn a_settled_run_that_is_not_deleted_offers_rerun() {
+        for status in JobRunStatus::ALL.into_iter().filter(|status| status.is_finished()) {
+            assert_eq!(
+                job_run_controls(status).rerunnable,
+                status != JobRunStatus::Deleted,
+                "{status}",
+            );
         }
     }
 }

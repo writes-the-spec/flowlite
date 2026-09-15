@@ -1,5 +1,8 @@
 //! `rerun_job`: a fresh run of the definition an earlier run executed, not of whatever
 //! the YAML says now - which is why a run whose job has since been deleted is rerunnable.
+//!
+//! Which runs may be rerun at all is not asked here: `JobRunStatus::is_rerunnable` is that
+//! rule, and each frontend puts it in front of this call.
 
 use sqlx::SqliteConnection;
 
@@ -123,10 +126,12 @@ mod tests {
     use crate::test_support::{map, TestDb};
 
 
-    /// A tombstone keeps every row a rerun reads, so removing an occurrence to have it
-    /// written again does not cost you the ability to replay what it would have run.
+    /// A tombstone keeps every row a rerun reads, and this submits from whatever run it is
+    /// handed - the status gate lives in the frontends, on `JobRunStatus::is_rerunnable`,
+    /// which refuses a deleted run precisely because its schedule writes the occurrence
+    /// again. Held here so that gate stays the only thing standing between the two.
     #[tokio::test]
-    async fn a_deleted_run_is_still_rerunnable() {
+    async fn a_deleted_run_is_replayed_from_its_rows_like_any_other() {
 
         let db = TestDb::new().await;
 

@@ -368,6 +368,51 @@ impl JobRunDeleteCmd {
     }
 }
 
+/// Refuses a `Deleted` run, which `JobRunStatus::is_rerunnable` is the rule for - the
+/// dashboard's Rerun button reads the same predicate, so the two surfaces cannot drift
+/// apart on it. `rerun_job` submits from whatever run it is handed, deliberately, so this
+/// is the check.
+///
+/// No other status is refused, the unfinished ones included: `job-run rerun` is how an
+/// ad-hoc submit is replayed once the file it came from is gone, and that run has not
+/// necessarily run yet.
+async fn rerun_job_run(
+    crud: &CRUD,
+    conn: &mut sqlx::SqliteConnection,
+    job_run_id: i64,
+) -> anyhow::Result<i64> {
+
+    let job_run = crud.select_job_run(&mut *conn, &SelectJobRunsData {
+        filter: SelectJobRunsDataFilter {
+            id: Some(job_run_id),
+            job_id: None,
+            status: None,
+            statuses: None,
+            schedule_id: None,
+            scheduled_at: None,
+        },
+        sort: None,
+        limit: Some(1),
+        offset: None,
+    }).await?;
+
+    let Some(job_run) = job_run else {
+        anyhow::bail!("Job run {} not found", job_run_id);
+    };
+
+    if !job_run.status.is_rerunnable() {
+        anyhow::bail!(
+            "Job run {} is {} and cannot be rerun. Its schedule submits the occurrence \
+             again on its next pass; `flowlite job submit {}` is what runs it now.",
+            job_run_id,
+            format::job_run_word(job_run.status),
+            job_run.job_id,
+        );
+    }
+
+    crud.rerun_job(&mut *conn, job_run_id).await
+}
+
 impl JobRunRerunCmd {
     /// Reads no config on purpose - a rerun replays the original run's own snapshot, so
     /// this process never seeds mem. Anything added here that reads a config table would
@@ -378,7 +423,7 @@ impl JobRunRerunCmd {
 
         let crud = CRUD::new(std::sync::Arc::new(toolkit));
 
-        let job_run_id = crud.rerun_job(&mut conn, self.job_run_id).await?;
+        let job_run_id = rerun_job_run(&crud, &mut conn, self.job_run_id).await?;
 
         match json {
             true => println!("{}", serde_json::json!({
@@ -569,6 +614,57 @@ mod tests {
 
         assert!(error.contains("succeeded"), "{error}");
         assert!(!error.contains("stop"), "a settled run cannot be stopped either: {error}");
+    }
+
+    #[tokio::test]
+    async fn a_job_run_is_rerun_from_its_own_rows() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Succeeded).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let new_id = rerun_job_run(&db.crud, &mut conn, job_run.id).await.unwrap();
+
+        assert_ne!(new_id, job_run.id);
+        assert_eq!(db.job_run(new_id).await.status, JobRunStatus::Scheduled);
+    }
+
+    /// Nothing of a deleted run ever ran and its schedule writes the occurrence again, so
+    /// a rerun would be a second copy of the run the user removed by hand. The message
+    /// says where the run they want comes from instead.
+    #[tokio::test]
+    async fn a_deleted_job_run_is_refused_rather_than_rerun() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Deleted).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let error = rerun_job_run(&db.crud, &mut conn, job_run.id)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains(&job_run.id.to_string()), "{error}");
+        assert!(error.contains("deleted"), "{error}");
+        assert!(error.contains("submit"), "{error}");
+    }
+
+    /// The command is how an ad-hoc submit is replayed after its file is gone, and that
+    /// run is still Scheduled - so only `Deleted` is refused here, not everything that has
+    /// yet to finish.
+    #[tokio::test]
+    async fn a_run_that_has_not_finished_is_still_rerun() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Scheduled).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let new_id = rerun_job_run(&db.crud, &mut conn, job_run.id).await.unwrap();
+
+        assert_ne!(new_id, job_run.id);
     }
 
     #[tokio::test]
