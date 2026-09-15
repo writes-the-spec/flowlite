@@ -150,6 +150,7 @@ impl JobRunDispatcher {
                     status: Some(JobRunStatus::Queued),
                     statuses: None,
                     schedule_id: None,
+                    scheduled_at: None,
                 },
                 sort: Some(SelectJobRunsDataSort::Id),
                 limit: None,

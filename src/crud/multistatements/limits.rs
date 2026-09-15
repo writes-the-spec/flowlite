@@ -46,6 +46,7 @@ impl CRUD {
                 status: Some(JobRunStatus::Running),
                 statuses: None,
                 schedule_id: None,
+                scheduled_at: None,
             },
             sort: None,
             limit: None,

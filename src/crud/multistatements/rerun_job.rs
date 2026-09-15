@@ -32,6 +32,7 @@ impl CRUD {
                     status: None,
                     statuses: None,
                     schedule_id: None,
+                    scheduled_at: None,
                 },
                 sort: None,
                 limit: Some(1),

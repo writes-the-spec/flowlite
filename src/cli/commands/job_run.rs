@@ -104,6 +104,7 @@ impl JobRunListCmd {
                 status: self.status,
                 statuses: None,
                 schedule_id: None,
+                scheduled_at: None,
             },
             sort: Some(SelectJobRunsDataSort::IdDesc),
             limit: Some(self.limit),

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use crate::cron_trigger::CronTrigger;
 use crate::crud::CRUD;
-use crate::crud::job_run::{DeleteJobRunsData, DeleteJobRunsDataFilter, JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
+use crate::crud::job_run::{SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::schedule::{Schedule, SelectSchedulesData, SelectSchedulesDataFilter, SelectSchedulesDataSort};
 use crate::crud::schedule_job::{ScheduleJob, SelectScheduleJobsData, SelectScheduleJobsDataFilter, SelectScheduleJobsDataSort};
 use crate::poller::Service;
@@ -11,8 +11,8 @@ use crate::toolkit::Toolkit;
 
 
 /// Keeps each schedule's next `submit_ahead` occurrences submitted as job runs, submitting
-/// what is missing and deleting what is surplus. It never decides a run is due - moving a
-/// run from Submitted to Queued at its time is JobRunReleaser's job.
+/// whichever is missing. It never decides a run is due - moving a run from Submitted to
+/// Queued at its time is JobRunReleaser's job.
 pub struct Scheduler {
     pub toolkit: Arc<Toolkit>,
     pub crud: Arc<CRUD>,
@@ -37,169 +37,93 @@ impl Scheduler {
         }
     }
 
-    /// Makes this schedule's outstanding runs equal its desired occurrences.
+    /// Submits whichever of this schedule's desired occurrences has no run yet.
     ///
-    /// Convergent, not additive: nothing is remembered between passes, so every case - a
-    /// first pass, a top-up after a release, a restart, an edited cron - is the same two
-    /// loops finding a different difference.
+    /// Additive only: a run this schedule no longer asks for - a lowered `submit_ahead`, an
+    /// edited cron, a job dropped from `jobs:` - is left where it is.
     async fn reconcile_schedule(&self, schedule: &Schedule) -> anyhow::Result<()> {
 
         let now = self.toolkit.get_current_ts();
 
-        // One instant, passed to every step below: read twice, an occurrence could fall
-        // between the reads, go missing from `desired` while still counting as future-dated,
-        // and have its run deleted at the moment it came due. A schedule that is disabled or
-        // past its end_date desires nothing, both out of `get_next_runs` itself.
+        // A schedule that is disabled or past its end_date desires nothing, both out of
+        // `get_next_runs` itself.
         let desired = CronTrigger::from_schedule(schedule)
             .get_next_runs(Some(now), schedule.submit_ahead);
 
         let schedule_jobs = self.schedule_jobs(schedule).await?;
-        let outstanding = self.outstanding_runs(Some(&schedule.schedule_id)).await?;
 
-        self.delete_surplus_runs(&outstanding, &desired, &schedule_jobs, schedule, now).await?;
-
-        // Read after the deletes, and across every status rather than only Submitted - see
-        // `runs_of_schedule` for why the submit side asks the wider question.
-        let dealt_with = self.runs_of_schedule(&schedule.schedule_id).await?;
-
-        self.submit_missing_runs(&dealt_with, &desired, &schedule_jobs, schedule).await?;
+        for occurrence in &desired {
+            for schedule_job in &schedule_jobs {
+                self.submit_if_missing(schedule, schedule_job, *occurrence).await?;
+            }
+        }
 
         Ok(())
     }
 
-    /// Deletes the outstanding runs the schedule no longer asks for, keyed on the job and
-    /// the instant together - the same pair the submit side writes on, so that a job dropped
-    /// from `jobs:` does not keep a run some other job's occurrence still wants.
+    /// Submits one (job, occurrence) pair, exactly as `job submit` does, unless a run for it
+    /// is already there.
     ///
-    /// Future-dated only: a run whose instant has arrived belongs to JobRunReleaser. Both
-    /// conditions are restated on the delete's own filter, which re-resolves inside its
-    /// transaction, in case the releaser promoted the row since the select read it.
-    ///
-    /// Deleted rather than stopped: a run cancelled before it was ever due never happened,
-    /// and a stop row would sit in the history beside runs genuinely stood down.
-    async fn delete_surplus_runs(
+    /// "Already there" is asked across every status, not only Submitted: stopping a
+    /// future-dated scheduled run is allowed, `JobRunReleaser` then skips the row outright
+    /// while its instant is still ahead, and a check reading only Submitted would submit the
+    /// occurrence the user just cancelled all over again.
+    async fn submit_if_missing(
         &self,
-        outstanding: &[JobRun],
-        desired: &[DateTime<Utc>],
-        schedule_jobs: &[ScheduleJob],
         schedule: &Schedule,
-        now: DateTime<Utc>,
+        schedule_job: &ScheduleJob,
+        occurrence: DateTime<Utc>,
     ) -> anyhow::Result<()> {
-
-        for run in outstanding {
-
-            if run.scheduled_at <= now || is_still_wanted(run, desired, schedule_jobs) {
-                continue;
-            }
-
-            self.delete_run(run.id, &schedule.schedule_id, now).await?;
-        }
-
-        Ok(())
-    }
-
-    /// Submits whichever (occurrence, job) pair has no run yet, exactly as `job submit`
-    /// does. `dealt_with` is every run of this schedule whatever its status - see
-    /// `runs_of_schedule`.
-    async fn submit_missing_runs(
-        &self,
-        dealt_with: &[JobRun],
-        desired: &[DateTime<Utc>],
-        schedule_jobs: &[ScheduleJob],
-        schedule: &Schedule,
-    ) -> anyhow::Result<()> {
-
-        for occurrence in desired {
-            for schedule_job in schedule_jobs {
-
-                let already_submitted = dealt_with.iter().any(|run| {
-                    run.job_id == schedule_job.job_id
-                        && is_same_instant(run.scheduled_at, std::slice::from_ref(occurrence))
-                });
-
-                if already_submitted {
-                    continue;
-                }
-
-                let mut conn = self.conn_pool.acquire().await?;
-
-                // Reported and stepped over rather than raised on: one unsubmittable job
-                // must not cost the schedule's other jobs their occurrence, and the next
-                // pass tries it again anyway.
-                if let Err(e) = self.crud.submit_job(
-                    &mut conn,
-                    &schedule_job.job_id,
-                    &schedule_job.parameters.0,
-                    *occurrence,
-                    Some(&schedule.schedule_id),
-                ).await {
-                    eprintln!(
-                        "Scheduler could not submit job {} of schedule {} for {}: {e:?}",
-                        schedule_job.job_id,
-                        schedule.schedule_id,
-                        occurrence.to_rfc3339(),
-                    );
-                    continue;
-                }
-
-                self.signals.publish();
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Takes back the runs of schedules that are no longer in the YAML. Their rows are gone,
-    /// so no schedule's own reconcile can collect them - `delete_surplus_runs` only ever
-    /// touches the schedule it is reconciling.
-    ///
-    /// Same terms as `delete_surplus_runs`: future-dated only, status re-asserted. A run
-    /// carrying no schedule_id is a manual submission and belongs to nobody's reconcile.
-    async fn delete_orphaned_runs(&self, schedules: &[Schedule]) -> anyhow::Result<()> {
-
-        let now = self.toolkit.get_current_ts();
-
-        for run in self.outstanding_runs(None).await? {
-
-            let Some(schedule_id) = run.schedule_id.clone() else {
-                continue;
-            };
-
-            if run.scheduled_at <= now
-                || schedules.iter().any(|schedule| schedule.schedule_id == schedule_id)
-            {
-                continue;
-            }
-
-            self.delete_run(run.id, &schedule_id, now).await?;
-        }
-
-        Ok(())
-    }
-
-    /// The filter restates what the caller already checked, because the delete re-resolves
-    /// it inside its own transaction - so the row it checks is the row it removes.
-    async fn delete_run(&self, id: i64, schedule_id: &str, now: DateTime<Utc>) -> anyhow::Result<()> {
 
         let mut conn = self.conn_pool.acquire().await?;
 
-        self.crud.delete_job_runs_with_children(&mut conn, &DeleteJobRunsData {
-            filter: DeleteJobRunsDataFilter {
-                id: Some(id),
-                job_id: None,
-                status: Some(JobRunStatus::Submitted),
-                schedule_id: Some(schedule_id.to_string()),
-                scheduled_at_gt: Some(now),
+        // The instant is matched as stored, which holds because the row was inserted with
+        // the very value `get_next_runs` hands out here - a cron occurrence, whole seconds
+        // and UTC, encoded the same way on both sides.
+        let existing = self.crud.select_job_run(&mut *conn, &SelectJobRunsData {
+            filter: SelectJobRunsDataFilter {
+                id: None,
+                job_id: Some(schedule_job.job_id.clone()),
+                status: None,
+                statuses: None,
+                schedule_id: Some(schedule.schedule_id.clone()),
+                scheduled_at: Some(occurrence),
             },
+            sort: None,
+            limit: Some(1),
+            offset: None,
         }).await?;
+
+        if existing.is_some() {
+            return Ok(());
+        }
+
+        // Reported and stepped over rather than raised on: one unsubmittable job must not
+        // cost the schedule's other jobs their occurrence, and the next pass tries it again
+        // anyway.
+        if let Err(e) = self.crud.submit_job(
+            &mut conn,
+            &schedule_job.job_id,
+            &schedule_job.parameters.0,
+            occurrence,
+            Some(&schedule.schedule_id),
+        ).await {
+            eprintln!(
+                "Scheduler could not submit job {} of schedule {} for {}: {e:?}",
+                schedule_job.job_id,
+                schedule.schedule_id,
+                occurrence.to_rfc3339(),
+            );
+            return Ok(());
+        }
 
         self.signals.publish();
 
         Ok(())
     }
 
-    /// Every schedule, not only the due ones: a disabled schedule still has outstanding runs
-    /// to take back, and "due" is not a question this service asks at all.
+    /// Every schedule, not only the due ones: "due" is not a question this service asks at
+    /// all.
     async fn get_schedules(&self) -> anyhow::Result<Vec<Schedule>> {
 
         self.crud.select_schedules(
@@ -217,55 +141,8 @@ impl Scheduler {
         ).await
     }
 
-    /// The runs this reconcile may still take back: Submitted and nothing else, because a
-    /// run that has left that status has been acted on by somebody else.
-    async fn outstanding_runs(&self, schedule_id: Option<&str>) -> anyhow::Result<Vec<JobRun>> {
-
-        self.crud.select_job_runs(
-            &*self.conn_pool,
-            &SelectJobRunsData {
-                filter: SelectJobRunsDataFilter {
-                    id: None,
-                    job_id: None,
-                    status: Some(JobRunStatus::Submitted),
-                    statuses: None,
-                    schedule_id: schedule_id.map(str::to_string),
-                },
-                sort: Some(SelectJobRunsDataSort::Id),
-                limit: None,
-                offset: None,
-            },
-        ).await
-    }
-
-    /// Every run this schedule has ever produced, whatever became of it - what the submit
-    /// side compares against, since "have I dealt with this occurrence?" is a wider question
-    /// than "is a Submitted row still sitting there?".
-    ///
-    /// Stopping a future-dated scheduled run is allowed: the row leaves Submitted while its
-    /// instant is still ahead. A submit side reading only Submitted would find the
-    /// occurrence missing and run the job the user just cancelled.
-    async fn runs_of_schedule(&self, schedule_id: &str) -> anyhow::Result<Vec<JobRun>> {
-
-        self.crud.select_job_runs(
-            &*self.conn_pool,
-            &SelectJobRunsData {
-                filter: SelectJobRunsDataFilter {
-                    id: None,
-                    job_id: None,
-                    status: None,
-                    statuses: None,
-                    schedule_id: Some(schedule_id.to_string()),
-                },
-                sort: Some(SelectJobRunsDataSort::Id),
-                limit: None,
-                offset: None,
-            },
-        ).await
-    }
-
-    /// Read once per pass and handed to both halves of the reconcile, so "does this schedule
-    /// still want this job?" is one answer rather than two reads that could disagree.
+    /// Read once per pass, so "which jobs does this schedule name?" is one answer for every
+    /// occurrence of the pass.
     async fn schedule_jobs(&self, schedule: &Schedule) -> anyhow::Result<Vec<ScheduleJob>> {
 
         self.crud.select_schedule_jobs(
@@ -285,23 +162,6 @@ impl Scheduler {
 }
 
 
-/// Whether the schedule still asks for this exact run. Both halves, because the submit side
-/// writes a run per (job, occurrence) pair.
-fn is_still_wanted(run: &JobRun, desired: &[DateTime<Utc>], schedule_jobs: &[ScheduleJob]) -> bool {
-
-    schedule_jobs.iter().any(|schedule_job| schedule_job.job_id == run.job_id)
-        && is_same_instant(run.scheduled_at, desired)
-}
-
-
-/// Compared at whole seconds: an instant that has been through the database has been through
-/// a string, and an equality depending on that round-trip being exact would delete and
-/// resubmit the same run every pass.
-fn is_same_instant(at: DateTime<Utc>, occurrences: &[DateTime<Utc>]) -> bool {
-    occurrences.iter().any(|occurrence| occurrence.timestamp() == at.timestamp())
-}
-
-
 impl Service for Scheduler {
     type Row = Schedule;
 
@@ -314,18 +174,7 @@ impl Service for Scheduler {
     }
 
     async fn select(&self) -> anyhow::Result<Vec<Schedule>> {
-
-        let schedules = self.get_schedules().await?;
-
-        // Swept here rather than in handle, because a schedule that is gone is not one of
-        // the rows handle will be called with. Reported and stepped over rather than raised
-        // on: an error out of select kills the Poller's loop for the whole backoff, so one
-        // undeletable row would stall every schedule's reconcile, pass after pass.
-        if let Err(e) = self.delete_orphaned_runs(&schedules).await {
-            eprintln!("Scheduler could not sweep orphaned runs: {e:?}");
-        }
-
-        Ok(schedules)
+        self.get_schedules().await
     }
 
     async fn handle(&self, schedule: &Schedule) -> anyhow::Result<()> {
@@ -337,6 +186,7 @@ impl Service for Scheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsDataSort};
     use crate::test_support::TestDb;
 
     /// Every run this schedule currently has outstanding, oldest due first.
@@ -348,6 +198,7 @@ mod tests {
                 status: Some(JobRunStatus::Submitted),
                 statuses: None,
                 schedule_id: Some(schedule_id.to_string()),
+                scheduled_at: None,
             },
             sort: Some(SelectJobRunsDataSort::Id),
             limit: None,
@@ -356,8 +207,8 @@ mod tests {
     }
 
     /// Every run this schedule has ever produced, whatever status it now holds - what the
-    /// submit side reads, and the only way to see a second run written for an occurrence
-    /// whose first run has already left Submitted.
+    /// submit side asks about, and the only way to see a second run written for an
+    /// occurrence whose first run has already left Submitted.
     async fn all_runs(db: &TestDb, schedule_id: &str) -> Vec<JobRun> {
         db.crud.select_job_runs(&*db.conn_pool, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
@@ -366,6 +217,7 @@ mod tests {
                 status: None,
                 statuses: None,
                 schedule_id: Some(schedule_id.to_string()),
+                scheduled_at: None,
             },
             sort: Some(SelectJobRunsDataSort::Id),
             limit: None,
@@ -426,16 +278,9 @@ mod tests {
         }).await.unwrap();
     }
 
-    /// Once the releaser has taken an occurrence, it is no longer outstanding, so the
-    /// desired set has moved on by one and the next pass tops it back up - which is the
-    /// whole of "keep submit_ahead occurrences submitted", with no advancing cursor.
-    ///
-    /// The released run is past-due, because that is the only shape a genuine release has:
-    /// the releaser promotes a run either when its instant has arrived or when somebody has
-    /// stopped it, and the stopped case is the one
-    /// `a_stopped_future_occurrence_is_not_submitted_again` pins, with the opposite
-    /// expectation. Releasing a future-dated run here instead would make this test assert
-    /// that a cancelled occurrence comes straight back.
+    /// Once the releaser has taken an occurrence, the desired set has moved on by one and
+    /// the next pass submits the new tail - which is the whole of "keep submit_ahead
+    /// occurrences submitted", with no advancing cursor.
     #[tokio::test]
     async fn a_released_occurrence_is_topped_up_on_the_next_pass() {
 
@@ -461,9 +306,9 @@ mod tests {
 
     /// Stopping a single future-dated occurrence has to stick. The stop is honoured by
     /// `JobRunReleaser` skipping the run outright, so the row leaves Submitted while its
-    /// instant is still in the future - and a reconcile that read outstanding-ness as "a
-    /// Submitted row exists" would decide the occurrence was never dealt with and submit it
-    /// again, running the very job the user cancelled.
+    /// instant is still in the future - and a check reading only Submitted would decide the
+    /// occurrence was never dealt with and submit it again, running the very job the user
+    /// cancelled.
     #[tokio::test]
     async fn a_stopped_future_occurrence_is_not_submitted_again() {
 
@@ -493,47 +338,41 @@ mod tests {
         assert_eq!(at_that_instant, 1, "the stopped occurrence must not be submitted a second time");
     }
 
-    /// The two halves of the reconcile are keyed the same way, on the job and the instant
-    /// together. Keyed on the instant alone the delete side would keep a dropped job's
-    /// already-submitted run - the other job of the schedule still wants that occurrence -
-    /// and removing a job from `jobs:` would not stop its next run.
+    /// The restart case the schedule_id column exists for. Nothing about a pass is written
+    /// down, so a Scheduler that did not ask the table would write the same occurrence
+    /// twice - a duplicate nobody would see until they read it.
     #[tokio::test]
-    async fn a_job_removed_from_a_schedule_loses_its_outstanding_run() {
-
-        let (db, _mem_conn) = scheduled_db().await;
-
-        let both = db.seed_schedule_with_jobs("nightly", "0 0 3 * * *", 1, &["job", "second-job"]).await;
-        db.scheduler().handle(&both).await.unwrap();
-
-        assert_eq!(outstanding(&db, "nightly").await.len(), 2);
-
-        let one = db.seed_schedule_with_jobs("nightly", "0 0 3 * * *", 1, &["job"]).await;
-        db.scheduler().handle(&one).await.unwrap();
-
-        let left = outstanding(&db, "nightly").await;
-
-        assert_eq!(left.len(), 1);
-        assert_eq!(left[0].job_id, "job");
-    }
-
-    /// The restart case the schedule_id column exists for. next_run is recomputed from
-    /// scratch on every startup, so a Scheduler that trusted it would write the same
-    /// occurrence twice — a duplicate nobody would see until they read the table.
-    #[tokio::test]
-    async fn an_occurrence_already_submitted_is_not_submitted_again_after_next_run_resets() {
+    async fn an_occurrence_already_submitted_is_not_submitted_again_after_a_restart() {
 
         let (db, _mem_conn) = scheduled_db().await;
         let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
 
         db.scheduler().handle(&schedule).await.unwrap();
 
-        // Exactly what a restart does: the row is seeded fresh from the YAML, with
-        // next_run computed from now rather than remembered.
+        // Exactly what a restart does: the row is seeded fresh from the YAML.
         let reseeded = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
 
         db.scheduler().handle(&reseeded).await.unwrap();
 
         assert_eq!(outstanding(&db, "nightly").await.len(), 1);
+    }
+
+    /// The existence check is keyed on the job as well as the instant, so a schedule's two
+    /// jobs each get their own run for the same occurrence.
+    #[tokio::test]
+    async fn every_job_of_a_schedule_gets_its_own_run() {
+
+        let (db, _mem_conn) = scheduled_db().await;
+
+        let both = db.seed_schedule_with_jobs("nightly", "0 0 3 * * *", 1, &["job", "second-job"]).await;
+
+        db.scheduler().handle(&both).await.unwrap();
+        db.scheduler().handle(&both).await.unwrap();
+
+        let runs = outstanding(&db, "nightly").await;
+
+        assert_eq!(runs.len(), 2);
+        assert_ne!(runs[0].job_id, runs[1].job_id);
     }
 
     #[tokio::test]
@@ -550,8 +389,11 @@ mod tests {
         assert_eq!(outstanding(&db, "nightly").await.len(), 3);
     }
 
+    /// This reconcile only ever adds. A run the schedule has stopped asking for - here
+    /// because submit_ahead came back down - stays submitted and will be released and
+    /// executed like any other.
     #[tokio::test]
-    async fn lowering_submit_ahead_deletes_the_surplus() {
+    async fn lowering_submit_ahead_leaves_the_runs_already_submitted() {
 
         let (db, _mem_conn) = scheduled_db().await;
 
@@ -561,148 +403,13 @@ mod tests {
         let one = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
         db.scheduler().handle(&one).await.unwrap();
 
-        assert_eq!(outstanding(&db, "nightly").await.len(), 1);
+        assert_eq!(outstanding(&db, "nightly").await.len(), 3);
     }
 
-    /// Without this, disabling a schedule would not stop its next run — the surprise that
-    /// submitting ahead would otherwise introduce.
+    /// A manual run carries no schedule_id, so no schedule's reconcile can see it - and a
+    /// schedule whose own occurrence falls at the same instant still submits its own run.
     #[tokio::test]
-    async fn disabling_a_schedule_takes_back_its_outstanding_runs() {
-
-        let (db, _mem_conn) = scheduled_db().await;
-
-        let enabled = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
-        db.scheduler().handle(&enabled).await.unwrap();
-        assert_eq!(outstanding(&db, "nightly").await.len(), 1);
-
-        let disabled = db.seed_disabled_schedule("nightly", "0 0 3 * * *", 1).await;
-        db.scheduler().handle(&disabled).await.unwrap();
-
-        assert_eq!(outstanding(&db, "nightly").await.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn editing_the_cron_replaces_the_outstanding_run() {
-
-        let (db, _mem_conn) = scheduled_db().await;
-
-        let three_am = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
-        db.scheduler().handle(&three_am).await.unwrap();
-        let before = outstanding(&db, "nightly").await;
-
-        let four_am = db.seed_schedule("nightly", "0 0 4 * * *", 1).await;
-        db.scheduler().handle(&four_am).await.unwrap();
-        let after = outstanding(&db, "nightly").await;
-
-        assert_eq!(after.len(), 1);
-        assert_ne!(before[0].scheduled_at, after[0].scheduled_at);
-    }
-
-    /// A schedule past its end_date has nowhere left to go, so the desired set is empty and
-    /// the reconcile takes its outstanding runs back - the same deletion that disabling
-    /// causes, reached without a branch of its own.
-    #[tokio::test]
-    async fn a_schedule_past_its_end_date_has_nothing_left_to_keep_submitted() {
-
-        let (db, _mem_conn) = scheduled_db().await;
-
-        let open_ended = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
-        db.scheduler().handle(&open_ended).await.unwrap();
-        assert_eq!(outstanding(&db, "nightly").await.len(), 1);
-
-        let retired = db.seed_schedule_ending(
-            "nightly",
-            "0 0 3 * * *",
-            1,
-            (Utc::now() - chrono::TimeDelta::days(1)).date_naive(),
-        ).await;
-
-        db.scheduler().handle(&retired).await.unwrap();
-
-        assert_eq!(outstanding(&db, "nightly").await.len(), 0);
-    }
-
-    /// The guard that keeps the reconcile off JobRunReleaser's territory. A run whose
-    /// instant has arrived but which has not been released yet is not one of the
-    /// schedule's future occurrences, and deleting it would cancel a run at the exact
-    /// moment it came due.
-    #[tokio::test]
-    async fn a_run_that_has_come_due_is_never_deleted_by_the_reconcile() {
-
-        let (db, _mem_conn) = scheduled_db().await;
-        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
-
-        let past_due = db.insert_job_run_at(
-            JobRunStatus::Submitted,
-            Utc::now() - chrono::TimeDelta::minutes(5),
-            Some("nightly"),
-        ).await;
-
-        db.scheduler().handle(&schedule).await.unwrap();
-
-        let still_there = outstanding(&db, "nightly").await
-            .into_iter()
-            .any(|run| run.id == past_due.id);
-
-        assert!(still_there, "a run that has come due belongs to the releaser, not the reconcile");
-    }
-
-    /// A schedule deleted from the YAML leaves runs no reconcile can reach, because every
-    /// delete in `delete_surplus_runs` is scoped to the schedule being reconciled. The
-    /// sweep at the head of `select` is what collects them - without it, deleting a
-    /// schedule would not stop its next run from being released and executed.
-    #[tokio::test]
-    async fn a_run_of_a_schedule_that_is_gone_is_swept_up() {
-
-        let (db, _mem_conn) = scheduled_db().await;
-
-        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
-        db.scheduler().handle(&schedule).await.unwrap();
-        assert_eq!(outstanding(&db, "nightly").await.len(), 1);
-
-        // A manual run in the same database: it names no schedule, so the sweep must not
-        // read it as one whose schedule has gone missing.
-        let manual = db.insert_job_run_at(
-            JobRunStatus::Submitted,
-            Utc::now() + chrono::TimeDelta::days(365),
-            None,
-        ).await;
-
-        // Exactly what deleting the YAML file does: CRUD::init rebuilds mem without it.
-        // Its jobs go first, because schedule_job's foreign key says so.
-        for statement in [
-            "DELETE FROM mem.schedule_job WHERE schedule_id = ?",
-            "DELETE FROM mem.schedule WHERE schedule_id = ?",
-        ] {
-            sqlx::query(statement)
-                .bind("nightly")
-                .execute(&*db.conn_pool)
-                .await
-                .unwrap();
-        }
-
-        db.scheduler().select().await.unwrap();
-
-        assert_eq!(outstanding(&db, "nightly").await.len(), 0);
-        assert_eq!(db.job_run(manual.id).await.status, JobRunStatus::Submitted);
-    }
-
-    /// The instant comparison is at whole seconds on purpose - see `is_same_instant` - and
-    /// nothing else fails when it is written as a plain equality, because the round trip
-    /// through SQLite happens to be exact today. Pinned here so that stays a decision.
-    #[test]
-    fn an_instant_is_the_same_one_within_the_second() {
-
-        let occurrence: DateTime<Utc> = "2026-06-10T03:00:00Z".parse().unwrap();
-
-        assert!(is_same_instant(occurrence + chrono::TimeDelta::milliseconds(400), &[occurrence]));
-        assert!(!is_same_instant(occurrence + chrono::TimeDelta::seconds(2), &[occurrence]));
-    }
-
-    /// A manual run carries no schedule_id, so no schedule's reconcile can see it — which
-    /// is also what keeps a rerun of a scheduled job safe from being cancelled.
-    #[tokio::test]
-    async fn a_run_nobody_scheduled_is_never_touched() {
+    async fn a_run_nobody_scheduled_does_not_stand_in_for_an_occurrence() {
 
         let (db, _mem_conn) = scheduled_db().await;
         let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
@@ -716,5 +423,6 @@ mod tests {
         db.scheduler().handle(&schedule).await.unwrap();
 
         assert_eq!(db.job_run(manual.id).await.status, JobRunStatus::Submitted);
+        assert_eq!(outstanding(&db, "nightly").await.len(), 1);
     }
 }

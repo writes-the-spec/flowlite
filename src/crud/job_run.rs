@@ -110,6 +110,10 @@ pub struct SelectJobRunsDataFilter {
     /// Produced by this schedule. A run nobody scheduled has `schedule_id` NULL and is
     /// matched by no value of this filter.
     pub schedule_id: Option<String>,
+    /// Due at exactly this instant. Matched on the stored value as it was written, so the
+    /// caller has to pass the same instant it would insert - which is what the Scheduler
+    /// does, asking after one cron occurrence at a time.
+    pub scheduled_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -429,6 +433,11 @@ fn push_job_run_filter(query_builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, fil
         query_builder.push(" AND schedule_id = ");
         query_builder.push_bind(schedule_id);
     }
+
+    if let Some(scheduled_at) = &filter.scheduled_at {
+        query_builder.push(" AND scheduled_at = ");
+        query_builder.push_bind(scheduled_at);
+    }
 }
 
 /// Pushes `AND status IN (?, ?, ...)`, one bind per status. It stays its own function
@@ -487,7 +496,7 @@ mod tests {
     }
 
     fn empty_filter() -> SelectJobRunsDataFilter {
-        SelectJobRunsDataFilter { id: None, job_id: None, status: None, statuses: None, schedule_id: None }
+        SelectJobRunsDataFilter { id: None, job_id: None, status: None, statuses: None, schedule_id: None, scheduled_at: None }
     }
 
     fn ids(runs: &[JobRun]) -> Vec<i64> {
@@ -766,6 +775,7 @@ mod tests {
                 status: None,
                 statuses: None,
                 schedule_id: Some("nightly".to_string()),
+                scheduled_at: None,
             },
             sort: None,
             limit: None,
@@ -805,6 +815,7 @@ mod tests {
                 status: None,
                 statuses: None,
                 schedule_id: None,
+                scheduled_at: None,
             },
             sort: None,
             limit: Some(1),

@@ -62,6 +62,7 @@ pub async fn job_run_table_route(
             status: query.filter_status,
             statuses: None,
             schedule_id: None,
+            scheduled_at: None,
         },
         sort: Some(SelectJobRunsDataSort::IdDesc),
         limit: Some((page_size + 1) as i64),
