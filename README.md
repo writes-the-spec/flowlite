@@ -135,8 +135,10 @@ parameters, and a job id may appear only once. `timezone` left out falls back to
 `submit_ahead` writes upcoming occurrences as runs before they are due, so the next run of
 every schedule is visible in `job-run list` and on the dashboard ahead of time. A larger
 number shows more of the future, at the cost of that many standing rows per schedule. Runs
-written ahead sit in the `submitted` status and start at their own instant; taking a
-schedule's YAML away, disabling it or editing its cron takes the outstanding ones back.
+written ahead sit in the `submitted` status and start at their own instant. The reconcile
+only ever adds: taking a schedule's YAML away, disabling it, lowering `submit_ahead` or
+editing its cron leaves the runs already written in place, and they will be released and
+executed at their instant like any other. `flowlite job-run stop <id>` calls one off.
 
 ### When an edit takes effect
 
@@ -146,10 +148,9 @@ yesterday, so editing that job's YAML this morning does not change it. The YAML 
 once, at startup, with no watcher, so every run a server submits carries the file as it
 stood when *that server* started.
 
-An edit therefore takes effect once the server has been restarted, and then only for runs
-whose occurrence changes as a result: the reconcile replaces an outstanding run the schedule
-no longer wants, while a run whose occurrence is unchanged keeps the definition it was
-submitted with. Nothing user-facing deletes a run to force this sooner.
+An edit therefore takes effect only for occurrences submitted after the restart. A run that
+was already written keeps the definition it was submitted with, and nothing replaces or
+deletes it, so an occurrence written under the old YAML runs under the old YAML.
 
 ## Command inputs
 
