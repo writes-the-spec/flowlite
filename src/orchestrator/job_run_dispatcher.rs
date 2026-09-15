@@ -62,7 +62,7 @@ impl JobRunDispatcher {
     }
 
     /// Settles a run `derive_next_status` failed to decide. Unreachable — its two checks
-    /// cover every case. See `JobRunMonitor::settle_unclaimed` for why it settles rather
+    /// cover every case. See `JobRunMonitor::set_to_invalid` for why it settles rather
     /// than raises.
     async fn set_to_invalid(&self, job_run: &JobRun) -> anyhow::Result<()> {
 

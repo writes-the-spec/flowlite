@@ -474,7 +474,7 @@ mod tests {
         assert!(JobRunStatus::Invalid.is_finished());
     }
 
-    /// Nothing has started, and something still will: a submitted run is the one status
+    /// Nothing has started, and something still will: a scheduled run is the one status
     /// that is waiting on the clock rather than on a slot or on a process.
     #[test]
     fn a_scheduled_run_is_not_finished() {

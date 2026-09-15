@@ -34,7 +34,7 @@ impl JobRunReleaser {
         }
     }
 
-    /// Settles a submitted run as whatever `derive_next_status` decides. Decision and write
+    /// Settles a scheduled run as whatever `derive_next_status` decides. Decision and write
     /// are split on purpose: deriving only reads, and each `set_to_*` just trusts the result
     /// rather than re-deriving any part of it.
     async fn handle_scheduled_job_run(&self, job_run: &JobRun) -> anyhow::Result<()> {
@@ -48,7 +48,7 @@ impl JobRunReleaser {
     }
 
     /// Derives a scheduled run's next status without writing anything: skipped if stopped,
-    /// queued if due, else left submitted.
+    /// queued if due, else left scheduled.
     async fn derive_next_status(&self, job_run: &JobRun) -> anyhow::Result<JobRunStatus> {
 
         let is_stopped = self.is_job_run_stopped(job_run).await?;
@@ -101,12 +101,12 @@ impl JobRunReleaser {
 
     /// Settles a run `derive_next_status` failed to decide, invalidating its task runs too.
     /// Unreachable — `is_stopped`/`is_due` cover every case above. See
-    /// `JobRunMonitor::settle_unclaimed` for why it settles rather than raises.
+    /// `JobRunMonitor::set_to_invalid` for why it settles rather than raises.
     async fn set_to_invalid(&self, job_run: &JobRun) -> anyhow::Result<()> {
 
         eprintln!(
-            "Job run {} was submitted but its next status could not be derived, or was \
-             derived as something the submitted-run dispatch does not handle. Settling it \
+            "Job run {} is scheduled but its next status could not be derived, or was \
+             derived as something the scheduled-run dispatch does not handle. Settling it \
              invalid. This is a bug.",
             job_run.id,
         );
@@ -120,7 +120,7 @@ impl JobRunReleaser {
         Ok(())
     }
 
-    /// Every submitted run, not only the due ones — a stopped run whose time has not come
+    /// Every scheduled run, not only the due ones — a stopped run whose time has not come
     /// still needs settling.
     async fn get_scheduled_job_runs(&self) -> anyhow::Result<Vec<JobRun>> {
 
@@ -261,24 +261,24 @@ mod tests {
     /// A run already released must not come back round, or the releaser would fight the
     /// dispatcher for it.
     #[tokio::test]
-    async fn only_submitted_runs_are_selected() {
+    async fn only_scheduled_runs_are_selected() {
 
         let db = TestDb::new().await;
 
-        let submitted = db.insert_job_run_at(JobRunStatus::Scheduled, Utc::now(), None).await;
+        let scheduled = db.insert_job_run_at(JobRunStatus::Scheduled, Utc::now(), None).await;
         let _pending = db.insert_job_run(JobRunStatus::Queued).await;
         let _running = db.insert_job_run(JobRunStatus::Running).await;
 
         let selected = db.job_run_releaser().select().await.unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].id, submitted.id);
+        assert_eq!(selected[0].id, scheduled.id);
     }
 
     /// Unreachable through `handle`, so called directly. See `JobRunMonitor`'s equivalent
     /// for why it is settled at all.
     #[tokio::test]
-    async fn an_unclaimed_submitted_job_run_is_settled_invalid() {
+    async fn an_unclaimed_scheduled_job_run_is_settled_invalid() {
 
         let db = TestDb::new().await;
 

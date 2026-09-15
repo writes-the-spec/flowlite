@@ -43,7 +43,7 @@ pub fn build_task_run_attempt_env(
         // `mem` from the current YAML, so an entry added without restarting `serve` is
         // unknown to the running server's app_config.
         //
-        // Nothing leaks either way: this returns before the spawn, so `settle_as_running`
+        // Nothing leaks either way: this returns before the spawn, so `set_to_running`
         // never writes started_at and the attempt stays Queued. But Queued is
         // re-selected on every poll pass, so this message is what an operator sees
         // repeating in the log until somebody acts on it - which is why it names the job
@@ -405,7 +405,7 @@ mod tests {
 
     /// A backstop for what the startup check in `serve` did not see: a rerun of a row
     /// whose YAML has since dropped the entry, or a run another process submitted from a
-    /// YAML this server has not read. Neither leaks - `settle_as_running` bails before
+    /// YAML this server has not read. Neither leaks - `set_to_running` bails before
     /// writing `started_at` - but the attempt stays Queued and is re-selected every poll
     /// pass, so this message is printed for ever until somebody acts on it. It therefore
     /// has to carry everything acting on it needs: which job and task, which variable and

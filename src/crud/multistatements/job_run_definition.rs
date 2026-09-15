@@ -175,7 +175,7 @@ pub(super) fn job_run_notification_definitions(
 
 impl CRUD {
 
-    /// Inserts a submitted job run, one queued task run per task, and one open notification
+    /// Inserts a scheduled job run, one planned task run per task, and one open notification
     /// per channel each of the job's notify blocks named. This is the only place a run's
     /// config is written.
     pub(super) async fn insert_job_run_definition(

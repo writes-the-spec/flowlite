@@ -81,7 +81,7 @@ impl Scheduler {
     ///
     /// `Deleted` is the exception, and the only thing that frees an occurrence. A stop says
     /// "do not run this", so its Skipped row goes on holding the instant for ever; deleting
-    /// a submitted run says "write this one again", which is how an edited definition
+    /// a scheduled run says "write this one again", which is how an edited definition
     /// reaches an occurrence already standing. Those are the two halves of the same
     /// question, and this filter is where they are told apart.
     async fn submit_if_missing(
@@ -354,7 +354,7 @@ mod tests {
         assert_eq!(at_that_instant, 1, "the stopped occurrence must not be submitted a second time");
     }
 
-    /// The point of the Deleted status. Removing a submitted run by hand says "write this
+    /// The point of the Deleted status. Removing a scheduled run by hand says "write this
     /// occurrence again", so unlike a stop it must leave the occurrence free - otherwise the
     /// edited definition the user deleted the run for never reaches the schedule.
     #[tokio::test]

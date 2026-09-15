@@ -106,7 +106,7 @@ impl TaskRunDispatcher {
     }
 
     /// Settles a run `derive_next_status` could not decide or read. See
-    /// `JobRunMonitor::settle_unclaimed` for why it settles rather than raises.
+    /// `JobRunMonitor::set_to_invalid` for why it settles rather than raises.
     async fn set_to_invalid(&self, task_run: &TaskRun) -> anyhow::Result<()> {
 
         eprintln!(
@@ -289,7 +289,7 @@ mod tests {
     use crate::test_support::TestDb;
 
     /// Unreachable through `handle` while the three checks cover every status a dependency
-    /// can hold, so called directly. See `JobRunMonitor::settle_unclaimed` for why it is
+    /// can hold, so called directly. See `JobRunMonitor::set_to_invalid` for why it is
     /// settled at all.
     #[tokio::test]
     async fn an_unclaimed_task_run_is_settled_invalid() {
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(db.task_run(dependent.id).await.status, TaskRunStatus::Running);
     }
 
-    /// The whole point of Planned: a run submitted for tonight is written with its task
+    /// The whole point of Planned: a run scheduled for tonight is written with its task
     /// runs, and this service must not see one of them until JobRunDispatcher releases it.
     /// Selecting on Queued, as this once did, started tonight's work on the next pass.
     #[tokio::test]

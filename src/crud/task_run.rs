@@ -8,7 +8,7 @@ use crate::crud::CRUD;
 #[serde(rename_all = "lowercase")]
 pub enum TaskRunStatus {
     /// Written with its job run, which has yet to start. Nothing dispatches a task run in
-    /// this status: `JobRunDispatcher::settle_as_running` is the only thing that moves it
+    /// this status: `JobRunDispatcher::set_to_running` is the only thing that moves it
     /// out, and it only ever moves it to Waiting.
     Planned,
     /// Released with its job run, and waiting for the task runs it depends on.
@@ -49,7 +49,7 @@ impl TaskRunStatus {
     /// ruled out, since a dependency that did not succeed skips its dependents too — so
     /// ask this after the failure cases, not before them.
     ///
-    /// `Invalid` is deliberately not a stop. `JobRunMonitor::settle_for_aborted` reads
+    /// `Invalid` is deliberately not a stop. `JobRunMonitor::derive_next_status` reads
     /// this as its abort signal, and nobody stopped a run flowlite merely lost track of —
     /// reporting it as `Aborted` is the exact conflation `Invalid` exists to end.
     pub fn is_stopped(&self) -> bool {

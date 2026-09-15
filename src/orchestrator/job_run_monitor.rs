@@ -241,9 +241,9 @@ mod tests {
         assert_eq!(status, JobRunStatus::Running);
     }
 
-    /// The `all_finished` each failure outcome re-asks is what holds this job run open:
-    /// `settle_for_running` is asked after them, so dropping one of those guards finishes
-    /// the job run here instead and fails this test.
+    /// The single `all_finished` check is what holds this job run open: `derive_next_status`
+    /// returns `Running` from it before looking at any verdict, so dropping it would report
+    /// the first failed task run as the run's outcome and fail this test.
     #[tokio::test]
     async fn a_failure_does_not_finish_a_job_run_whose_work_is_still_going() {
         let status = settled_job_run_status(&[

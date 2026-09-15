@@ -331,7 +331,8 @@ mod tests {
         assert_eq!(attempts, vec![1]);
     }
 
-    /// A timeout is not retried: only a Failed attempt reaches `settle_for_running`.
+    /// A timeout is not retried: only a Failed attempt reaches the branch that leaves the
+    /// task run `Running` for another attempt.
     #[tokio::test]
     async fn a_timed_out_attempt_times_out_the_task_run() {
         let (status, attempts) = settle(2, 1, TaskRunAttemptStatus::TimedOut).await;
