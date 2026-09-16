@@ -254,6 +254,12 @@ stripped from the child before the layers above are applied — a server started
 `FLOWLITE_SMTP__PASSWORD=...` does not hand that credential to every command it spawns.
 What a command is meant to have, flowlite injects by name.
 
+**A command's stdin is empty.** It is `/dev/null`, not the terminal or pipe `flowlite serve`
+was started with, so anything a command reads from it is an immediate end of input. A tool
+that stops to ask a question — a confirmation, an auth challenge, a missing argument — gets
+that answer at once and takes its non-interactive path, rather than waiting on a read nobody
+will answer until the attempt times out an hour later, holding a slot the whole time.
+
 ### Injected variables
 
 | Variable | Value |

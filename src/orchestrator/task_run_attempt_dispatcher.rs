@@ -315,6 +315,16 @@ impl TaskRunAttemptDispatcher {
             .envs(&env)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Nulled for the reason the FLOWLITE_ namespace above is stripped: what the
+            // child gets is what flowlite states, not what the server happened to be
+            // started with. Inherited, a command that asks a question - a confirmation, an
+            // auth challenge, a missing argument - would block on a read nobody will answer
+            // while holding one of `max_running_attempts`, until `timeout_seconds` (an hour
+            // by default) killed it; and where serve runs in a terminal it would compete
+            // for the operator's keystrokes. A null stdin is an immediate EOF, which every
+            // well-behaved CLI reads as "not interactive". Nothing is lost: a task has no
+            // way to be given input in the first place.
+            .stdin(Stdio::null())
             // Its own process group, so a timeout or a stop can signal the command's whole
             // process tree rather than only the sh that flowlite spawned. The group id is
             // this child's pid; TaskRunAttemptMonitor kills by it.
@@ -563,7 +573,7 @@ mod tests {
     use crate::crud::job_run::JobRunStatus;
     use crate::crud::task_run::TaskRunStatus;
     use crate::test_support::TestDb;
-    use crate::test_support::read_command_file;
+    use crate::test_support::{a_stdin_nothing_writes_to, read_command_file};
     use crate::test_support::{reading_the_environment, writing_the_environment};
     use std::collections::BTreeMap;
     use std::os::unix::ffi::OsStringExt;
@@ -1386,6 +1396,38 @@ mod tests {
 
         assert_eq!(after.status, TaskRunAttemptStatus::Queued);
         assert!(after.started_at.is_none(), "a failed spawn left the attempt looking spawned");
+    }
+
+    /// The child's stdin is flowlite's to state, not the server's to pass on. Under a stdin
+    /// nothing ever writes to - a terminal, in production - a command that read it would
+    /// block until the attempt timed out an hour later, holding a slot the whole time. With
+    /// it nulled the read is an immediate EOF, so `read` fails and the command carries on,
+    /// which is what the file it writes proves.
+    #[tokio::test]
+    async fn a_command_that_reads_stdin_gets_eof_rather_than_the_servers_own() {
+
+        let _stdin = a_stdin_nothing_writes_to();
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let seen_path = db.data_dir().join("seen.txt");
+
+        let task_run = db.insert_task_run_for_command(
+            job_run.id,
+            &format!(
+                "read answer; printf '%s' \"read exited $?\" > {}",
+                seen_path.display(),
+            ),
+            3600,
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
+
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(read_command_file(&seen_path).await, "read exited 1");
     }
 
     /// Recorded on the row, because `TaskRunAttemptChildren` is memory: after a restart the
