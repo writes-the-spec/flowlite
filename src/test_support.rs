@@ -74,25 +74,20 @@ pub fn writing_the_environment() -> RwLockWriteGuard<'static, ()> {
 }
 
 /// Puts a pipe nothing ever writes to on this process's own stdin, standing in for the
-/// terminal `flowlite serve` is usually started from, and restores what was there when it
-/// is dropped.
+/// terminal `flowlite serve` is started from, and restores it on drop. A command that
+/// inherited this fd would sit in its first read for ever.
 ///
-/// A command that inherited this fd would sit in its first read until the write end closed,
-/// which is exactly the hang a nulled stdin exists to prevent - so a test that spawns under
-/// this guard fails if the dispatcher ever stops nulling it.
-///
-/// It takes the environment's *write* lock although it sets no variable: fd 0 is
-/// process-wide state a spawn inherits, the same as the environment, and every test that
-/// spawns already takes the read side. That is what keeps this swap off every other
-/// spawning test.
+/// Takes the environment's *write* lock although it sets no variable: fd 0 is process-wide
+/// state a spawn inherits, the same as the environment, and every spawning test already
+/// takes the read side - which is what keeps this swap off them.
 pub fn a_stdin_nothing_writes_to() -> ServerStdin {
 
     let environment = writing_the_environment();
 
     let mut ends = [0; 2];
 
-    // SAFETY: `pipe` fills two fds, `dup` copies the current stdin so the drop below can
-    // put it back, and `dup2` is the swap itself. Every fd here is owned by this guard.
+    // SAFETY: `dup` copies the current stdin so the drop below can put it back, `dup2` is
+    // the swap. Every fd here is owned by this guard.
     let (read_end, write_end, original) = unsafe {
         assert_eq!(libc::pipe(ends.as_mut_ptr()), 0, "could not open a pipe");
 
@@ -106,8 +101,8 @@ pub fn a_stdin_nothing_writes_to() -> ServerStdin {
     ServerStdin { environment, read_end, write_end, original }
 }
 
-/// The guard `a_stdin_nothing_writes_to` hands back. Holds the write end open for its whole
-/// life - a closed one would be an EOF, which is the very thing being stood against.
+/// Holds the write end open for its whole life - a closed one would be the EOF this exists
+/// to withhold.
 pub struct ServerStdin {
     #[allow(dead_code)]
     environment: RwLockWriteGuard<'static, ()>,

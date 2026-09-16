@@ -315,15 +315,11 @@ impl TaskRunAttemptDispatcher {
             .envs(&env)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            // Nulled for the reason the FLOWLITE_ namespace above is stripped: what the
-            // child gets is what flowlite states, not what the server happened to be
-            // started with. Inherited, a command that asks a question - a confirmation, an
-            // auth challenge, a missing argument - would block on a read nobody will answer
-            // while holding one of `max_running_attempts`, until `timeout_seconds` (an hour
-            // by default) killed it; and where serve runs in a terminal it would compete
-            // for the operator's keystrokes. A null stdin is an immediate EOF, which every
-            // well-behaved CLI reads as "not interactive". Nothing is lost: a task has no
-            // way to be given input in the first place.
+            // Nulled for the reason the FLOWLITE_ names above are stripped: the child gets
+            // what flowlite states, not what the server was started with. Inherited, a
+            // command that stops to ask something blocks on a read nobody answers, holding
+            // a slot until the timeout kills it; an EOF is what a CLI reads as
+            // non-interactive.
             .stdin(Stdio::null())
             // Its own process group, so a timeout or a stop can signal the command's whole
             // process tree rather than only the sh that flowlite spawned. The group id is
@@ -1398,11 +1394,8 @@ mod tests {
         assert!(after.started_at.is_none(), "a failed spawn left the attempt looking spawned");
     }
 
-    /// The child's stdin is flowlite's to state, not the server's to pass on. Under a stdin
-    /// nothing ever writes to - a terminal, in production - a command that read it would
-    /// block until the attempt timed out an hour later, holding a slot the whole time. With
-    /// it nulled the read is an immediate EOF, so `read` fails and the command carries on,
-    /// which is what the file it writes proves.
+    /// Spawned under a stdin nothing ever writes to - a terminal, in production - where a
+    /// command that inherited it would block until the attempt timed out an hour later.
     #[tokio::test]
     async fn a_command_that_reads_stdin_gets_eof_rather_than_the_servers_own() {
 
