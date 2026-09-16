@@ -90,7 +90,7 @@ const CONFIG_TOML: &str = r#"# flowlite configuration. Everything here has a def
 # poll_interval_seconds = 1       # how often a service looks for work itself
 # error_backoff_seconds = 5       # pause before a failed service restarts
 # reader_eof_timeout_seconds = 2  # wait for a finished attempt's output to end
-# max_stream_bytes = 1048576      # per stream, per attempt, then truncated
+# max_stream_bytes = 1048576      # per stream, per attempt: half its head, half its tail
 # read_buffer_bytes = 8192        # one read from a running command's pipe
 # max_running_attempts = 32       # running task attempts across every job, 0 for no limit
 

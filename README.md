@@ -661,9 +661,16 @@ go to stderr as text and the exit code carries the failure, which keeps
 ## Task output
 
 Every task's stdout and stderr are captured as it runs and kept per attempt, so a task that
-was retried keeps the output of each try. Past `max_stream_bytes` the command keeps running
-and the recording stops, with a `[flowlite: output truncated, exceeded N bytes]` marker
-where the rest would have been.
+was retried keeps the output of each try. `max_stream_bytes` is what one stream of one
+attempt may keep, spent from both ends: the first half is recorded as it arrives, and once
+that is full flowlite holds the most recent half instead, writing it out when the command
+ends. The command keeps running throughout — only the recording is bounded. A stream that
+stays inside the budget is kept whole and unmarked; one that goes over carries two
+`[flowlite: ...]` lines where the middle was, the second naming how many bytes went
+missing.
+
+So the start of a long log says what the command set out to do and the end says how it went,
+which is what a reader asking for the last few thousand bytes actually wants.
 
 ```bash
 flowlite job-run logs 42                # every task of run 42
@@ -952,7 +959,7 @@ default alone, and each key can also be set as an environment variable
 poll_interval_seconds = 1       # how often a service looks for work itself
 error_backoff_seconds = 5       # pause before a failed service restarts
 reader_eof_timeout_seconds = 2  # wait for a finished attempt's output to end
-max_stream_bytes = 1048576      # per stream, per attempt, then truncated
+max_stream_bytes = 1048576      # per stream, per attempt: half its head, half its tail
 read_buffer_bytes = 8192        # one read from a running command's pipe
 max_running_attempts = 32       # running task attempts across every job, 0 for no limit
 

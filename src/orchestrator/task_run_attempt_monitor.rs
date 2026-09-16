@@ -822,12 +822,15 @@ mod tests {
             db.task_run_attempt(task_run_attempt.id).await.status,
             TaskRunAttemptStatus::Succeeded,
         );
+        let max_stream_bytes = crate::app_config::AppConfig::default().orchestrator.max_stream_bytes;
+
         assert!(
-            stdout.ends_with(&format!(
-                "\n[flowlite: output truncated, exceeded {} bytes]\n",
-                crate::app_config::AppConfig::default().orchestrator.max_stream_bytes,
-            )),
+            stdout.contains(&format!("[flowlite: over {max_stream_bytes} bytes")),
             "the cap did not report itself",
+        );
+        assert!(
+            stdout.contains("bytes dropped]"),
+            "the tail was never flushed",
         );
     }
 

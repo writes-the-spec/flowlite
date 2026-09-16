@@ -22,7 +22,7 @@ pub struct TaskRunAttemptOutputChunk {
 /// the pass has to wait out, which is what takes the per-attempt cost off the pass.
 ///
 /// **Keeps reading after the cap.** The pipe is 64 KiB, so a reader that stopped would
-/// block the child on a full one for ever and turn a noisy task into a hung one. Recording
+/// block the child on a full one for ever and turn a noisy task into a hung one. Sending
 /// stops; reading does not.
 ///
 /// Ends only at EOF, which is what makes the channel closing mean "both readers are done".
@@ -30,9 +30,9 @@ pub struct TaskRunAttemptOutputChunk {
 /// holds the pipe — is aborted by `TaskRunAttemptChild::abort_readers`, since it will not
 /// return on its own.
 /// `[orchestrator]`'s `max_stream_bytes` is the most output one stream of one attempt
-/// records. Past it the reader keeps reading and stops recording, which bounds both the
-/// table and the memory in flight: the channel is unbounded, so the reader declining to
-/// send is the only thing that caps it.
+/// records, kept as a head and a tail — see `StreamCapture`. That bounds the table, and the
+/// memory in flight with it: the channel is unbounded, so what this reader declines to send
+/// is what caps it, and the tail it holds back is `max_stream_bytes / 2` at most.
 pub async fn read_task_run_attempt_stream<R>(
     mut reader: R,
     stream: TaskRunAttemptOutputStream,
@@ -44,18 +44,13 @@ where
 {
     let mut buf = vec![0u8; app_config.orchestrator.read_buffer_bytes];
     let mut carry: Vec<u8> = Vec::new();
-    let mut recorded: usize = 0;
-    let mut capped = false;
+    let mut capture = StreamCapture::new(app_config.orchestrator.max_stream_bytes);
 
     loop {
         let read = match reader.read(&mut buf).await {
             Ok(0) | Err(_) => break,
             Ok(read) => read,
         };
-
-        if capped {
-            continue;
-        }
 
         carry.extend_from_slice(&buf[..read]);
 
@@ -65,23 +60,20 @@ where
             continue;
         }
 
-        if send_within_cap(stream, &chunks, &mut recorded, &mut capped, content, &app_config).is_err() {
+        if record(stream, &chunks, &mut capture, content).is_err() {
             return;
         }
     }
 
     // Whatever is left is a sequence the stream ended in the middle of, which is garbage
     // rather than a boundary waiting for bytes that are never coming.
-    if !capped && !carry.is_empty() {
-        let _ = send_within_cap(
-            stream,
-            &chunks,
-            &mut recorded,
-            &mut capped,
-            char::REPLACEMENT_CHARACTER.to_string(),
-            &app_config,
-        );
+    if !carry.is_empty()
+        && record(stream, &chunks, &mut capture, char::REPLACEMENT_CHARACTER.to_string()).is_err()
+    {
+        return;
     }
+
+    flush_tail(stream, &chunks, capture);
 }
 
 
@@ -137,54 +129,143 @@ fn take_valid_utf8(carry: &mut Vec<u8>) -> String {
 }
 
 
-/// Sends what fits under the cap, and the marker once when it does not.
+/// One stream's budget, spent from both ends: the head is recorded as it arrives, and once
+/// that is full the reader holds a rolling tail of the same size instead, flushed when the
+/// stream ends.
+///
+/// The head alone was the whole budget until it wasn't enough: a reader asks for the last
+/// 20 000 bytes of what was recorded, so a command that wrote four megabytes with its answer
+/// on the final line handed back four megabytes in, neither the start nor the end. The start
+/// of a log says what a command set out to do and the end says how it went; the middle is
+/// what a reader can most afford to lose.
+///
+/// The tail is the one thing here held in memory rather than sent on, so it is what bounds
+/// this reader's footprint: half of `max_stream_bytes` per stream.
+struct StreamCapture {
+    max_bytes: usize,
+    head_room: usize,
+    tail_bytes: usize,
+    tail: String,
+    /// Everything past the head, whether or not it is still in the tail - the subtraction
+    /// that tells a reader how much went missing.
+    held: usize,
+    capped: bool,
+}
+
+impl StreamCapture {
+    fn new(max_stream_bytes: usize) -> Self {
+        let head = max_stream_bytes / 2;
+
+        StreamCapture {
+            max_bytes: max_stream_bytes,
+            head_room: head,
+            tail_bytes: max_stream_bytes - head,
+            tail: String::new(),
+            held: 0,
+            capped: false,
+        }
+    }
+}
+
+/// Sends what still fits in the head, and holds the rest in the tail.
 ///
 /// Errs only when the receiver is gone, which is the monitor having dropped this attempt's
-/// child — there is nothing left to record to, so the caller stops.
-fn send_within_cap(
+/// child - there is nothing left to record to, so the caller stops.
+fn record(
     stream: TaskRunAttemptOutputStream,
     chunks: &UnboundedSender<TaskRunAttemptOutputChunk>,
-    recorded: &mut usize,
-    capped: &mut bool,
+    capture: &mut StreamCapture,
     content: String,
-    app_config: &AppConfig,
 ) -> Result<(), ()> {
 
-    let max_stream_bytes = app_config.orchestrator.max_stream_bytes;
-
-    let room = max_stream_bytes.saturating_sub(*recorded);
-
-    if content.len() <= room {
-        *recorded += content.len();
+    if content.len() <= capture.head_room {
+        capture.head_room -= content.len();
 
         return chunks
             .send(TaskRunAttemptOutputChunk { stream, content })
             .map_err(|_| ());
     }
 
-    let head = truncate_at_char_boundary(&content, room);
+    let head = truncate_at_char_boundary(&content, capture.head_room);
 
     if !head.is_empty() {
-        *recorded += head.len();
+        capture.head_room -= head.len();
 
         chunks
             .send(TaskRunAttemptOutputChunk { stream, content: head.to_string() })
             .map_err(|_| ())?;
     }
 
-    *capped = true;
+    let rest = &content[head.len()..];
 
-    chunks
-        .send(TaskRunAttemptOutputChunk {
-            stream,
-            content: format!(
-                "\n[flowlite: output truncated, exceeded {} bytes]\n",
-                max_stream_bytes,
-            ),
-        })
-        .map_err(|_| ())
+    capture.held += rest.len();
+    capture.tail.push_str(rest);
+
+    trim_to_tail(&mut capture.tail, capture.tail_bytes);
+
+    // Only now is the stream known to be over its budget - up to here the tail has been
+    // holding everything past the head, and a stream that ends inside the budget is
+    // recorded whole, markers and all. Said as it happens rather than at the end, so
+    // somebody watching a running attempt is told why its output stopped instead of
+    // reading a log that simply breaks off.
+    if !capture.capped && capture.tail.len() < capture.held {
+        capture.capped = true;
+
+        chunks
+            .send(TaskRunAttemptOutputChunk {
+                stream,
+                content: format!(
+                    "\n[flowlite: over {} bytes, so the middle is dropped and the last {} \
+                     follow when the command ends]\n",
+                    capture.max_bytes,
+                    capture.tail_bytes,
+                ),
+            })
+            .map_err(|_| ())?;
+    }
+
+    Ok(())
 }
 
+/// Sends the tail the stream ended with, under a marker naming what fell out between the
+/// halves - the number that tells a reader whether they lost two kilobytes or two gigabytes.
+///
+/// A stream that stayed inside its budget has no marker: its tail is simply the rest of it,
+/// and what lands in the table is byte-for-byte what the command wrote.
+fn flush_tail(
+    stream: TaskRunAttemptOutputStream,
+    chunks: &UnboundedSender<TaskRunAttemptOutputChunk>,
+    capture: StreamCapture,
+) {
+
+    if capture.capped {
+        let _ = chunks.send(TaskRunAttemptOutputChunk {
+            stream,
+            content: format!("[flowlite: {} bytes dropped]\n", capture.held - capture.tail.len()),
+        });
+    }
+
+    if !capture.tail.is_empty() {
+        let _ = chunks.send(TaskRunAttemptOutputChunk { stream, content: capture.tail });
+    }
+}
+
+/// Drops from the front until at most `max` bytes are left, on a character boundary - the
+/// tail's own version of the cut `truncate_at_char_boundary` makes at the other end.
+fn trim_to_tail(tail: &mut String, max: usize) {
+
+    if tail.len() <= max {
+        return;
+    }
+
+    let cut_at = tail.len() - max;
+
+    let start = (cut_at..=tail.len())
+        .find(|&i| tail.is_char_boundary(i))
+        .unwrap_or(tail.len());
+
+    tail.drain(..start);
+}
 
 /// The longest prefix of at most `max` bytes that is still whole characters. Slicing on a
 /// byte count alone panics when it lands inside one.
@@ -284,39 +365,87 @@ mod tests {
         assert_eq!(read(bytes).await, "a\u{fffd}");
     }
 
-    /// The cap keeps the head and says so once.
+    /// A stream longer than the head but still inside the budget is recorded whole and
+    /// unmarked. The tail holds exactly what the head does not, so nothing is dropped and
+    /// there is nothing to say - the case a split budget could most easily have spoiled.
     #[tokio::test]
-    async fn the_cap_keeps_the_head_and_appends_the_marker() {
+    async fn a_stream_past_the_head_but_inside_the_budget_is_still_whole() {
 
-        let content = read(vec![b'x'; max_stream_bytes() + 4096]).await;
+        let content = read(vec![b'x'; max_stream_bytes() - 1]).await;
 
-        assert_eq!(
-            content,
-            format!(
-                "{}\n[flowlite: output truncated, exceeded {} bytes]\n",
-                "x".repeat(max_stream_bytes()),
-                max_stream_bytes(),
-            ),
+        assert_eq!(content, "x".repeat(max_stream_bytes() - 1));
+    }
+
+    /// The point of the whole thing: the end of an over-long stream survives. A command
+    /// that writes for an hour and then says how it went used to have the answer dropped,
+    /// because the head was the only half kept and a reader asks for the last bytes of it.
+    #[tokio::test]
+    async fn the_cap_keeps_the_head_and_the_tail_it_ended_with() {
+
+        let mut bytes = vec![b'h'; max_stream_bytes()];
+        bytes.extend_from_slice(&vec![b'm'; max_stream_bytes()]);
+        bytes.extend_from_slice(b"the answer\n");
+
+        let content = read(bytes).await;
+
+        assert!(content.starts_with(&"h".repeat(max_stream_bytes() / 2)), "the head was not kept");
+        assert!(content.ends_with("the answer\n"), "the tail was not kept");
+        assert!(!content.contains(&"m".repeat(max_stream_bytes())), "the middle was recorded");
+    }
+
+    /// Both halves of the budget, and no more: what is recorded is the cap plus the two
+    /// marker lines, however much was written.
+    #[tokio::test]
+    async fn the_two_halves_together_stay_inside_the_budget() {
+
+        let content = read(vec![b'x'; max_stream_bytes() * 4]).await;
+
+        let bytes: usize = content
+            .lines()
+            .filter(|line| !line.starts_with("[flowlite:"))
+            .map(str::len)
+            .sum();
+
+        assert_eq!(bytes, max_stream_bytes());
+    }
+
+    /// The count is the whole reason to say anything: it tells a reader whether they lost
+    /// two kilobytes or two gigabytes.
+    #[tokio::test]
+    async fn the_marker_names_how_many_bytes_went_missing() {
+
+        let written = max_stream_bytes() * 3;
+
+        let content = read(vec![b'x'; written]).await;
+
+        assert!(
+            content.contains(&format!("[flowlite: {} bytes dropped]", written - max_stream_bytes())),
+            "{}",
+            content.lines().filter(|line| line.starts_with("[flowlite:")).collect::<Vec<_>>().join(" / "),
         );
     }
 
-    /// The cap must not split a character in half to reach its byte count exactly.
+    /// Neither cut may split a character in half to reach its byte count exactly - the head
+    /// cutting forwards, the tail dropping from the front.
     #[tokio::test]
-    async fn the_cap_truncates_on_a_character_boundary() {
+    async fn neither_half_is_cut_inside_a_character() {
 
-        // Three-byte characters do not divide the cap, so the last one recorded straddles
-        // it and has to be dropped whole rather than sliced.
+        // Three-byte characters do not divide either half, so the character at each cut
+        // straddles it and has to go whole rather than be sliced.
         let mut bytes = Vec::new();
 
-        while bytes.len() < max_stream_bytes() + 4096 {
+        while bytes.len() < max_stream_bytes() * 2 {
             bytes.extend_from_slice("€".as_bytes());
         }
 
         let content = read(bytes).await;
-        let head = content.split('\n').next().unwrap();
 
-        assert!(head.chars().all(|c| c == '€'), "the cap sliced a character in half");
-        assert!(head.len() <= max_stream_bytes());
-        assert!(head.len() > max_stream_bytes() - 3);
+        for line in content.lines().filter(|line| !line.starts_with("[flowlite:")) {
+            assert!(line.chars().all(|c| c == '€'), "a character was sliced in half");
+        }
+
+        let head = content.lines().next().unwrap();
+        assert!(head.len() <= max_stream_bytes() / 2);
+        assert!(head.len() > max_stream_bytes() / 2 - 3);
     }
 }
