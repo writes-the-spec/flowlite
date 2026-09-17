@@ -303,10 +303,6 @@ mod tests {
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
         let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
 
-        // SAFETY: the environment is process-wide, and the write guard above is what makes
-        // this the only thread reading it until the variable is gone again.
-        unsafe { std::env::set_var("FLOWLITE_TASK_RUN_ATTEMPT_ID", attempt.id.to_string()) };
-
         let crud = db.crud.clone();
         let conn_pool = db.conn_pool.clone();
         let job_run_id = job_run.id;
@@ -343,7 +339,14 @@ mod tests {
             marked_mid_wait
         });
 
+        // Acquired before the variable is set, so nothing fallible runs inside the
+        // set/remove window below.
         let mut conn = db.conn_pool.acquire().await.unwrap();
+
+        // SAFETY: the environment is process-wide, and the write guard above is what makes
+        // this the only thread reading it until the variable is gone again.
+        unsafe { std::env::set_var("FLOWLITE_TASK_RUN_ATTEMPT_ID", attempt.id.to_string()) };
+
         let waited = wait_for_job_run(&db.crud, &mut conn, job_run.id, Duration::from_millis(5)).await;
 
         // SAFETY: the environment is process-wide, and the write guard above is what makes
@@ -404,11 +407,14 @@ mod tests {
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Succeeded).await;
         let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Succeeded).await;
 
+        // Acquired before the variable is set, so nothing fallible runs inside the
+        // set/remove window below.
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+
         // SAFETY: the environment is process-wide, and the write guard above is what makes
         // this the only thread reading it until the variable is gone again.
         unsafe { std::env::set_var("FLOWLITE_TASK_RUN_ATTEMPT_ID", attempt.id.to_string()) };
 
-        let mut conn = db.conn_pool.acquire().await.unwrap();
         let settled = wait_for_job_run(&db.crud, &mut conn, job_run.id, Duration::from_millis(1)).await;
 
         // SAFETY: the environment is process-wide, and the write guard above is what makes
@@ -433,11 +439,14 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Failed).await;
 
+        // Acquired before the variable is set, so nothing fallible runs inside the
+        // set/remove window below.
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+
         // SAFETY: the environment is process-wide, and the write guard above is what makes
         // this the only thread reading it until the variable is gone again.
         unsafe { std::env::set_var("FLOWLITE_TASK_RUN_ATTEMPT_ID", "not-a-number") };
 
-        let mut conn = db.conn_pool.acquire().await.unwrap();
         let settled = wait_for_job_run(&db.crud, &mut conn, job_run.id, Duration::from_millis(1)).await;
 
         // SAFETY: the environment is process-wide, and the write guard above is what makes
