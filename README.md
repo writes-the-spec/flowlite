@@ -98,8 +98,8 @@ tasks:
 A task runs only if everything it depends on succeeded; everything downstream of a task
 that did not succeed is skipped.
 
-A job's remaining keys have sections of their own: `parameters`, `env`, `secret_env` and
-`working_dir` under [Command inputs](#command-inputs), `timeout`, `max_retries` and
+A job's remaining keys have sections of their own: `parameters`, `env`, `secret_env`,
+`working_dir` and `stdin` under [Command inputs](#command-inputs), `timeout`, `max_retries` and
 `retry_delay` under [Timeouts and retries](#timeouts-and-retries), `on_failure` and
 `on_success` under [Run notifications](#run-notifications), `max_parallel_runs` under
 [Overlapping runs](#overlapping-runs), `limits` under
@@ -191,10 +191,11 @@ you removed. Retention reaps a deleted run like any other settled one.
 
 ## Command inputs
 
-A command is configured four ways — parameters declared on the job, environment variables
-set on the job or a task, environment variables resolved from a named secret, and a working
-directory — plus a handful of variables flowlite injects. All of them arrive as environment
-variables, since `sh -c <command>` inherits its environment like any process:
+A command is configured five ways — parameters declared on the job, environment variables
+set on the job or a task, environment variables resolved from a named secret, a working
+directory, and what it reads on stdin — plus a handful of variables flowlite injects. All
+but the last arrive as environment variables, since `sh -c <command>` inherits its
+environment like any process:
 
 ```yaml
 id: daily-etl
@@ -254,11 +255,47 @@ stripped from the child before the layers above are applied — a server started
 `FLOWLITE_SMTP__PASSWORD=...` does not hand that credential to every command it spawns.
 What a command is meant to have, flowlite injects by name.
 
-**A command's stdin is empty.** It is `/dev/null`, not the terminal or pipe `flowlite serve`
-was started with, so anything a command reads from it is an immediate end of input. A tool
-that stops to ask a question — a confirmation, an auth challenge, a missing argument — gets
-that answer at once and takes its non-interactive path, rather than waiting on a read nobody
-will answer until the attempt times out an hour later, holding a slot the whole time.
+**A command's stdin is empty unless the task declares one.** By default it is `/dev/null`,
+not the terminal or pipe `flowlite serve` was started with, so anything a command reads from
+it is an immediate end of input. A tool that stops to ask a question — a confirmation, an
+auth challenge, a missing argument — gets that answer at once and takes its non-interactive
+path, rather than waiting on a read nobody will answer until the attempt times out an hour
+later, holding a slot the whole time. `stdin:` below is how a task supplies input on
+purpose; it does not reopen the terminal.
+
+### Standard input
+
+`stdin:` is what the command reads on its standard input. flowlite writes it, closes the
+pipe, and the command reads an ordinary end of input:
+
+```yaml
+tasks:
+  - id: triage
+    command: claude -p
+    stdin: |
+      The nightly build failed. If `cargo test` reports a borrow
+      checker error, name the function and quote the line. The budget is $200
+      of engineer time, so don't speculate.
+```
+
+**Nothing but the command reads it.** That is the whole point of the key, and the reason to
+reach for it rather than putting the same text in `command:`. Written there, `sh -c` would
+read it first: the backticks would run `cargo test` and splice its output into the middle,
+`$200` would expand to `00`, and an apostrophe would end the quoting. None of the three
+fails loudly — the task exits 0 having asked a question nobody wrote.
+
+A prompt, a patch, a SQL script or a JSON document therefore goes here as written, with no
+escaping and no second quoting rule to learn. Its other benefit is in review: the text is
+prose in the YAML, so a diff shows a changed sentence rather than a changed escape sequence.
+
+It is part of the [snapshot](#reruns), like the command it feeds, so a rerun hands the
+process the same bytes however the YAML has been reworded since, and the run and task pages
+show what a given run was actually given. Declaring nothing is the default and means
+`/dev/null` exactly as before.
+
+The value is a fixed string: there is no `${...}` interpolation in it, for the reason
+`env:` has none. What varies per run belongs in the environment — the command composes
+`FLOWLITE_PARAM_*` or a `$FLOWLITE_SCHEDULED_AT` into its input itself if it needs to.
 
 ### Injected variables
 

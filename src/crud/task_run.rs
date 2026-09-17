@@ -90,6 +90,7 @@ pub struct InsertTaskRunDataInput {
     pub job_id: String,
     pub task_id: String,
     pub command: String,
+    pub stdin: String,
     pub depends_on: Vec<String>,
     pub limits: Vec<String>,
     pub timeout: u32,
@@ -168,6 +169,9 @@ pub struct TaskRun {
     pub job_id: String,
     pub task_id: String,
     pub command: String,
+    /// What the command reads on stdin - part of the snapshot, so a rerun feeds the
+    /// process the same bytes however the YAML has moved since. See `JobYamlTask::stdin`.
+    pub stdin: String,
     pub depends_on: sqlx::types::Json<Vec<String>>,
     pub timeout: u32,
     pub max_retries: u32,
@@ -192,12 +196,13 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO task_run (job_run_id, job_id, task_id, command, depends_on, limits, timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO task_run (job_run_id, job_id, task_id, command, stdin, depends_on, limits, timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(data.input.job_run_id)
             .bind(&data.input.job_id)
             .bind(&data.input.task_id)
             .bind(&data.input.command)
+            .bind(&data.input.stdin)
             .bind(sqlx::types::Json(&data.input.depends_on))
             .bind(sqlx::types::Json(&data.input.limits))
             .bind(data.input.timeout)
@@ -227,7 +232,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, job_run_id, job_id, task_id, command, depends_on, limits, timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, started_at, finished_at, status FROM task_run WHERE 1=1"
+            "SELECT id, job_run_id, job_id, task_id, command, stdin, depends_on, limits, timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, started_at, finished_at, status FROM task_run WHERE 1=1"
         );
 
         if let Some(id) = data.filter.id {
@@ -392,6 +397,7 @@ mod tests {
             job_id: "job".to_string(),
             task_id: "task".to_string(),
             command: "sh -c true".to_string(),
+            stdin: String::new(),
             depends_on: sqlx::types::Json(Vec::new()),
             limits: sqlx::types::Json(Vec::new()),
             timeout: 60,
@@ -431,6 +437,7 @@ mod tests {
                     job_id: "job".to_string(),
                     task_id: "task".to_string(),
                     command: "true".to_string(),
+                    stdin: String::new(),
                     depends_on: Vec::new(),
                     limits: vec!["warehouse".to_string(), "api".to_string()],
                     timeout: 3600,
@@ -447,6 +454,26 @@ mod tests {
         let task_run = db.task_run(id).await;
 
         assert_eq!(task_run.limits.0, vec!["warehouse".to_string(), "api".to_string()]);
+    }
+
+    /// The same round trip `limits_are_written_and_read_back` makes, for the same reason:
+    /// a column named in the INSERT but missing from the SELECT list stores the bytes and
+    /// hands back an empty string for ever, which would spawn every command with no input
+    /// and no error anywhere.
+    #[tokio::test]
+    async fn stdin_is_written_and_read_back() {
+
+        let db = crate::test_support::TestDb::new().await;
+
+        let job_run = db.insert_job_run(crate::crud::job_run::JobRunStatus::Running).await;
+
+        let task_run = db.insert_task_run_for_command_with_stdin(
+            job_run.id,
+            "cat",
+            "a prompt\nover two lines\n",
+        ).await;
+
+        assert_eq!(task_run.stdin, "a prompt\nover two lines\n");
     }
 
     /// A task run claiming nothing carries an empty list, not a null - the same value the

@@ -101,6 +101,7 @@ impl CRUD {
                     retry_delay: task_run.retry_delay,
                     env: task_run.env.0.clone(),
                     secret_env: task_run.secret_env.0.clone(),
+                    stdin: task_run.stdin.clone(),
                     working_dir: task_run.working_dir.clone(),
                 })
                 .collect(),
@@ -284,5 +285,42 @@ mod tests {
         // Open again, so the rerun is judged on its own outcome rather than inheriting one.
         assert_eq!(notifications[0].status, JobRunNotificationStatus::Pending);
         assert_eq!(notifications[0].sent_at, None);
+    }
+
+    /// Part of the snapshot like the command it feeds, and for the same reason: a prompt
+    /// the YAML has since reworded is not what run 42 asked, and a rerun that read today's
+    /// file would answer a different question while claiming to replay that run.
+    #[tokio::test]
+    async fn a_rerun_replays_the_original_stdin() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Failed).await;
+
+        db.insert_task_run_for_command_with_stdin(
+            job_run.id,
+            "cat",
+            "the prompt as it was submitted\n",
+        ).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id).await.unwrap();
+
+        let task_runs = db.crud.select_task_runs(
+            &*db.conn_pool,
+            &crate::crud::task_run::SelectTaskRunsData {
+                filter: crate::crud::task_run::SelectTaskRunsDataFilter {
+                    id: None,
+                    job_run_id: Some(rerun_id),
+                    job_id: None,
+                    task_id: None,
+                    status: None,
+                },
+                sort: None,
+            },
+        ).await.unwrap();
+
+        assert_eq!(task_runs.len(), 1);
+        assert_eq!(task_runs[0].stdin, "the prompt as it was submitted\n");
     }
 }

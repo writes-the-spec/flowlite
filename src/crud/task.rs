@@ -9,6 +9,7 @@ pub struct InsertTaskDataInput {
     pub job_id: String,
     pub description: String,
     pub command: String,
+    pub stdin: String,
     pub depends_on: Vec<String>,
     pub limits: Vec<String>,
     pub timeout: u32,
@@ -50,6 +51,8 @@ pub struct Task {
     pub job_id: String,
     pub description: String,
     pub command: String,
+    /// What the command reads on stdin, empty for nothing at all. See `JobYamlTask::stdin`.
+    pub stdin: String,
     pub depends_on: sqlx::types::Json<Vec<String>>,
     /// Named concurrency limits this task claims, on top of whatever its job claims. See
     /// `JobYamlTask::limits`.
@@ -70,13 +73,14 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         sqlx::query(
-            "INSERT INTO mem.task (row_id, task_id, job_id, description, command, depends_on, limits, timeout, max_retries, retry_delay, env, secret_env, working_dir) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO mem.task (row_id, task_id, job_id, description, command, stdin, depends_on, limits, timeout, max_retries, retry_delay, env, secret_env, working_dir) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(data.input.row_id as i64)
         .bind(&data.input.task_id)
         .bind(&data.input.job_id)
         .bind(&data.input.description)
         .bind(&data.input.command)
+        .bind(&data.input.stdin)
         .bind(sqlx::types::Json(&data.input.depends_on))
         .bind(sqlx::types::Json(&data.input.limits))
         .bind(&data.input.timeout)
@@ -95,7 +99,7 @@ impl CRUD {
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
-        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT task_id, job_id, description, command, depends_on, limits, timeout, max_retries, retry_delay, env, secret_env, working_dir FROM mem.task WHERE 1=1");
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("SELECT task_id, job_id, description, command, stdin, depends_on, limits, timeout, max_retries, retry_delay, env, secret_env, working_dir FROM mem.task WHERE 1=1");
 
         if let Some(task_id) = &data.filter.task_id {
             query_builder.push(" AND task_id = ");

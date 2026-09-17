@@ -221,6 +221,7 @@ impl CRUD {
                     job_id: job_yaml.id.clone(),
                     description: task_yaml.description,
                     command: task_yaml.command,
+                    stdin: task_yaml.stdin,
                     depends_on: task_yaml.depends_on.clone(),
                     limits: task_yaml.limits.clone(),
                     timeout: task_yaml.timeout

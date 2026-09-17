@@ -11,6 +11,11 @@ pub struct JobYamlTask {
     #[serde(default)]
     pub description: String,
     pub command: String,
+    /// What the command reads on stdin, empty for nothing at all. Given to the process
+    /// verbatim, so a prompt or a document is written as YAML text rather than escaped
+    /// through `command:` and expanded by the shell on its way past.
+    #[serde(default)]
+    pub stdin: String,
     #[serde(default)]
     pub depends_on: Vec<String>,
     /// Named concurrency limits this claims, resolved against [concurrency_limits] in
@@ -425,5 +430,42 @@ tasks:
 
         assert!(job.limits.is_empty());
         assert!(job.tasks[0].limits.is_empty());
+    }
+
+    /// A block scalar is what makes `stdin:` worth having: the text arrives as written,
+    /// newlines and all, where the same prompt inside `command:` would have to survive
+    /// shell quoting on its way to the process.
+    #[test]
+    fn stdin_is_parsed_as_the_text_it_was_written_as() {
+        let job = parse("
+id: triage
+name: Triage
+tasks:
+  - id: ask
+    command: claude -p
+    stdin: |
+      The nightly build failed.
+      Name the function at fault.
+").unwrap();
+
+        assert_eq!(
+            job.tasks[0].stdin,
+            "The nightly build failed.\nName the function at fault.\n",
+        );
+    }
+
+    /// Not declaring it is the default and means no input at all - an empty string rather
+    /// than an absent field, so the spawn has one state to read rather than two.
+    #[test]
+    fn stdin_defaults_to_empty_when_not_declared() {
+        let job = parse("
+id: triage
+name: Triage
+tasks:
+  - id: ask
+    command: ./run.sh
+").unwrap();
+
+        assert!(job.tasks[0].stdin.is_empty());
     }
 }

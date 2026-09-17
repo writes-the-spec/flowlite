@@ -14,6 +14,7 @@ use crate::poller::Service;
 use crate::signals::Signals;
 use anyhow::Context;
 use chrono::{TimeDelta, Utc};
+use tokio::io::AsyncWriteExt;
 
 
 /// Picks up queued task run attempts and settles each one as skipped, or as running by
@@ -315,12 +316,13 @@ impl TaskRunAttemptDispatcher {
             .envs(&env)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            // Nulled for the reason the FLOWLITE_ names above are stripped: the child gets
-            // what flowlite states, not what the server was started with. Inherited, a
-            // command that stops to ask something blocks on a read nobody answers, holding
-            // a slot until the timeout kills it; an EOF is what a CLI reads as
-            // non-interactive.
-            .stdin(Stdio::null())
+            // Nulled unless the task declared `stdin:`, for the reason the FLOWLITE_ names
+            // above are stripped: the child gets what flowlite states, not what the server
+            // was started with. Inherited, a command that stops to ask something blocks on
+            // a read nobody answers, holding a slot until the timeout kills it; an EOF is
+            // what a CLI reads as non-interactive - which is what an empty `stdin:` still
+            // gets, since a pipe closed without a byte in it ends the same way.
+            .stdin(if task_run.stdin.is_empty() { Stdio::null() } else { Stdio::piped() })
             // Its own process group, so a timeout or a stop can signal the command's whole
             // process tree rather than only the sh that flowlite spawned. The group id is
             // this child's pid; TaskRunAttemptMonitor kills by it.
@@ -394,6 +396,24 @@ impl TaskRunAttemptDispatcher {
             .ok_or_else(|| anyhow::anyhow!("Failed to get stdout of task: {}", task_run_attempt.task_id))?;
         let stderr = child.stderr.take()
             .ok_or_else(|| anyhow::anyhow!("Failed to get stderr of task: {}", task_run_attempt.task_id))?;
+
+        // Written from a task of its own rather than here. A pipe holds about 64KB, so a
+        // command that reads its input slowly - or does some work before reading any of it
+        // - would otherwise block this poller pass for as long as it took, with every
+        // other attempt waiting behind it. The task needs no handle kept the way the
+        // readers do: a write ends itself, either at the last byte or at the broken pipe a
+        // departing child leaves, where a reader blocks for ever on an EOF that is not
+        // coming.
+        if let Some(mut stdin) = child.stdin.take() {
+
+            let bytes = task_run.stdin.clone().into_bytes();
+
+            tokio::spawn(async move {
+                // Dropped at the end of the write, and that close is the EOF the command
+                // reads. Held open, a command that reads to end of input never gets there.
+                let _ = stdin.write_all(&bytes).await;
+            });
+        }
 
         let times_out_at = started_at + TimeDelta::seconds(task_run.timeout as i64);
 
@@ -1421,6 +1441,105 @@ mod tests {
         db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
 
         assert_eq!(read_command_file(&seen_path).await, "read exited 1");
+    }
+
+    /// The other half of the rule above: nulled unless the task asked for input, fed
+    /// verbatim when it did. `a_stdin_nothing_writes_to` stands in for the terminal a
+    /// server is started from, so this also holds that what the command reads is what
+    /// flowlite wrote rather than anything the server inherited.
+    #[tokio::test]
+    async fn a_task_run_declaring_stdin_feeds_it_to_the_command() {
+
+        let _stdin = a_stdin_nothing_writes_to();
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let seen_path = db.data_dir().join("seen.txt");
+
+        let task_run = db.insert_task_run_for_command_with_stdin(
+            job_run.id,
+            &format!("cat > {}", seen_path.display()),
+            "a prompt\nover two lines\n",
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
+
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(read_command_file(&seen_path).await, "a prompt\nover two lines");
+    }
+
+    /// The whole point of the key. Written into `command:` this text would be read by the
+    /// `sh -c` the command runs under: the backticks would run `date` and splice its output
+    /// in, and `$HOME` would be substituted - silently, since neither is an error. Handed
+    /// to the process on a pipe, nothing reads it but the command.
+    #[tokio::test]
+    async fn stdin_reaches_the_command_without_the_shell_reading_it() {
+
+        let _stdin = a_stdin_nothing_writes_to();
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let seen_path = db.data_dir().join("seen.txt");
+
+        let task_run = db.insert_task_run_for_command_with_stdin(
+            job_run.id,
+            &format!("cat > {}", seen_path.display()),
+            "run `date` against $HOME and \"quote\" it",
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
+
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            read_command_file(&seen_path).await,
+            "run `date` against $HOME and \"quote\" it",
+        );
+    }
+
+    /// Why the write is a task of its own. A pipe holds about 64KB, so writing this much
+    /// from the poller pass would block it until the command drained the pipe - and this
+    /// command does not read a byte until it has slept, which is what a real one doing some
+    /// work before reading its input looks like. Handled inline, the pass would not return
+    /// until the sleep was over, with every other queued attempt waiting behind it.
+    #[tokio::test]
+    async fn stdin_larger_than_a_pipe_buffer_does_not_hold_up_the_pass() {
+
+        let _stdin = a_stdin_nothing_writes_to();
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let seen_path = db.data_dir().join("seen.txt");
+
+        let stdin = "x".repeat(256 * 1024);
+
+        let task_run = db.insert_task_run_for_command_with_stdin(
+            job_run.id,
+            &format!("sleep 1; wc -c > {}", seen_path.display()),
+            &stdin,
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
+
+        let started = std::time::Instant::now();
+
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
+
+        let handled_in = started.elapsed();
+
+        assert!(
+            handled_in < std::time::Duration::from_secs(1),
+            "the pass waited {handled_in:?} for the command to drain its stdin",
+        );
+
+        assert_eq!(read_command_file(&seen_path).await, stdin.len().to_string());
     }
 
     /// Recorded on the row, because `TaskRunAttemptChildren` is memory: after a restart the

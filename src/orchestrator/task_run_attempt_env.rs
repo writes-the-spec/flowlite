@@ -141,6 +141,7 @@ mod tests {
             job_id: "daily-etl".to_string(),
             task_id: "extract".to_string(),
             command: "true".to_string(),
+            stdin: String::new(),
             depends_on: sqlx::types::Json(Vec::new()),
             limits: sqlx::types::Json(Vec::new()),
             timeout: 3600,

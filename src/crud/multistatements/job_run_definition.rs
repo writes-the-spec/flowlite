@@ -43,6 +43,7 @@ pub(super) struct JobRunNotificationDefinition {
 pub(super) struct JobRunTaskDefinition {
     pub(super) task_id: String,
     pub(super) command: String,
+    pub(super) stdin: String,
     pub(super) depends_on: Vec<String>,
     pub(super) limits: Vec<String>,
     pub(super) timeout: u32,
@@ -132,6 +133,7 @@ pub(super) fn job_run_task_definition(
     JobRunTaskDefinition {
         task_id: task.task_id.clone(),
         command: task.command.clone(),
+        stdin: task.stdin.clone(),
         depends_on: task.depends_on.0.clone(),
         limits: union_job_and_task_limits(&job.limits.0, &task.limits.0),
         timeout: task.timeout,
@@ -211,6 +213,7 @@ impl CRUD {
                         job_id: definition.job_id.clone(),
                         task_id: task.task_id.clone(),
                         command: task.command.clone(),
+                        stdin: task.stdin.clone(),
                         depends_on: task.depends_on.clone(),
                         limits: task.limits.clone(),
                         timeout: task.timeout,
@@ -400,6 +403,7 @@ mod tests {
             retry_delay: 60,
             env: sqlx::types::Json(env),
             secret_env: sqlx::types::Json(secret_env),
+            stdin: String::new(),
             working_dir: String::new(),
         }
     }

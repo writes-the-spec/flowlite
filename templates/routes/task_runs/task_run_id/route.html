@@ -124,6 +124,17 @@
         <code class="cmd">{{ task_run.command }}</code>
     </div>
 
+    {% if !task_run.stdin.is_empty() %}
+    <div class="section">
+        <div class="section__head">
+            <h2 class="section__title">Standard input</h2>
+            <span class="section__note">fed to the command verbatim, then closed</span>
+        </div>
+
+        <code class="cmd">{{ task_run.stdin }}</code>
+    </div>
+    {% endif %}
+
     <div class="section">
         <div class="section__head">
             <h2 class="section__title">Output</h2>

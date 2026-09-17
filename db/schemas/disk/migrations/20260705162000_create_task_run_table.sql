@@ -4,6 +4,7 @@ CREATE TABLE task_run (
     job_id TEXT NOT NULL,
     task_id TEXT NOT NULL,
     command TEXT NOT NULL,
+    stdin TEXT NOT NULL,
     depends_on TEXT NOT NULL,
     timeout INTEGER NOT NULL,
     max_retries INTEGER NOT NULL,

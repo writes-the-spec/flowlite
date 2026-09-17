@@ -599,6 +599,7 @@ mod tests {
             retry_delay: 60,
             env: sqlx::types::Json(BTreeMap::new()),
             secret_env: sqlx::types::Json(BTreeMap::new()),
+            stdin: String::new(),
             working_dir: String::new(),
             created_at: Utc::now(),
             started_at: Some(Utc::now()),

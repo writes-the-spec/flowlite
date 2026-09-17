@@ -622,6 +622,7 @@ impl TestDb {
                     job_id: "job".to_string(),
                     task_id: format!("task-{}", uuid::Uuid::new_v4()),
                     command: command.to_string(),
+                    stdin: String::new(),
                     depends_on: Vec::new(),
                     limits: Vec::new(),
                     timeout,
@@ -655,6 +656,7 @@ impl TestDb {
                     job_id: "job".to_string(),
                     task_id: format!("task-{}", uuid::Uuid::new_v4()),
                     command: command.to_string(),
+                    stdin: String::new(),
                     depends_on: Vec::new(),
                     limits: Vec::new(),
                     timeout: 3600,
@@ -663,6 +665,39 @@ impl TestDb {
                     env,
                     secret_env: BTreeMap::new(),
                     working_dir: working_dir.to_string(),
+                    status: TaskRunStatus::Running,
+                },
+            },
+        ).await.unwrap();
+
+        self.task_run(id).await
+    }
+
+    /// A task run carrying a command plus the bytes it should read on stdin.
+    pub async fn insert_task_run_for_command_with_stdin(
+        &self,
+        job_run_id: i64,
+        command: &str,
+        stdin: &str,
+    ) -> TaskRun {
+
+        let id = self.crud.insert_task_run(
+            &*self.conn_pool,
+            &InsertTaskRunData {
+                input: InsertTaskRunDataInput {
+                    job_run_id,
+                    job_id: "job".to_string(),
+                    task_id: format!("task-{}", uuid::Uuid::new_v4()),
+                    command: command.to_string(),
+                    stdin: stdin.to_string(),
+                    depends_on: Vec::new(),
+                    limits: Vec::new(),
+                    timeout: 3600,
+                    max_retries: 0,
+                    retry_delay: 60,
+                    env: BTreeMap::new(),
+                    secret_env: BTreeMap::new(),
+                    working_dir: String::new(),
                     status: TaskRunStatus::Running,
                 },
             },
@@ -689,6 +724,7 @@ impl TestDb {
                     job_id: "job".to_string(),
                     task_id: format!("task-{}", uuid::Uuid::new_v4()),
                     command: command.to_string(),
+                    stdin: String::new(),
                     depends_on: Vec::new(),
                     limits: Vec::new(),
                     timeout: 3600,
@@ -717,6 +753,7 @@ impl TestDb {
                     job_id: "job".to_string(),
                     task_id: format!("task-{}", uuid::Uuid::new_v4()),
                     command: "true".to_string(),
+                    stdin: String::new(),
                     depends_on: depends_on.iter().map(|id| id.to_string()).collect(),
                     limits: Vec::new(),
                     timeout: 3600,
@@ -745,6 +782,7 @@ impl TestDb {
                     job_id: "job".to_string(),
                     task_id: format!("task-{}", uuid::Uuid::new_v4()),
                     command: "true".to_string(),
+                    stdin: String::new(),
                     depends_on: Vec::new(),
                     limits,
                     timeout: 3600,
@@ -772,6 +810,7 @@ impl TestDb {
                     job_id: "job".to_string(),
                     task_id: task_id.to_string(),
                     command: "true".to_string(),
+                    stdin: String::new(),
                     depends_on: Vec::new(),
                     limits: Vec::new(),
                     timeout: 3600,
@@ -804,6 +843,7 @@ impl TestDb {
                     job_id: "job".to_string(),
                     task_id: format!("task-{}", uuid::Uuid::new_v4()),
                     command: "true".to_string(),
+                    stdin: String::new(),
                     depends_on: Vec::new(),
                     limits: Vec::new(),
                     timeout: 3600,

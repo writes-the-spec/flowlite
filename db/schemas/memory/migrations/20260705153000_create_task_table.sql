@@ -4,6 +4,7 @@ CREATE TABLE task (
     job_id TEXT NOT NULL,
     description TEXT NOT NULL,
     command TEXT NOT NULL,
+    stdin TEXT NOT NULL,
     depends_on TEXT NOT NULL,
     timeout INTEGER NOT NULL,
     max_retries INTEGER NOT NULL,
