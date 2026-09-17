@@ -621,6 +621,7 @@ mod tests {
             attempt: number,
             status: TaskRunAttemptStatus::Failed,
             process_group_id: None,
+            output: String::new(),
         }
     }
 

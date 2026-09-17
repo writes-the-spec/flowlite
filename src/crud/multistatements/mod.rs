@@ -17,3 +17,4 @@ pub mod retention_candidates;
 pub mod secret_env;
 pub mod skip_job_run;
 pub mod submit_job;
+pub mod task_run_inputs;

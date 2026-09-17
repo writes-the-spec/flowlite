@@ -1,5 +1,6 @@
-//! `get_job_run`: one job run and the task runs under it, as `job-run get --json` prints
-//! them, optionally after waiting for the run to settle.
+//! `get_job_run`: one job run and the task runs under it, each carrying the result its
+//! successful attempt wrote, as `job-run get --json` prints them - optionally after
+//! waiting for the run to settle.
 
 use std::sync::Arc;
 
@@ -12,7 +13,7 @@ use serde::Deserialize;
 use crate::crud::CRUD;
 use crate::mcp::wait::{clamp_wait_seconds, wait_for_settled_job_run};
 use crate::mcp::McpServer;
-use crate::shared::job_run::JobRunDetail;
+use crate::shared::job_run::{build_job_run_detail, JobRunDetail};
 use crate::shared::wait::ensure_data_dir_is_served;
 use crate::toolkit::Toolkit;
 
@@ -32,7 +33,7 @@ pub struct GetJobRun {
 #[tool_router(router = get_job_run_router, vis = "pub(super)")]
 impl McpServer {
 
-    /// Show one job run and the task runs under it.
+    /// Show one job run and the task runs under it, each with what it produced.
     #[tool]
     async fn get_job_run(&self, Parameters(args): Parameters<GetJobRun>) -> CallToolResult {
         match get_job_run_detail(&self.toolkit, args.job_run_id, args.wait_seconds).await {
@@ -73,5 +74,5 @@ async fn get_job_run_detail(
 
     let (job_run, task_runs) = crud.select_job_run_with_task_runs(&mut conn, job_run_id).await?;
 
-    Ok(JobRunDetail { job_run, task_runs })
+    build_job_run_detail(&crud, &mut conn, job_run, task_runs).await
 }

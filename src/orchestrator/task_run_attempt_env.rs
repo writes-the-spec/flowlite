@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use crate::crud::job_run::JobRun;
 use crate::crud::task_run::TaskRun;
 use crate::crud::task_run_attempt::TaskRunAttempt;
+use crate::run_dir::task_output_path;
 
 
 /// The environment variables one attempt's command runs with, over the environment
@@ -16,7 +18,14 @@ use crate::crud::task_run_attempt::TaskRunAttempt;
 /// The four layers are applied in the order the design fixes: the task's own env:, then
 /// its resolved secrets, then the run's parameters, then the run metadata. A secret comes
 /// after env: so a plain value can never shadow a credential, and metadata is last so
-/// nothing a user writes can make a command lie about which run it belongs to.
+/// nothing a user writes can make a command lie about which run it belongs to. The result
+/// channel - `FLOWLITE_TASK_OUTPUT` and one `FLOWLITE_INPUT_*` per dependency - is part of
+/// that last layer, for the same reason: a task must not be able to forge where its own
+/// result goes or where another task's came from.
+///
+/// `inputs` is the path of each dependency's result, keyed by that dependency's task id,
+/// and holds an entry only for a dependency that produced one - so a task asks whether it
+/// got a result by asking whether the variable is set.
 ///
 /// `secrets` is the whole configured map, keyed by secret name rather than by variable
 /// name - `task_run.secret_env` is the other half, variable name to secret name, and the
@@ -28,6 +37,8 @@ pub fn build_task_run_attempt_env(
     job_run: &JobRun,
     task_run_attempt: &TaskRunAttempt,
     data_dir: &str,
+    job_run_dir: &Path,
+    inputs: &BTreeMap<String, PathBuf>,
     secrets: &BTreeMap<String, String>,
 ) -> anyhow::Result<BTreeMap<String, String>> {
 
@@ -90,11 +101,34 @@ pub fn build_task_run_attempt_env(
     // this write lands after the task's values and overwrites whatever was there.
     env.insert("FLOWLITE_SCHEDULED_AT".to_string(), job_run.scheduled_at.to_rfc3339());
 
+    // Named for the attempt, not the task: a retry must not be handed the path the attempt
+    // before it wrote to, or a retry that writes nothing inherits that result.
+    env.insert(
+        "FLOWLITE_TASK_OUTPUT".to_string(),
+        task_output_path(job_run_dir, &task_run.task_id, task_run_attempt.attempt)
+            .to_string_lossy()
+            .into_owned(),
+    );
+
+    for (task_id, path) in inputs {
+        env.insert(task_input_env_name(task_id), path.to_string_lossy().into_owned());
+    }
+
     Ok(env)
 }
 
 fn parameter_env_name(name: &str) -> String {
     format!("FLOWLITE_PARAM_{}", name.to_ascii_uppercase())
+}
+
+/// The variable a task reads one dependency's result path from.
+///
+/// A hyphen becomes an underscore because a variable name cannot hold one. That makes
+/// `load-raw` and `load_raw` the same name, which the YAML layer refuses in one job - see
+/// the copy of this function in `src/yaml_models/job_yaml.rs`, which is where a task id is
+/// checked against what it will have to be here.
+pub fn task_input_env_name(task_id: &str) -> String {
+    format!("FLOWLITE_INPUT_{}", task_id.to_ascii_uppercase().replace('-', "_"))
 }
 
 #[cfg(test)]
@@ -104,6 +138,16 @@ mod tests {
     use crate::crud::job_run::JobRunStatus;
     use crate::crud::task_run::TaskRunStatus;
     use crate::crud::task_run_attempt::TaskRunAttemptStatus;
+
+    /// The run directory the tests below build paths under - `job_run` is run 7, and
+    /// `run_dir::job_run_dir` is the function that really derives this.
+    fn run_dir() -> PathBuf {
+        PathBuf::from("/srv/flowlite/.flowlite/runs/7")
+    }
+
+    fn no_inputs() -> BTreeMap<String, PathBuf> {
+        BTreeMap::new()
+    }
 
     fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
@@ -178,6 +222,7 @@ mod tests {
             finished_at: None,
             status: TaskRunAttemptStatus::Queued,
             process_group_id: None,
+            output: String::new(),
         }
     }
 
@@ -188,6 +233,8 @@ mod tests {
             &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &BTreeMap::new(),
         ).unwrap();
 
@@ -204,6 +251,8 @@ mod tests {
             &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &BTreeMap::new(),
         ).unwrap();
 
@@ -217,6 +266,8 @@ mod tests {
             &job_run(map(&[("region", "us")]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &BTreeMap::new(),
         ).unwrap();
 
@@ -232,6 +283,8 @@ mod tests {
             &job_run(map(&[("region", "us")]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &BTreeMap::new(),
         ).unwrap();
 
@@ -247,6 +300,8 @@ mod tests {
             &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &BTreeMap::new(),
         ).unwrap();
 
@@ -263,6 +318,8 @@ mod tests {
             &job_run(map(&[("job_run_id", "999")]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &BTreeMap::new(),
         ).unwrap();
 
@@ -277,6 +334,8 @@ mod tests {
             &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &BTreeMap::new(),
         ).unwrap();
 
@@ -299,6 +358,8 @@ mod tests {
             &job_run(map(&[]), scheduled_at),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &BTreeMap::new(),
         ).unwrap();
 
@@ -319,6 +380,8 @@ mod tests {
             &job_run(map(&[]), scheduled_at),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &BTreeMap::new(),
         ).unwrap();
 
@@ -340,12 +403,117 @@ mod tests {
             &job_run(map(&[]), scheduled_at),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &BTreeMap::new(),
         ).unwrap();
 
         assert_eq!(
             env.get("FLOWLITE_SCHEDULED_AT").unwrap(),
             &scheduled_at.to_rfc3339(),
+        );
+    }
+
+    /// Named for the attempt rather than the task, so a retry cannot be handed the path
+    /// the attempt before it wrote to.
+    #[test]
+    fn the_output_path_names_the_task_and_this_attempt() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[])),
+            &job_run(map(&[]), fixed_scheduled_at()),
+            &task_run_attempt(),
+            "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
+            &BTreeMap::new(),
+        ).unwrap();
+
+        assert_eq!(
+            env.get("FLOWLITE_TASK_OUTPUT").unwrap(),
+            "/srv/flowlite/.flowlite/runs/7/.output/extract.2",
+        );
+    }
+
+    /// The result channel is part of the metadata layer, so a task cannot redirect where
+    /// its own result is read from by declaring the name itself.
+    #[test]
+    fn a_task_env_value_for_the_output_path_is_overwritten() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[("FLOWLITE_TASK_OUTPUT", "/tmp/somewhere-else")])),
+            &job_run(map(&[]), fixed_scheduled_at()),
+            &task_run_attempt(),
+            "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
+            &BTreeMap::new(),
+        ).unwrap();
+
+        assert_eq!(
+            env.get("FLOWLITE_TASK_OUTPUT").unwrap(),
+            "/srv/flowlite/.flowlite/runs/7/.output/extract.2",
+        );
+    }
+
+    #[test]
+    fn a_dependencys_result_is_injected_as_a_path_under_its_task_id() {
+        let inputs = BTreeMap::from([
+            ("plan".to_string(), PathBuf::from("/srv/flowlite/.flowlite/runs/7/.output/plan.1")),
+        ]);
+
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[])),
+            &job_run(map(&[]), fixed_scheduled_at()),
+            &task_run_attempt(),
+            "/srv/flowlite",
+            &run_dir(),
+            &inputs,
+            &BTreeMap::new(),
+        ).unwrap();
+
+        assert_eq!(
+            env.get("FLOWLITE_INPUT_PLAN").unwrap(),
+            "/srv/flowlite/.flowlite/runs/7/.output/plan.1",
+        );
+    }
+
+    /// A variable name cannot hold a hyphen, so the id is mapped rather than rejected
+    /// here - the YAML layer is what refuses two task ids that would land on one name.
+    #[test]
+    fn a_hyphenated_dependency_becomes_an_underscored_variable() {
+        let inputs = BTreeMap::from([
+            ("load-raw".to_string(), PathBuf::from("/srv/flowlite/.flowlite/runs/7/.output/load-raw.1")),
+        ]);
+
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[])),
+            &job_run(map(&[]), fixed_scheduled_at()),
+            &task_run_attempt(),
+            "/srv/flowlite",
+            &run_dir(),
+            &inputs,
+            &BTreeMap::new(),
+        ).unwrap();
+
+        assert!(env.contains_key("FLOWLITE_INPUT_LOAD_RAW"), "{env:?}");
+    }
+
+    /// No inputs, no variables: a task asks whether it was given a result by asking
+    /// whether the variable is set, so an empty map must not leave an empty path behind.
+    #[test]
+    fn a_task_with_no_inputs_is_given_no_input_variables() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[])),
+            &job_run(map(&[]), fixed_scheduled_at()),
+            &task_run_attempt(),
+            "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
+            &BTreeMap::new(),
+        ).unwrap();
+
+        assert!(
+            !env.keys().any(|name| name.starts_with("FLOWLITE_INPUT_")),
+            "{env:?}",
         );
     }
 
@@ -356,6 +524,8 @@ mod tests {
             &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &map(&[("warehouse_pw", "hunter2")]),
         ).unwrap();
 
@@ -382,6 +552,8 @@ mod tests {
             &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &map(&[("warehouse_pw", "hunter2")]),
         ).unwrap();
 
@@ -398,6 +570,8 @@ mod tests {
             &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &map(&[("warehouse_pw", "hunter2")]),
         ).unwrap();
 
@@ -419,6 +593,8 @@ mod tests {
             &job_run(map(&[]), fixed_scheduled_at()),
             &task_run_attempt(),
             "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
             &BTreeMap::new(),
         ).unwrap_err().to_string();
 

@@ -16,7 +16,7 @@ One row per task of a job, declared inline under the job YAML's `tasks:` list. L
 | `retry_delay` | Seconds to wait before each retry. Defaults to 60. |
 | `env` | `NOT NULL`, `'{}'` when the task declares none. Environment variables layered onto the command's, over whatever flowlite itself inherited. |
 | `secret_env` | `NOT NULL`, `'{}'` when the task declares none. Environment variable name to secret name — never a value — layered over the job's own `secret_env:` the same way `env` is. |
-| `working_dir` | `NOT NULL`, `''` meaning inherit the server's own working directory. |
+| `working_dir` | `NOT NULL`, `''` meaning the job run's own directory — `.flowlite/runs/<job run id>` under the data directory, created when the run starts and deleted with it. A task that needs a fixed place, a checkout it maintains, names it here. |
 
 ## Written by
 

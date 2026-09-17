@@ -6,6 +6,7 @@ use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAtte
 use crate::crud::task_run_attempt_output::{InsertTaskRunAttemptOutputData, InsertTaskRunAttemptOutputDataInput, TaskRunAttemptOutputStream};
 use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
 use crate::poller::Service;
+use crate::run_dir::{job_run_dir, task_output_path};
 use crate::signals::Signals;
 use chrono::Utc;
 
@@ -149,10 +150,17 @@ impl TaskRunAttemptMonitor {
         self.finish_task_run_attempt(
             task_run_attempt,
             TaskRunAttemptStatus::Invalid,
+            None,
         ).await
     }
 
-    /// Succeeds the attempt whose process `derive_next_status` found exited zero.
+    /// Succeeds the attempt whose process `derive_next_status` found exited zero — unless
+    /// what it wrote to `$FLOWLITE_TASK_OUTPUT` cannot be recorded, which fails it instead.
+    ///
+    /// Exiting zero is the command's verdict on itself; the result is a second thing it has
+    /// to get right, and a result that cannot be recorded is not a success just because the
+    /// process said so. `Failed` rather than `Invalid`: flowlite knows exactly what
+    /// happened and said so, and the task's own `max_retries` should get another go.
     async fn set_to_succeeded(
         &self,
         task_run_attempt: &TaskRunAttempt,
@@ -161,10 +169,86 @@ impl TaskRunAttemptMonitor {
 
         self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
 
-        self.finish_task_run_attempt(
-            task_run_attempt,
-            TaskRunAttemptStatus::Succeeded,
-        ).await
+        match self.read_task_output(task_run_attempt) {
+            Ok(output) => self.finish_task_run_attempt(
+                task_run_attempt,
+                TaskRunAttemptStatus::Succeeded,
+                Some(output),
+            ).await,
+            Err(rejection) => {
+                // Onto the attempt's own stderr, where whoever is asking why it failed is
+                // already looking, and through the one mechanism that already carries
+                // flowlite's own words in a stream - the way `StreamCapture` marks the
+                // bytes it dropped. `task_run_attempt` has no message column and this does
+                // not add one for a single sentence.
+                self.insert_output(task_run_attempt, String::new(), rejection).await?;
+
+                self.finish_task_run_attempt(
+                    task_run_attempt,
+                    TaskRunAttemptStatus::Failed,
+                    None,
+                ).await
+            }
+        }
+    }
+
+    /// What the command wrote to `$FLOWLITE_TASK_OUTPUT`, or the sentence explaining why it
+    /// is not going to be recorded.
+    ///
+    /// Every refusal is an `Err` rather than an error returned to `Poller`, including the
+    /// ones that are really I/O failures: this attempt's process is already gone, so
+    /// leaving the row `Running` would have the next pass settle it `Invalid` for want of a
+    /// process rather than for the reason that actually happened.
+    ///
+    /// Bounded rather than truncated. A truncated result is a result something downstream
+    /// will parse, and half a document parses as a whole one often enough to matter.
+    fn read_task_output(&self, task_run_attempt: &TaskRunAttempt) -> Result<String, String> {
+
+        let job_run_dir = job_run_dir(&self.app_config.data_dir, task_run_attempt.job_run_id)
+            .map_err(|error| format!("flowlite: {:#}\n", error))?;
+
+        let path = task_output_path(
+            &job_run_dir,
+            &task_run_attempt.task_id,
+            task_run_attempt.attempt,
+        );
+
+        let metadata = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            // Not an error: a task that produces nothing is the ordinary case, and every
+            // task that existed before this channel did is one of them.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+            Err(error) => return Err(format!(
+                "flowlite: could not read the result at {}: {}\n",
+                path.display(),
+                error,
+            )),
+        };
+
+        let max_bytes = self.app_config.orchestrator.max_task_output_bytes;
+
+        if metadata.len() > max_bytes {
+            return Err(format!(
+                "flowlite: the result written to $FLOWLITE_TASK_OUTPUT is {} bytes, over \
+                 the {} allowed by [orchestrator] max_task_output_bytes. The attempt \
+                 failed rather than recording part of it, since a dependent task would \
+                 have parsed the part it got as the whole result.\n",
+                metadata.len(),
+                max_bytes,
+            ));
+        }
+
+        let bytes = std::fs::read(&path).map_err(|error| format!(
+            "flowlite: could not read the result at {}: {}\n",
+            path.display(),
+            error,
+        ))?;
+
+        String::from_utf8(bytes).map_err(|_|
+            "flowlite: the result written to $FLOWLITE_TASK_OUTPUT is not valid UTF-8. It \
+             is stored as text and travels through --json and the dashboard, so it is \
+             refused rather than mangled.\n".to_string()
+        )
     }
 
     /// Fails the attempt whose process `derive_next_status` found exited non-zero. Nothing
@@ -181,6 +265,7 @@ impl TaskRunAttemptMonitor {
         self.finish_task_run_attempt(
             task_run_attempt,
             TaskRunAttemptStatus::Failed,
+            None,
         ).await
     }
 
@@ -201,6 +286,7 @@ impl TaskRunAttemptMonitor {
         self.finish_task_run_attempt(
             task_run_attempt,
             TaskRunAttemptStatus::TimedOut,
+            None,
         ).await
     }
 
@@ -219,6 +305,7 @@ impl TaskRunAttemptMonitor {
         self.finish_task_run_attempt(
             task_run_attempt,
             TaskRunAttemptStatus::Aborted,
+            None,
         ).await
     }
 
@@ -365,6 +452,7 @@ impl TaskRunAttemptMonitor {
         &self,
         task_run_attempt: &TaskRunAttempt,
         status: TaskRunAttemptStatus,
+        output: Option<String>,
     ) -> anyhow::Result<()> {
 
         self.crud.update_task_run_attempts(
@@ -379,6 +467,7 @@ impl TaskRunAttemptMonitor {
                     started_at: None,
                     finished_at: Some(Some(Utc::now())),
                     process_group_id: None,
+                    output,
                 },
             },
         ).await?;
@@ -453,6 +542,184 @@ mod tests {
             db.task_run_attempt(task_run_attempt.id).await.status,
             TaskRunAttemptStatus::Succeeded,
         );
+    }
+
+    /// Writes `content` where the attempt's command would have written its result, so the
+    /// monitor finds it the way it would find a real one.
+    fn write_result(db: &TestDb, task_run_attempt: &TaskRunAttempt, content: &[u8]) {
+
+        let path = task_output_path(
+            &job_run_dir(&db.app_config().data_dir, task_run_attempt.job_run_id).unwrap(),
+            &task_run_attempt.task_id,
+            task_run_attempt.attempt,
+        );
+
+        std::fs::write(path, content).unwrap();
+    }
+
+    /// The stderr the monitor recorded for the attempt, which is where its own refusals go.
+    async fn stderr_of(db: &TestDb, task_run_attempt: &TaskRunAttempt) -> String {
+
+        let outputs = db.crud.select_task_run_attempt_outputs(
+            &*db.conn_pool,
+            &SelectTaskRunAttemptOutputsData {
+                filter: SelectTaskRunAttemptOutputsDataFilter {
+                    id: None,
+                    task_run_attempt_id: Some(task_run_attempt.id),
+                    task_run_id: None,
+                    job_run_id: None,
+                    job_id: None,
+                    task_id: None,
+                    stream: Some(TaskRunAttemptOutputStream::Stderr),
+                },
+                sort: None,
+            },
+        ).await.unwrap();
+
+        outputs.iter().map(|output| output.content.clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_result_written_by_the_command_is_recorded_on_the_attempt() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        write_result(&db, &task_run_attempt, b"the plan");
+
+        db.spawn_exited_child(&task_run_attempt, "exit 0", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        let finished = db.task_run_attempt(task_run_attempt.id).await;
+
+        assert_eq!(finished.status, TaskRunAttemptStatus::Succeeded);
+        assert_eq!(finished.output, "the plan");
+    }
+
+    /// The ordinary case, and every task that existed before this channel did: producing
+    /// no result is not a failure.
+    #[tokio::test]
+    async fn a_command_that_writes_no_result_still_succeeds() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_exited_child(&task_run_attempt, "exit 0", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        let finished = db.task_run_attempt(task_run_attempt.id).await;
+
+        assert_eq!(finished.status, TaskRunAttemptStatus::Succeeded);
+        assert_eq!(finished.output, "");
+    }
+
+    /// Exiting zero is the command's verdict on itself. A result that cannot be recorded
+    /// is a second thing it had to get right, and the attempt fails rather than succeeding
+    /// with a truncated result a dependent would parse as a whole one.
+    #[tokio::test]
+    async fn a_result_over_the_bound_fails_the_attempt_rather_than_being_truncated() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        write_result(&db, &task_run_attempt, &[b'x'; 64]);
+
+        db.spawn_exited_child(&task_run_attempt, "exit 0", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        db.task_run_attempt_monitor_with_max_task_output_bytes(16)
+            .handle(&task_run_attempt)
+            .await
+            .unwrap();
+
+        let finished = db.task_run_attempt(task_run_attempt.id).await;
+
+        assert_eq!(finished.status, TaskRunAttemptStatus::Failed);
+        assert_eq!(finished.output, "");
+    }
+
+    /// The row carries no message, so the reason goes where whoever is asking why the
+    /// attempt failed is already looking.
+    #[tokio::test]
+    async fn a_refused_result_says_so_on_the_attempts_stderr() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        write_result(&db, &task_run_attempt, &[b'x'; 64]);
+
+        db.spawn_exited_child(&task_run_attempt, "exit 0", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        db.task_run_attempt_monitor_with_max_task_output_bytes(16)
+            .handle(&task_run_attempt)
+            .await
+            .unwrap();
+
+        let stderr = stderr_of(&db, &task_run_attempt).await;
+
+        assert!(stderr.contains("64 bytes"), "{stderr}");
+        assert!(stderr.contains("max_task_output_bytes"), "{stderr}");
+    }
+
+    /// A result exactly at the bound is within it: the refusal is for what is over.
+    #[tokio::test]
+    async fn a_result_the_size_of_the_bound_is_recorded() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        write_result(&db, &task_run_attempt, &[b'x'; 16]);
+
+        db.spawn_exited_child(&task_run_attempt, "exit 0", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        db.task_run_attempt_monitor_with_max_task_output_bytes(16)
+            .handle(&task_run_attempt)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Succeeded,
+        );
+    }
+
+    /// The column is TEXT and the value travels through --json and the dashboard, so bytes
+    /// that are not text are refused rather than mangled into replacement characters.
+    #[tokio::test]
+    async fn a_result_that_is_not_utf8_fails_the_attempt() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        write_result(&db, &task_run_attempt, &[0xff, 0xfe, 0xfd]);
+
+        db.spawn_exited_child(&task_run_attempt, "exit 0", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        let finished = db.task_run_attempt(task_run_attempt.id).await;
+
+        assert_eq!(finished.status, TaskRunAttemptStatus::Failed);
+
+        let stderr = stderr_of(&db, &task_run_attempt).await;
+
+        assert!(stderr.contains("UTF-8"), "{stderr}");
+    }
+
+    /// The file is named for the attempt, so a retry that writes nothing cannot be
+    /// credited with the result of the attempt it replaced.
+    #[tokio::test]
+    async fn a_retry_does_not_inherit_the_previous_attempts_result() {
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
+
+        let first = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
+        write_result(&db, &first, b"a wrong plan");
+        db.spawn_exited_child(&first, "exit 1", Utc::now() + TimeDelta::seconds(3600)).await;
+        db.task_run_attempt_monitor().handle(&first).await.unwrap();
+
+        let second = db.insert_task_run_attempt(&task_run, 2, TaskRunAttemptStatus::Running).await;
+        db.spawn_exited_child(&second, "exit 0", Utc::now() + TimeDelta::seconds(3600)).await;
+        db.task_run_attempt_monitor().handle(&second).await.unwrap();
+
+        assert_eq!(db.task_run_attempt(second.id).await.output, "");
     }
 
     /// The same for a non-zero exit, the other half of the exit status.

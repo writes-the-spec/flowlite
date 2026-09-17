@@ -19,6 +19,10 @@ pub struct AppConfigOrchestrator {
     pub max_stream_bytes: usize,
     /// One read from a child's pipe.
     pub read_buffer_bytes: usize,
+    /// The most a task's result may be. Past it the attempt fails rather than recording a
+    /// truncated result, which is the one thing a dependent must never be handed: half a
+    /// document parses as a whole one often enough to matter.
+    pub max_task_output_bytes: u64,
     /// The most task run attempts that may be running at once, across every job. 0 for no limit.
     pub max_running_attempts: u32,
 }
@@ -31,6 +35,7 @@ impl Default for AppConfigOrchestrator {
             reader_eof_timeout_seconds: 2,
             max_stream_bytes: 1024 * 1024,
             read_buffer_bytes: 8192,
+            max_task_output_bytes: 1024 * 1024,
             max_running_attempts: 32,
         }
     }

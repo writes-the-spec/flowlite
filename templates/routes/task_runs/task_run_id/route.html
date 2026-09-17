@@ -188,6 +188,21 @@
                 {% endif %}
             </details>
             <script>rememberPanel("attempt-{{ attempt.attempt }}-stderr")</script>
+
+            {# The result, not a stream: what the task produced rather than what it said
+               while producing it. Only shown where there is one, since most tasks produce
+               nothing and an empty panel on every attempt would be noise. #}
+            {% if !attempt.output.is_empty() %}
+            <details id="attempt-{{ attempt.attempt }}-output" class="stream collapse">
+                <summary class="stream__label">
+                    <span class="collapse__title"><span class="collapse__caret"></span>result</span>
+                    <span class="stream__note">{{ attempt.output_note }}</span>
+                </summary>
+
+                <pre class="stream__body">{{ attempt.output }}</pre>
+            </details>
+            <script>rememberPanel("attempt-{{ attempt.attempt }}-output")</script>
+            {% endif %}
         </div>
         {% endfor %}
         {% endif %}

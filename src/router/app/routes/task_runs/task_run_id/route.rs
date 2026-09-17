@@ -42,6 +42,10 @@ pub struct AttemptDisplay {
     pub stderr: String,
     pub stdout_note: String,
     pub stderr_note: String,
+    /// What the command wrote to `$FLOWLITE_TASK_OUTPUT`. Shown beside the streams rather
+    /// than among them: it is what the task produced, not what it said while producing it.
+    pub output: String,
+    pub output_note: String,
 }
 
 /// What a stream's own head says about it. The panels open on click, so this is all a
@@ -90,6 +94,8 @@ fn build_attempt(
         duration,
         stdout_note: stream_note(&streams.stdout),
         stderr_note: stream_note(&streams.stderr),
+        output_note: stream_note(&task_run_attempt.output),
+        output: task_run_attempt.output,
         stdout: streams.stdout,
         stderr: streams.stderr,
     }

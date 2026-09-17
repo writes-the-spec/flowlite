@@ -224,6 +224,7 @@ mod tests {
             attempt: 1,
             status: TaskRunAttemptStatus::Running,
             process_group_id: None,
+            output: String::new(),
         }
     }
 

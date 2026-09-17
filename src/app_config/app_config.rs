@@ -177,6 +177,7 @@ mod tests {
         assert_eq!(config.data_dir, dir.to_string_lossy());
         assert_eq!(config.orchestrator.poll_interval_seconds, 1);
         assert_eq!(config.orchestrator.max_stream_bytes, 1024 * 1024);
+        assert_eq!(config.orchestrator.max_task_output_bytes, 1024 * 1024);
         assert_eq!(config.ui.page_size, 25);
         assert_eq!(config.job_defaults.timeout_seconds, 3600);
         assert_eq!(config.schedule_defaults.timezone, chrono_tz::UTC);

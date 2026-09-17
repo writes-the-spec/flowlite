@@ -125,7 +125,7 @@ impl JobYaml {
         Self::from_yaml_str(&content, &path.display().to_string())
     }
 
-    /// The parse-validate-validate_secret_env tail of `from_yaml`, taking content already
+    /// The parse-and-validate tail of `from_yaml`, taking content already
     /// in hand rather than a path to read - what an inline `yaml` argument needs, so it is
     /// parsed, validated and error-messaged exactly as a file is. `label` stands in for the
     /// path in every message: `from_yaml` passes the real one, and a caller with no file at
@@ -136,9 +136,53 @@ impl JobYaml {
 
         job.validate().with_context(|| format!("Invalid Job YAML at {}", label))?;
 
+        job.validate_task_ids().with_context(|| format!("Invalid Job YAML at {}", label))?;
+
         job.validate_secret_env().with_context(|| format!("Invalid Job YAML at {}", label))?;
 
         Ok(job)
+    }
+
+    /// A task id is two things beyond a name: a path component, since a task's result is
+    /// written to `.output/<id>.<attempt>` inside its run's directory, and part of an
+    /// environment variable name, since every task that depends on this one is given
+    /// `FLOWLITE_INPUT_<ID>`. Both of those have to hold for every id in the file, so both
+    /// are checked here rather than at the two places that later assume them.
+    fn validate_task_ids(&self) -> anyhow::Result<()> {
+
+        let mut seen_input_names: BTreeMap<String, String> = BTreeMap::new();
+
+        for task in &self.tasks {
+
+            if !is_valid_task_id(&task.id) {
+                anyhow::bail!(
+                    "Job '{}' has a task with id '{}'. A task id may contain only ASCII \
+                     letters, digits, hyphens and underscores: it names a file inside the \
+                     run's directory, where a path separator would write outside it, and \
+                     it names the FLOWLITE_INPUT_ variable every dependent task reads its \
+                     result from.",
+                    self.id,
+                    task.id,
+                );
+            }
+
+            let input_name = task_input_env_name(&task.id);
+
+            if let Some(other_task_id) = seen_input_names.insert(input_name.clone(), task.id.clone()) {
+                anyhow::bail!(
+                    "Job '{}' has tasks '{}' and '{}', which both name {}. A hyphen and an \
+                     underscore are the same character in a variable name, so a task \
+                     depending on both would be given one path twice and could not tell \
+                     which result it had.",
+                    self.id,
+                    other_task_id,
+                    task.id,
+                    input_name,
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// `secret_env` can only ever come from a file - unlike a parameter, nothing at
@@ -222,6 +266,24 @@ fn validate_secret_env_block(
     Ok(())
 }
 
+fn is_valid_task_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// The variable a dependent task reads this task's result path from.
+///
+/// Duplicated by `task_input_env_name` in
+/// `src/orchestrator/task_run_attempt_env.rs`, which is where the variable is actually
+/// injected, for the reason `is_valid_env_var_name` is duplicated from CRUD: the two
+/// layers are kept apart on purpose, and a job's task ids can only ever come from its
+/// file, so the file's own parser is where their self-consistency belongs. The two must
+/// agree, and the test `the_input_variable_name_matches_the_orchestrators` holds them
+/// together.
+fn task_input_env_name(task_id: &str) -> String {
+    format!("FLOWLITE_INPUT_{}", task_id.to_ascii_uppercase().replace('-', "_"))
+}
+
 /// The same rule `is_valid_parameter_name` in
 /// `src/crud/multistatements/misc.rs` states for a parameter name, duplicated rather than
 /// shared: a parameter is validated at submit time in CRUD and a `secret_env` variable at
@@ -280,6 +342,81 @@ mod tests {
     /// these tests assert on. `main.rs` prints errors the same way.
     fn parse_error(content: &str) -> String {
         format!("{:?}", parse(content).unwrap_err())
+    }
+
+    /// The id becomes a path component under the run's directory, so a separator in it
+    /// would write the task's result outside that directory - `../../flowlite.db` being
+    /// the spelling that makes the point.
+    #[test]
+    fn a_task_id_containing_a_path_separator_is_rejected() {
+        let error = parse_error("
+id: nightly-sync
+name: Nightly Sync
+tasks:
+  - id: ../escape
+    command: ./run.sh
+");
+
+        assert!(error.contains("nightly-sync"), "{error}");
+        assert!(error.contains("../escape"), "{error}");
+        assert!(error.contains("hyphens and underscores"), "{error}");
+    }
+
+    #[test]
+    fn a_task_id_containing_a_space_is_rejected() {
+        let error = parse_error("
+id: nightly-sync
+name: Nightly Sync
+tasks:
+  - id: run the thing
+    command: ./run.sh
+");
+
+        assert!(error.contains("run the thing"), "{error}");
+    }
+
+    #[test]
+    fn a_task_id_of_letters_digits_hyphens_and_underscores_is_accepted() {
+        let job = parse("
+id: nightly-sync
+name: Nightly Sync
+tasks:
+  - id: extract-2_b
+    command: ./run.sh
+").unwrap();
+
+        assert_eq!(job.tasks[0].id, "extract-2_b");
+    }
+
+    /// A hyphen and an underscore are one character once the id is upper-cased into a
+    /// variable name, so these two tasks would hand a dependent one path under one name
+    /// and lose the other result silently.
+    #[test]
+    fn two_task_ids_that_map_to_one_input_variable_are_rejected() {
+        let error = parse_error("
+id: nightly-sync
+name: Nightly Sync
+tasks:
+  - id: load-raw
+    command: ./run.sh
+  - id: load_raw
+    command: ./run.sh
+");
+
+        assert!(error.contains("load-raw"), "{error}");
+        assert!(error.contains("load_raw"), "{error}");
+        assert!(error.contains("FLOWLITE_INPUT_LOAD_RAW"), "{error}");
+    }
+
+    /// The rule this parser enforces and the name the orchestrator injects are two copies
+    /// of one fact, in two layers that do not import each other. This is what keeps them
+    /// from drifting.
+    #[test]
+    fn the_input_variable_name_matches_the_orchestrators() {
+        assert_eq!(
+            task_input_env_name("load-raw"),
+            crate::orchestrator::task_run_attempt_env::task_input_env_name("load-raw"),
+        );
     }
 
     #[test]

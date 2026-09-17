@@ -88,6 +88,7 @@ impl Orchestrator {
             self.crud.clone(),
             self.conn_pool.clone(),
             self.signals.clone(),
+            self.app_config.clone(),
         );
 
         let job_run_monitor = JobRunMonitor::new(

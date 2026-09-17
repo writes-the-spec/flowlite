@@ -309,6 +309,8 @@ The value is a fixed string: there is no `${...}` interpolation in it, for the r
 | `FLOWLITE_ATTEMPT` | Which attempt this is, starting at 1. |
 | `FLOWLITE_DATA_DIR` | The data directory this server is serving — injected, not inherited, so a command that calls `flowlite` itself works on the same directory. |
 | `FLOWLITE_SCHEDULED_AT` | The instant a schedule fired for, as RFC3339. Set only for a scheduled run — a manual `job submit` gets no such variable at all, not an empty one. |
+| `FLOWLITE_TASK_OUTPUT` | The path to write this task's result to. See [Task results](#task-results). |
+| `FLOWLITE_INPUT_<TASK_ID>` | The path to the result of a task this one depends on, one variable per dependency that produced one. |
 
 **Parameters answer "which caller is this run for," not "which run is this."** A parameter
 is a fixed value carried unchanged from submit through every rerun, never re-evaluated, so
@@ -717,6 +719,69 @@ flowlite job-run logs 42 --task build   # just one task
 Or click a task on the run timeline in the dashboard to open its output page, which
 refreshes itself while the task is still running.
 
+## Task results
+
+A task's stdout is what it said; its **result** is what it produced. The two are separate
+channels, because a result is meant to be read by something rather than by somebody: the
+log is bounded and spent from both ends, so the middle — where an answer usually is — is
+exactly what a long log drops.
+
+`FLOWLITE_TASK_OUTPUT` is a path to write the result to. Every task that depends on this
+one is then given `FLOWLITE_INPUT_<TASK_ID>`, a path to read it back from:
+
+```yaml
+tasks:
+  - id: plan
+    command: |
+      claude -p "list the flaky tests worth fixing" > "$FLOWLITE_TASK_OUTPUT"
+
+  - id: execute
+    depends_on: [plan]
+    command: |
+      claude -p "fix these: $(cat "$FLOWLITE_INPUT_PLAN")"
+```
+
+The variable is named for the task id, upper-cased, with hyphens turned into underscores —
+`load-raw` is read as `$FLOWLITE_INPUT_LOAD_RAW`. Only tasks named in `depends_on` are
+handed over, and only those that actually wrote something: **a dependency that produced no
+result sets no variable at all**, so `${FLOWLITE_INPUT_PLAN:-}` is how a task asks whether
+it got one.
+
+A result is kept on the attempt that wrote it, so a retried task keeps each try's, and the
+task's result is the one the attempt that succeeded wrote. It shows on the task run page
+beside the streams, and comes back from `job-run get` and the `get_job_run` MCP tool.
+
+`max_task_output_bytes` is the most a result may be, one megabyte by default. A command
+that writes more **fails the attempt** rather than having its result truncated — half a
+document parses as a whole one often enough to matter — and says so on the attempt's
+stderr. The same goes for a result that is not valid UTF-8.
+
+### The run directory
+
+A task that declares no `working_dir` runs in a directory of its own, created when the run
+starts and deleted with the run by retention. That is what makes two runs of one job stop
+colliding: `working_dir` is a fixed string, so before this every concurrent run of a job —
+and every rerun beside a current run — worked in the same directory and interleaved its
+edits.
+
+A task that really does want a fixed place, a checkout it maintains, says so:
+
+```yaml
+tasks:
+  - id: build
+    working_dir: /srv/checkouts/api
+    command: make build
+```
+
+The directory lives under `.flowlite/runs/<job run id>` inside the data directory. The one
+name reserved inside it is `.output`, where results are kept; everything else in it is the
+task's own.
+
+Because the directory is deleted with the run, it is scratch space and not a store: what a
+run must keep goes somewhere the task names itself. A task id may contain only ASCII
+letters, digits, hyphens and underscores, since it names both a file in that directory and
+a `FLOWLITE_INPUT_` variable.
+
 ## Reruns
 
 A run can be run again, with the **Rerun** button on its page or from the command line:
@@ -997,6 +1062,7 @@ poll_interval_seconds = 1       # how often a service looks for work itself
 error_backoff_seconds = 5       # pause before a failed service restarts
 reader_eof_timeout_seconds = 2  # wait for a finished attempt's output to end
 max_stream_bytes = 1048576      # per stream, per attempt: half its head, half its tail
+max_task_output_bytes = 1048576 # the most a task's result may be; over it the attempt fails
 read_buffer_bytes = 8192        # one read from a running command's pipe
 max_running_attempts = 32       # running task attempts across every job, 0 for no limit
 

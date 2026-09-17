@@ -14,7 +14,46 @@ use super::format;
 pub(crate) struct JobRunDetail {
     #[serde(flatten)]
     pub(crate) job_run: JobRun,
-    pub(crate) task_runs: Vec<TaskRun>,
+    pub(crate) task_runs: Vec<TaskRunDetail>,
+}
+
+/// One task run and what it produced, flattened the same way.
+///
+/// The result is carried here rather than on `TaskRun` because it is not part of the
+/// snapshot the row holds: the row says what the task was submitted with, and this says
+/// what came of it. It is the output of the attempt that succeeded, empty for a task that
+/// produced nothing - which is most tasks.
+#[derive(Serialize)]
+pub(crate) struct TaskRunDetail {
+    #[serde(flatten)]
+    pub(crate) task_run: TaskRun,
+    pub(crate) output: String,
+}
+
+/// Joins each task run to the result of the attempt that succeeded, in one extra query for
+/// the whole run.
+pub(crate) async fn build_job_run_detail(
+    crud: &CRUD,
+    conn: &mut sqlx::SqliteConnection,
+    job_run: JobRun,
+    task_runs: Vec<TaskRun>,
+) -> anyhow::Result<JobRunDetail> {
+
+    let mut outputs = crud.select_task_run_outputs(&mut *conn, job_run.id).await?;
+
+    let task_runs = task_runs
+        .into_iter()
+        .map(|task_run| {
+            let output = outputs
+                .remove(&task_run.task_id)
+                .map(|output| output.content)
+                .unwrap_or_default();
+
+            TaskRunDetail { task_run, output }
+        })
+        .collect();
+
+    Ok(JobRunDetail { job_run, task_runs })
 }
 
 /// One attempt with what it wrote. The MCP `get_job_run_logs` tool fills the same shape

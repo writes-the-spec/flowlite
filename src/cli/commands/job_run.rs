@@ -7,7 +7,7 @@ use crate::crud::task_run::TaskRun;
 use crate::crud::task_run_attempt::TaskRunAttempt;
 use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStreams;
 use crate::shared::format;
-use crate::shared::job_run::{delete_job_run, deleted_occurrence, parse_job_run_status, select_job_run, stop_job_run, DeletedOccurrence, JobRunDetail, TaskRunAttemptLog};
+use crate::shared::job_run::{build_job_run_detail, JobRunDetail, delete_job_run, deleted_occurrence, parse_job_run_status, select_job_run, stop_job_run, DeletedOccurrence, TaskRunAttemptLog};
 use crate::shared::wait::{ensure_data_dir_is_served, wait_for_job_run};
 use super::job::describe_unserved_data_dir;
 
@@ -159,13 +159,14 @@ impl JobRunGetCmd {
             .select_job_run_with_task_runs(&mut conn, self.job_run_id)
             .await?;
 
+        let detail = build_job_run_detail(&crud, &mut conn, job_run, task_runs).await?;
+
         if json {
-            let detail = JobRunDetail { job_run, task_runs };
             println!("{}", serde_json::to_string_pretty(&detail)?);
             return Ok(());
         }
 
-        print_job_run(&job_run, &task_runs);
+        print_job_run(&detail);
 
         Ok(())
     }
@@ -416,7 +417,10 @@ fn optional_timestamp(at: Option<DateTime<Utc>>) -> String {
     }
 }
 
-fn print_job_run(job_run: &JobRun, task_runs: &[TaskRun]) {
+fn print_job_run(detail: &JobRunDetail) {
+
+    let job_run = &detail.job_run;
+    let task_runs = &detail.task_runs;
 
     println!(
         "Job run {} · {} · {}",
@@ -457,10 +461,25 @@ fn print_job_run(job_run: &JobRun, task_runs: &[TaskRun]) {
     for task_run in task_runs {
         println!(
             "{:<24} {:<12} {:<10}",
-            task_run.task_id,
-            format::task_run_word(task_run.status),
-            task_run_duration(task_run),
+            task_run.task_run.task_id,
+            format::task_run_word(task_run.task_run.status),
+            task_run_duration(&task_run.task_run),
         );
+    }
+
+    // Under the table rather than in it: a result is whatever the task wrote, so it has no
+    // width to fit a column and is usually the thing worth reading.
+    let with_results: Vec<_> = task_runs.iter().filter(|task_run| !task_run.output.is_empty()).collect();
+
+    if !with_results.is_empty() {
+        println!();
+        println!("Results");
+
+        for task_run in with_results {
+            println!("{}", "-".repeat(48));
+            println!("{}", task_run.task_run.task_id);
+            println!("{}", task_run.output);
+        }
     }
 }
 

@@ -9,6 +9,7 @@ use crate::crud::multistatements::retention_candidates::{
     SelectDeletableJobRunsData, SelectDeletableJobRunsDataFilter, SelectDeletableJobRunsDataSort,
 };
 use crate::poller::Service;
+use crate::run_dir::remove_job_run_dir;
 
 
 /// Deletes finished job runs old enough that nothing needs them anymore, so a long-lived
@@ -214,7 +215,20 @@ impl Service for RetentionService {
                 schedule_id: None,
                 scheduled_at_gt: None,
             },
-        }).await
+        }).await?;
+
+        // After the rows, and logged rather than raised. The run is already gone, so
+        // returning an error here would have the next pass re-select an id that no longer
+        // exists and fail on it for ever. A directory left behind is a directory; a poller
+        // that cannot get past one row is every run of every job stopping.
+        if let Err(error) = remove_job_run_dir(&self.app_config.data_dir, *row) {
+            eprintln!(
+                "Job run {} was deleted but its directory could not be removed: {:#}",
+                row, error,
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -473,6 +487,53 @@ mod tests {
 
     /// Test 5: keep_runs = 0 keeps every run of that job — the per-job rule selects
     /// nothing for it — while keep_runs_total still applies to it.
+    /// Retention is the only thing that deletes a run directory, which is the filesystem
+    /// responsibility this service did not have before the run directory existed.
+    #[tokio::test]
+    async fn deleting_a_run_removes_its_directory() {
+        let db = TestDb::new().await;
+
+        let job_run = insert_finished_run_for(&db, "job", JobRunStatus::Succeeded).await;
+
+        let dir = crate::run_dir::create_job_run_dir(&db.app_config().data_dir, job_run.id).unwrap();
+        std::fs::write(dir.join("work.txt"), "something").unwrap();
+
+        service_for(&db).handle(&job_run.id).await.unwrap();
+
+        assert!(!dir.exists());
+    }
+
+    #[tokio::test]
+    async fn deleting_a_run_leaves_another_runs_directory_alone() {
+        let db = TestDb::new().await;
+
+        let job_run = insert_finished_run_for(&db, "job", JobRunStatus::Succeeded).await;
+        let neighbour = insert_finished_run_for(&db, "job", JobRunStatus::Succeeded).await;
+
+        crate::run_dir::create_job_run_dir(&db.app_config().data_dir, job_run.id).unwrap();
+
+        let neighbour_dir = crate::run_dir::create_job_run_dir(&db.app_config().data_dir, neighbour.id).unwrap();
+
+        service_for(&db).handle(&job_run.id).await.unwrap();
+
+        assert!(neighbour_dir.is_dir());
+    }
+
+    /// The rows are gone by the time the directory is touched, so a directory that cannot
+    /// be removed must not fail the pass: the next one would re-select an id that no
+    /// longer exists and never get past it.
+    #[tokio::test]
+    async fn a_directory_that_is_already_gone_does_not_fail_the_pass() {
+        let db = TestDb::new().await;
+
+        let job_run = insert_finished_run_for(&db, "job", JobRunStatus::Succeeded).await;
+
+        // Never created, which is also the state of a run that was skipped before it was
+        // ever released.
+
+        service_for(&db).handle(&job_run.id).await.unwrap();
+    }
+
     #[tokio::test]
     async fn keep_runs_zero_is_skipped_by_the_per_job_rule_but_not_by_the_global_ceiling() {
 

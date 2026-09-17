@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// serving. Nothing central: a data directory carries its own answer to "is this being
 /// served", so a directory that is moved or copied stays self-describing and no record
 /// anywhere else can disagree with it.
-const STATE_DIR: &str = ".flowlite";
+pub(crate) const STATE_DIR: &str = ".flowlite";
 
 
 /// What a running `serve` says about itself. Only ever read while the lock beside it is

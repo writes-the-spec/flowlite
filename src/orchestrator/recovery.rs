@@ -62,6 +62,7 @@ pub async fn recover_orphaned_task_run_attempts(
                     started_at: None,
                     finished_at: Some(Some(Utc::now())),
                     process_group_id: None,
+                    output: None,
                 },
             },
         ).await?;

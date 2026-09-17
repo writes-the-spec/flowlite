@@ -9,6 +9,14 @@ CREATE TABLE task_run_attempt (
     finished_at DATETIME,
     attempt INTEGER NOT NULL,
     status TEXT NOT NULL,
+    -- What the command wrote to $FLOWLITE_TASK_OUTPUT, empty for nothing at all - the
+    -- convention task_run.stdin uses for the other end of the same channel. Bounded by
+    -- [orchestrator] max_task_output_bytes, past which the attempt fails instead, so this
+    -- never holds a truncated result. Per attempt rather than per task run because the
+    -- file it is read from is per attempt: a retry must not inherit the bytes of the
+    -- attempt it replaces, and a failed attempt's result is what item 13 will hand the
+    -- attempt after it.
+    output TEXT NOT NULL,
     -- Nullable: an attempt that never spawned has no process group. The id is the
     -- spawned child's pid, since the command is spawned with process_group(0). It is on
     -- the row because TaskRunAttemptChildren is memory: after a restart this is the only

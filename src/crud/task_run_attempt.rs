@@ -126,6 +126,7 @@ pub struct UpdateTaskRunAttemptsDataInput {
     pub started_at: Option<Option<DateTime<Utc>>>,
     pub finished_at: Option<Option<DateTime<Utc>>>,
     pub process_group_id: Option<Option<i64>>,
+    pub output: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -156,6 +157,8 @@ pub struct TaskRunAttempt {
     /// the row because `TaskRunAttemptChildren` is memory: after a restart this is the only
     /// way back to a process that may still be running.
     pub process_group_id: Option<i64>,
+    /// What the command wrote to `$FLOWLITE_TASK_OUTPUT`, empty for nothing at all.
+    pub output: String,
 }
 
 impl CRUD {
@@ -164,7 +167,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO task_run_attempt (task_run_id, job_run_id, job_id, task_id, created_at, attempt, status) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO task_run_attempt (task_run_id, job_run_id, job_id, task_id, created_at, attempt, status, output) VALUES (?, ?, ?, ?, ?, ?, ?, '')"
         )
             .bind(data.input.task_run_id)
             .bind(data.input.job_run_id)
@@ -184,7 +187,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, task_run_id, job_run_id, job_id, task_id, created_at, started_at, finished_at, attempt, status, process_group_id FROM task_run_attempt WHERE 1=1"
+            "SELECT id, task_run_id, job_run_id, job_id, task_id, created_at, started_at, finished_at, attempt, status, process_group_id, output FROM task_run_attempt WHERE 1=1"
         );
 
         if let Some(task_run_id) = data.filter.task_run_id {
@@ -290,10 +293,16 @@ impl CRUD {
             separated.push_bind_unseparated(process_group_id);
         }
 
+        if let Some(output) = &data.input.output {
+            separated.push("output = ");
+            separated.push_bind_unseparated(output);
+        }
+
         if data.input.status.is_none()
             && data.input.started_at.is_none()
             && data.input.finished_at.is_none()
             && data.input.process_group_id.is_none()
+            && data.input.output.is_none()
         {
             return Ok(());
         }
@@ -356,6 +365,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     process_group_id: Some(Some(4242)),
+                    output: None,
                 },
             },
         ).await.unwrap();

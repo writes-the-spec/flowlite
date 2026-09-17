@@ -1,9 +1,11 @@
 use std::sync::Arc;
+use crate::app_config::AppConfig;
 use crate::crud::CRUD;
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort, UpdateJobRunsData, UpdateJobRunsDataFilter, UpdateJobRunsDataInput};
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run::{TaskRunStatus, UpdateTaskRunsData, UpdateTaskRunsDataFilter, UpdateTaskRunsDataInput};
 use crate::poller::Service;
+use crate::run_dir::create_job_run_dir;
 use crate::signals::Signals;
 use chrono::Utc;
 
@@ -14,6 +16,7 @@ pub struct JobRunDispatcher {
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
     pub signals: Arc<Signals>,
+    pub app_config: AppConfig,
 }
 
 
@@ -23,11 +26,13 @@ impl JobRunDispatcher {
         crud: Arc<CRUD>,
         conn_pool: Arc<sqlx::SqlitePool>,
         signals: Arc<Signals>,
+        app_config: AppConfig,
     ) -> Self {
         Self {
             crud,
             conn_pool,
             signals,
+            app_config,
         }
     }
 
@@ -109,6 +114,13 @@ impl JobRunDispatcher {
     /// Queued, so the next pass settles it again, rather than Running with task runs stuck
     /// Planned for ever.
     async fn set_to_running(&self, job_run: &JobRun) -> anyhow::Result<()> {
+
+        // Before either status write, and the error goes back to `Poller`: a run whose
+        // directory could not be made is left Queued for the next pass rather than set
+        // Running with nowhere for its tasks to work. Created here rather than at submit
+        // so a run that is Scheduled for next March, or skipped before it is released,
+        // costs nothing on disk.
+        create_job_run_dir(&self.app_config.data_dir, job_run.id)?;
 
         self.crud.update_task_runs(
             &*self.conn_pool,

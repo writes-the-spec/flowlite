@@ -384,6 +384,14 @@ impl TestDb {
         &self.data_dir
     }
 
+    /// What `JobRunDispatcher::set_to_running` does for a real run, done here because most
+    /// tests insert a job run already `Running` and drive one service directly rather than
+    /// letting that dispatcher pass over it. A task spawns into this directory, so without
+    /// it every spawning test fails on a missing working directory.
+    fn create_job_run_dir(&self, job_run_id: i64) {
+        crate::run_dir::create_job_run_dir(&self.app_config().data_dir, job_run_id).unwrap();
+    }
+
     pub fn scheduler(&self) -> Scheduler {
         Scheduler::new(
             self.crud.toolkit.clone(),
@@ -398,6 +406,7 @@ impl TestDb {
             self.crud.clone(),
             self.conn_pool.clone(),
             self.signals.clone(),
+            self.app_config(),
         )
     }
 
@@ -536,6 +545,22 @@ impl TestDb {
         )
     }
 
+    /// The same monitor under a chosen result bound, for the tests that ask what happens
+    /// at it rather than writing a megabyte to reach the default.
+    pub fn task_run_attempt_monitor_with_max_task_output_bytes(&self, max_task_output_bytes: u64) -> TaskRunAttemptMonitor {
+
+        let mut app_config = self.app_config();
+        app_config.orchestrator.max_task_output_bytes = max_task_output_bytes;
+
+        TaskRunAttemptMonitor::new(
+            self.crud.clone(),
+            self.conn_pool.clone(),
+            self.children.clone(),
+            self.signals.clone(),
+            app_config,
+        )
+    }
+
     /// The config the CRUD under test is actually using, rather than a fresh default: a
     /// service built here has to agree with `data_dir()` about which directory it is
     /// serving, since that directory is what a task command is told to work on.
@@ -571,6 +596,8 @@ impl TestDb {
             },
         ).await.unwrap();
 
+        self.create_job_run_dir(id);
+
         self.job_run(id).await
     }
 
@@ -596,6 +623,8 @@ impl TestDb {
                 },
             },
         ).await.unwrap();
+
+        self.create_job_run_dir(id);
 
         self.job_run(id).await
     }
@@ -763,6 +792,40 @@ impl TestDb {
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
                     status: TaskRunStatus::Waiting,
+                },
+            },
+        ).await.unwrap();
+
+        self.task_run(id).await
+    }
+
+    /// A task run with both a real command and dependencies, for the tests that follow one
+    /// task's result into the next task's command.
+    pub async fn insert_task_run_for_command_depending_on(
+        &self,
+        job_run_id: i64,
+        command: &str,
+        depends_on: &[&str],
+    ) -> TaskRun {
+
+        let id = self.crud.insert_task_run(
+            &*self.conn_pool,
+            &InsertTaskRunData {
+                input: InsertTaskRunDataInput {
+                    job_run_id,
+                    job_id: "job".to_string(),
+                    task_id: format!("task-{}", uuid::Uuid::new_v4()),
+                    command: command.to_string(),
+                    stdin: String::new(),
+                    depends_on: depends_on.iter().map(|id| id.to_string()).collect(),
+                    limits: Vec::new(),
+                    timeout: 3600,
+                    max_retries: 0,
+                    retry_delay: 60,
+                    env: BTreeMap::new(),
+                    secret_env: BTreeMap::new(),
+                    working_dir: String::new(),
+                    status: TaskRunStatus::Running,
                 },
             },
         ).await.unwrap();

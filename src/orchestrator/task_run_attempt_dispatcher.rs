@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use crate::crud::CRUD;
@@ -11,6 +12,7 @@ use crate::orchestrator::task_run_attempt_env::build_task_run_attempt_env;
 use crate::app_config::AppConfig;
 use crate::orchestrator::task_run_attempt_reader::read_task_run_attempt_stream;
 use crate::poller::Service;
+use crate::run_dir::{job_run_dir, task_output_path};
 use crate::signals::Signals;
 use anyhow::Context;
 use chrono::{TimeDelta, Utc};
@@ -110,6 +112,7 @@ impl TaskRunAttemptDispatcher {
                     started_at: None,
                     finished_at: Some(Some(Utc::now())),
                     process_group_id: None,
+                    output: None,
                 },
             },
         ).await?;
@@ -143,6 +146,7 @@ impl TaskRunAttemptDispatcher {
                     started_at: None,
                     finished_at: Some(Some(Utc::now())),
                     process_group_id: None,
+                    output: None,
                 },
             },
         ).await?;
@@ -167,6 +171,7 @@ impl TaskRunAttemptDispatcher {
                     started_at: None,
                     finished_at: Some(Some(Utc::now())),
                     process_group_id: None,
+                    output: None,
                 },
             },
         ).await?;
@@ -282,11 +287,17 @@ impl TaskRunAttemptDispatcher {
         let task_run = self.get_task_run(task_run_attempt).await?;
         let job_run = self.get_job_run(task_run_attempt).await?;
 
+        let job_run_dir = job_run_dir(&self.app_config.data_dir, job_run.id)?;
+
+        let inputs = self.get_inputs(&task_run, &job_run_dir).await?;
+
         let env = build_task_run_attempt_env(
             &task_run,
             &job_run,
             task_run_attempt,
             &self.app_config.data_dir,
+            &job_run_dir,
+            &inputs,
             &self.app_config.secrets,
         )?;
 
@@ -328,16 +339,18 @@ impl TaskRunAttemptDispatcher {
             // this child's pid; TaskRunAttemptMonitor kills by it.
             .process_group(0);
 
-        // Empty means inherit the server's, which is what Command does when nothing is set.
-        if !task_run.working_dir.is_empty() {
-            command.current_dir(&task_run.working_dir);
-        }
-
-        let working_dir_description = if task_run.working_dir.is_empty() {
-            "the server's current directory".to_string()
+        // Empty means the run's own directory, which is what makes two concurrent runs of
+        // one job stop editing one directory. A task that really does want a fixed place -
+        // a checkout it maintains - says so, and then this is where that string is used.
+        let working_dir = if task_run.working_dir.is_empty() {
+            job_run_dir.clone()
         } else {
-            format!("'{}'", task_run.working_dir)
+            std::path::PathBuf::from(&task_run.working_dir)
         };
+
+        command.current_dir(&working_dir);
+
+        let working_dir_description = format!("'{}'", working_dir.display());
 
         let started_at = Utc::now();
 
@@ -356,6 +369,7 @@ impl TaskRunAttemptDispatcher {
                     started_at: Some(Some(started_at)),
                     finished_at: None,
                     process_group_id: None,
+                    output: None,
                 },
             },
         ).await?;
@@ -384,6 +398,7 @@ impl TaskRunAttemptDispatcher {
                             started_at: Some(None),
                             finished_at: None,
                             process_group_id: None,
+                            output: None,
                         },
                     },
                 ).await?;
@@ -463,6 +478,7 @@ impl TaskRunAttemptDispatcher {
                     started_at: None,
                     finished_at: None,
                     process_group_id: Some(process_group_id),
+                    output: None,
                 },
             },
         ).await?;
@@ -509,6 +525,41 @@ impl TaskRunAttemptDispatcher {
         )
             .await?
             .ok_or_else(|| anyhow::anyhow!("Task run not found: {}", task_run_attempt.task_run_id))
+    }
+
+    /// The result path of each dependency that produced one, keyed by that dependency's
+    /// task id - what becomes this task's `FLOWLITE_INPUT_*` variables.
+    ///
+    /// Only the tasks this one declared a dependency on: a task reads what it said it
+    /// depends on, and a result from two levels up is either fetched by the task in
+    /// between or declared. A dependency that wrote nothing is simply absent from the map
+    /// the select returns, and so gets no variable.
+    async fn get_inputs(
+        &self,
+        task_run: &TaskRun,
+        job_run_dir: &std::path::Path,
+    ) -> anyhow::Result<BTreeMap<String, std::path::PathBuf>> {
+
+        if task_run.depends_on.0.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let mut conn = self.conn_pool.acquire().await?;
+
+        let outputs = self.crud.select_task_run_outputs(&mut conn, task_run.job_run_id).await?;
+
+        let mut inputs = BTreeMap::new();
+
+        for task_id in task_run.depends_on.0.iter() {
+            if let Some(output) = outputs.get(task_id) {
+                inputs.insert(
+                    task_id.clone(),
+                    task_output_path(job_run_dir, task_id, output.attempt),
+                );
+            }
+        }
+
+        Ok(inputs)
     }
 
     /// Loads the job run the attempt belongs to, for the parameters and the scheduled
@@ -1217,6 +1268,149 @@ mod tests {
         unsafe { std::env::remove_var("FLOWLITE_SCHEDULED_AT") };
 
         assert_eq!(seen, job_run.scheduled_at.to_rfc3339());
+    }
+
+    /// A task that declares no working_dir gets its run's own directory, which is what
+    /// stops two concurrent runs of one job editing the same one.
+    #[tokio::test]
+    async fn a_task_with_no_working_dir_runs_in_its_runs_own_directory() {
+
+        let _environment = reading_the_environment();
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let seen_path = db.data_dir().join("pwd.txt");
+
+        let task_run = db.insert_task_run_for_command(
+            job_run.id,
+            &format!("pwd > {}", seen_path.display()),
+            3600,
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            1,
+            TaskRunAttemptStatus::Queued,
+        ).await;
+
+        db.task_run_attempt_dispatcher()
+            .handle(&task_run_attempt)
+            .await
+            .unwrap();
+
+        let seen = read_command_file(&seen_path).await;
+
+        let expected = crate::run_dir::job_run_dir(
+            &db.app_config().data_dir,
+            job_run.id,
+        ).unwrap();
+
+        assert_eq!(
+            std::fs::canonicalize(seen.trim()).unwrap(),
+            std::fs::canonicalize(&expected).unwrap(),
+        );
+    }
+
+    /// Two runs of one job are two directories. This is the collision the run directory
+    /// exists to remove: `working_dir` is a fixed string on the task row, so before this
+    /// every concurrent run of a job shared one.
+    #[tokio::test]
+    async fn two_runs_of_one_job_work_in_different_directories() {
+
+        let _environment = reading_the_environment();
+
+        let db = TestDb::new().await;
+
+        let first = db.insert_job_run(JobRunStatus::Running).await;
+        let second = db.insert_job_run(JobRunStatus::Running).await;
+
+        let first_dir = crate::run_dir::job_run_dir(&db.app_config().data_dir, first.id).unwrap();
+        let second_dir = crate::run_dir::job_run_dir(&db.app_config().data_dir, second.id).unwrap();
+
+        assert_ne!(first_dir, second_dir);
+    }
+
+    /// A task writing to $FLOWLITE_TASK_OUTPUT needs nowhere to create first: the output
+    /// directory is made with the run directory.
+    #[tokio::test]
+    async fn a_command_can_write_its_result_without_creating_anything() {
+
+        let _environment = reading_the_environment();
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let task_run = db.insert_task_run_for_command(
+            job_run.id,
+            "printf 'the plan' > \"$FLOWLITE_TASK_OUTPUT\"",
+            3600,
+        ).await;
+
+        let task_run_attempt = db.insert_task_run_attempt(
+            &task_run,
+            1,
+            TaskRunAttemptStatus::Queued,
+        ).await;
+
+        db.task_run_attempt_dispatcher()
+            .handle(&task_run_attempt)
+            .await
+            .unwrap();
+
+        let path = crate::run_dir::task_output_path(
+            &crate::run_dir::job_run_dir(&db.app_config().data_dir, job_run.id).unwrap(),
+            &task_run.task_id,
+            1,
+        );
+
+        let seen = read_command_file(&path).await;
+
+        assert_eq!(seen, "the plan");
+    }
+
+    /// The whole point of the channel, end to end: one task writes a result, the monitor
+    /// records it, and the task that depends on it reads the bytes back out of a path it
+    /// was handed rather than one both commands had to agree on in advance.
+    #[tokio::test]
+    async fn a_dependent_task_reads_what_the_task_before_it_wrote() {
+
+        let _environment = reading_the_environment();
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+
+        let plan = db.insert_named_task_run(job_run.id, "plan", TaskRunStatus::Running).await;
+        let plan_attempt = db.insert_task_run_attempt(&plan, 1, TaskRunAttemptStatus::Running).await;
+
+        let path = crate::run_dir::task_output_path(
+            &crate::run_dir::job_run_dir(&db.app_config().data_dir, job_run.id).unwrap(),
+            "plan",
+            1,
+        );
+        std::fs::write(&path, "fix the flaky tests").unwrap();
+
+        db.spawn_exited_child(&plan_attempt, "exit 0", Utc::now() + TimeDelta::seconds(3600)).await;
+        db.task_run_attempt_monitor().handle(&plan_attempt).await.unwrap();
+
+        let seen_path = db.data_dir().join("seen.txt");
+
+        let execute = db.insert_task_run_for_command_depending_on(
+            job_run.id,
+            &format!("cat \"$FLOWLITE_INPUT_PLAN\" > {}", seen_path.display()),
+            &["plan"],
+        ).await;
+
+        let execute_attempt = db.insert_task_run_attempt(&execute, 1, TaskRunAttemptStatus::Queued).await;
+
+        db.task_run_attempt_dispatcher()
+            .handle(&execute_attempt)
+            .await
+            .unwrap();
+
+        assert_eq!(read_command_file(&seen_path).await, "fix the flaky tests");
     }
 
     /// working_dir is where the command runs, not a prefix on it.
