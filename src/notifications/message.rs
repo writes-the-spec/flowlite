@@ -622,6 +622,7 @@ mod tests {
             status: TaskRunAttemptStatus::Failed,
             process_group_id: None,
             output: String::new(),
+            waiting_since: None,
         }
     }
 

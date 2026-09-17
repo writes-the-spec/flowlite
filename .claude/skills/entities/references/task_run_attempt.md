@@ -15,6 +15,7 @@ One execution of a [`task_run`](task_run.md)'s command. **This is the only level
 | `status` | `TaskRunAttemptStatus` — same eight variants as `TaskRunStatus`, but a separate enum; see the [orchestrator skill](../../orchestrator/references/task_run_attempt.md). |
 | `output` | `TEXT NOT NULL`, empty for nothing at all — the convention [`task_run`](task_run.md)'s `stdin` uses for the other end of the same channel. What the command wrote to `$FLOWLITE_TASK_OUTPUT`, read off disk and recorded when the attempt succeeds. Bounded by `[orchestrator] max_task_output_bytes`: a result over it fails the attempt instead, so this never holds a truncated one. |
 | `process_group_id` | Nullable. The spawned `sh`'s pid, which is also its process group id because the child is made a group leader — so a stop or a timeout signals the whole tree the command started, not only the shell flowlite spawned. NULL until the command is spawned, and for good on an attempt that never ran. |
+| `waiting_since` | Nullable. When this attempt's process began waiting on another run; a Running attempt with it set holds no concurrency slot. |
 
 `UNIQUE (task_run_id, attempt)`: the attempt number is computed rather than constrained (1 in `TaskRunDispatcher`, `last.attempt + 1` in `TaskRunMonitor`), so this index is what turns a second process racing the first into a failed insert instead of a task run quietly executed twice. It is also what makes "the last attempt" well defined — `get_last_task_run_attempt` orders by `attempt`.
 

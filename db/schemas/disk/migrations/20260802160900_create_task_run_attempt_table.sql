@@ -22,6 +22,14 @@ CREATE TABLE task_run_attempt (
     -- the row because TaskRunAttemptChildren is memory: after a restart this is the only
     -- way back to a process that is still running.
     process_group_id INTEGER,
+    -- When the attempt's own process began waiting on another run, NULL while it is
+    -- working. A Running attempt with this set holds no concurrency slot: it is a poll
+    -- loop asleep, not work in flight. Written by the waiting process itself - which is a
+    -- flowlite process, reading FLOWLITE_TASK_RUN_ATTEMPT_ID out of the environment the
+    -- dispatcher gave it - never by the orchestrator, which cannot see inside a command.
+    -- Deliberately not cleared when the attempt settles: every tally filters on Running
+    -- first, so a stale mark on a finished row gates nothing.
+    waiting_since DATETIME,
     FOREIGN KEY (task_run_id) REFERENCES task_run (id),
     FOREIGN KEY (job_run_id) REFERENCES job_run (id)
 );

@@ -101,6 +101,7 @@ mod tests {
                     finished_at: None,
                     process_group_id: None,
                     output: Some(output.to_string()),
+                waiting_since: None,
                 },
             },
         ).await.unwrap();

@@ -223,6 +223,7 @@ mod tests {
             status: TaskRunAttemptStatus::Queued,
             process_group_id: None,
             output: String::new(),
+            waiting_since: None,
         }
     }
 

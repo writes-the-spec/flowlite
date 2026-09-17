@@ -468,6 +468,7 @@ impl TaskRunAttemptMonitor {
                     finished_at: Some(Some(Utc::now())),
                     process_group_id: None,
                     output,
+                    waiting_since: None,
                 },
             },
         ).await?;
