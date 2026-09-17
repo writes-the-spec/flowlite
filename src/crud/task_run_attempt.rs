@@ -377,7 +377,7 @@ mod tests {
                     finished_at: None,
                     process_group_id: Some(Some(4242)),
                     output: None,
-                waiting_since: None,
+                    waiting_since: None,
                 },
             },
         ).await.unwrap();

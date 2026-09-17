@@ -113,7 +113,7 @@ impl TaskRunAttemptDispatcher {
                     finished_at: Some(Some(Utc::now())),
                     process_group_id: None,
                     output: None,
-                waiting_since: None,
+                    waiting_since: None,
                 },
             },
         ).await?;
@@ -148,7 +148,7 @@ impl TaskRunAttemptDispatcher {
                     finished_at: Some(Some(Utc::now())),
                     process_group_id: None,
                     output: None,
-                waiting_since: None,
+                    waiting_since: None,
                 },
             },
         ).await?;
@@ -174,7 +174,7 @@ impl TaskRunAttemptDispatcher {
                     finished_at: Some(Some(Utc::now())),
                     process_group_id: None,
                     output: None,
-                waiting_since: None,
+                    waiting_since: None,
                 },
             },
         ).await?;
@@ -373,7 +373,7 @@ impl TaskRunAttemptDispatcher {
                     finished_at: None,
                     process_group_id: None,
                     output: None,
-                waiting_since: None,
+                    waiting_since: None,
                 },
             },
         ).await?;
@@ -403,7 +403,7 @@ impl TaskRunAttemptDispatcher {
                             finished_at: None,
                             process_group_id: None,
                             output: None,
-                        waiting_since: None,
+                            waiting_since: None,
                         },
                     },
                 ).await?;
@@ -484,7 +484,7 @@ impl TaskRunAttemptDispatcher {
                     finished_at: None,
                     process_group_id: Some(process_group_id),
                     output: None,
-                waiting_since: None,
+                    waiting_since: None,
                 },
             },
         ).await?;
