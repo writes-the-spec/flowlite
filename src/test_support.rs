@@ -964,6 +964,18 @@ impl TestDb {
             .unwrap();
     }
 
+    /// Settles an attempt the way the monitor would, for a test that needs the row to have
+    /// moved on underneath something still holding its id.
+    pub async fn settle_task_run_attempt(&self, task_run_attempt_id: i64, status: TaskRunAttemptStatus) {
+        sqlx::query("UPDATE task_run_attempt SET status = ?, finished_at = ? WHERE id = ?")
+            .bind(status)
+            .bind(Utc::now())
+            .bind(task_run_attempt_id)
+            .execute(&*self.conn_pool)
+            .await
+            .unwrap();
+    }
+
     /// Marks a queued attempt as one a spawn was begun for, which is what a crash between
     /// the spawn and the Running write leaves behind. No CRUD update writes `started_at`
     /// without a status, so this reaches past CRUD for a state only a crash produces.
@@ -1093,7 +1105,7 @@ impl TestDb {
         ).await.unwrap()
     }
 
-    async fn last_task_run_attempt(&self, task_run_id: i64) -> TaskRunAttempt {
+    pub async fn last_task_run_attempt(&self, task_run_id: i64) -> TaskRunAttempt {
         self.task_run_attempts(task_run_id).await.into_iter().last().unwrap()
     }
 
