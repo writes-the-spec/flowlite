@@ -7,7 +7,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::{self, JsonSchema};
 use rmcp::{tool, tool_router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::crud::CRUD;
 use crate::mcp::McpServer;
@@ -30,20 +30,33 @@ impl McpServer {
     // answers "what is it waiting behind". A caller reaches for them in that order.
     /// Why nothing is running: the cap on task attempts across every job, and each named
     /// concurrency limit, with how many attempts currently claim it and how many it
-    /// allows. A max of 0 means no ceiling.
+    /// allows. A max of 0 means no ceiling. `waiting_attempts` counts attempts that are
+    /// running but waiting on another run; they hold no slot and are in none of the rows.
     #[tool]
     async fn list_limits(&self, Parameters(_args): Parameters<ListLimits>) -> CallToolResult {
         match limits_rows(&self.toolkit).await {
-            Ok(rows) => success_json(rows),
+            Ok(limits) => success_json(limits),
             Err(err) => error_result(&err),
         }
     }
 }
 
+/// The tool's whole answer, rather than the bare `LimitRow` array it used to be.
+///
+/// The array is still there under `limits`, unchanged. What the envelope adds is
+/// `waiting_attempts`: attempts that are Running but asleep in one of flowlite's own waits,
+/// holding no slot and appearing in no row above. Without it an agent reads `global 0/32`
+/// on a machine running thirty commands, concludes nothing is happening and submits more.
+#[derive(Serialize)]
+struct Limits {
+    limits: Vec<LimitRow>,
+    waiting_attempts: u32,
+}
+
 /// Reads `config.toml` for the maxima and the disk tables for the counts, which is all
 /// `flowlite limits` reads too - so it answers for a directory whose server is down, and
 /// neither seeds `mem` nor holds a memory connection, exactly as that command does not.
-async fn limits_rows(toolkit: &Toolkit) -> anyhow::Result<Vec<LimitRow>> {
+async fn limits_rows(toolkit: &Toolkit) -> anyhow::Result<Limits> {
     let toolkit = toolkit.with_fresh_mem();
 
     let max_running_attempts = toolkit.app_config.orchestrator.max_running_attempts;
@@ -54,11 +67,15 @@ async fn limits_rows(toolkit: &Toolkit) -> anyhow::Result<Vec<LimitRow>> {
 
     let running_attempts = crud.count_running_attempts(&mut conn).await?;
     let claimed_limit_slots = crud.claimed_limit_slots(&mut conn).await?;
+    let waiting_attempts = crud.count_waiting_attempts(&mut conn).await?;
 
-    Ok(limit_rows(
-        max_running_attempts,
-        running_attempts,
-        &concurrency_limits,
-        &claimed_limit_slots,
-    ))
+    Ok(Limits {
+        limits: limit_rows(
+            max_running_attempts,
+            running_attempts,
+            &concurrency_limits,
+            &claimed_limit_slots,
+        ),
+        waiting_attempts,
+    })
 }

@@ -35,6 +35,7 @@ fn limit_panel_rows(rows: Vec<limits::LimitRow>) -> Vec<LimitPanelRow> {
 #[template(path = "routes/home/limits_panel/route.html")]
 struct LimitsPanelTemplate {
     limit_rows: Vec<LimitPanelRow>,
+    waiting_note: Option<String>,
 }
 
 /// The limits panel as its own fragment, so the home page can poll it the way it polls the
@@ -53,12 +54,13 @@ pub async fn limits_panel_route(
 
     // A data directory whose database briefly can't be reached shouldn't blank the panel -
     // it reads as nothing running, the same defensiveness the home page's own queries use.
-    let (running_attempts, claimed_limit_slots) = match state.conn_pool.acquire().await {
+    let (running_attempts, claimed_limit_slots, waiting_attempts) = match state.conn_pool.acquire().await {
         Ok(mut conn) => (
             crud.count_running_attempts(&mut conn).await.unwrap_or_default(),
             crud.claimed_limit_slots(&mut conn).await.unwrap_or_default(),
+            crud.count_waiting_attempts(&mut conn).await.unwrap_or_default(),
         ),
-        Err(_) => (0, BTreeMap::new()),
+        Err(_) => (0, BTreeMap::new(), 0),
     };
 
     let template = LimitsPanelTemplate {
@@ -68,6 +70,7 @@ pub async fn limits_panel_route(
             &app_config.concurrency_limits,
             &claimed_limit_slots,
         )),
+        waiting_note: limits::waiting_note(waiting_attempts),
     };
 
     match template.render() {

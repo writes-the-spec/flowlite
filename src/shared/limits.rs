@@ -58,6 +58,30 @@ pub fn is_full(row: &LimitRow) -> bool {
 }
 
 
+/// The line printed beside the limit table, or `None` when there is nothing to explain.
+///
+/// Every surface that renders `limit_rows` renders this too, worded once here rather than
+/// three times differently. Without it a machine running thirty task commands can show
+/// `global 0/32`, which reads as idle and is the first thing an operator would disbelieve.
+///
+/// A count rather than a row: a waiting attempt holds no named limit either, so a `waiting`
+/// column would be zero everywhere except `global` and invite the reading that some limit
+/// has waiters of its own.
+pub fn waiting_note(waiting_attempts: u32) -> Option<String> {
+
+    if waiting_attempts == 0 {
+        return None;
+    }
+
+    let subject = match waiting_attempts {
+        1 => "1 attempt is".to_string(),
+        many => format!("{many} attempts are"),
+    };
+
+    Some(format!("{subject} waiting on another run, holding no slot"))
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +138,34 @@ mod tests {
         let row = LimitRow { name: "openai_api".to_string(), in_use: 4, max: 5 };
 
         assert!(!is_full(&row));
+    }
+
+    /// Nothing waiting is the ordinary case, and a line saying "0 attempts waiting" under
+    /// every `limits` invocation is noise. The note exists to explain a discrepancy; with no
+    /// discrepancy there is nothing to explain.
+    #[test]
+    fn no_waiting_attempts_produces_no_note() {
+        assert_eq!(waiting_note(0), None);
+    }
+
+    /// Singular, because one is the common case for a pipeline composing with a single
+    /// `--wait` and "1 attempts" is the kind of thing a reader stops on.
+    #[test]
+    fn one_waiting_attempt_reads_in_the_singular() {
+        let note = waiting_note(1).unwrap();
+
+        assert!(note.contains("1 attempt is"), "{note}");
+        assert!(!note.contains("attempts"), "{note}");
+    }
+
+    /// The note has to say the two things that resolve the confusion: these are alive, and
+    /// they are not in the numbers above.
+    #[test]
+    fn the_note_says_they_are_waiting_and_hold_no_slot() {
+        let note = waiting_note(5).unwrap();
+
+        assert!(note.contains('5'), "{note}");
+        assert!(note.contains("waiting"), "{note}");
+        assert!(note.contains("no slot"), "{note}");
     }
 }

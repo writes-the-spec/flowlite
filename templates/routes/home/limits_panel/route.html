@@ -20,4 +20,8 @@
         {% endfor %}
     </tbody>
 </table>
+
+{% if let Some(note) = waiting_note %}
+<p class="view-sub">{{ note }}</p>
+{% endif %}
 </div>

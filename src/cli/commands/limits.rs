@@ -27,6 +27,7 @@ impl LimitsCmd {
 
         let running_attempts = crud.count_running_attempts(&mut conn).await?;
         let claimed_limit_slots = crud.claimed_limit_slots(&mut conn).await?;
+        let waiting_attempts = crud.count_waiting_attempts(&mut conn).await?;
 
         let rows = limits::limit_rows(
             max_running_attempts,
@@ -39,6 +40,10 @@ impl LimitsCmd {
             println!("{}", limits_json(&rows));
         } else {
             println!("{}", limits_table(&rows));
+
+            if let Some(note) = limits::waiting_note(waiting_attempts) {
+                println!("\n{note}");
+            }
         }
 
         Ok(())
