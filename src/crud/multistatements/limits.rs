@@ -9,9 +9,32 @@ use crate::crud::CRUD;
 use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter};
-use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, TaskRunAttemptStatus};
+use crate::crud::task_run_attempt::{
+    SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, TaskRunAttempt, TaskRunAttemptStatus,
+};
 
 impl CRUD {
+
+    /// Every attempt whose row says Running: the one set the three attempt tallies below
+    /// all start from, before each diverges on its own one-line predicate. They must agree
+    /// on it - a limit counted against a different set than the cap is a gate that lets
+    /// through what it says it is holding - and that is easier to keep true as one name
+    /// than as the same filter literal written out three times.
+    async fn select_running_attempts(
+        &self,
+        conn: &mut SqliteConnection,
+    ) -> anyhow::Result<Vec<TaskRunAttempt>> {
+
+        self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
+            filter: SelectTaskRunAttemptsDataFilter {
+                task_run_id: None,
+                job_run_id: None,
+                task_id: None,
+                status: Some(TaskRunAttemptStatus::Running),
+            },
+            sort: None,
+        }).await
+    }
 
     /// Whether the job already has as many runs in flight as it allows. Only a running
     /// job run holds a slot — a queued one is waiting for exactly this answer — and a
@@ -64,15 +87,7 @@ impl CRUD {
     /// runs.
     pub async fn count_running_attempts(&self, conn: &mut SqliteConnection) -> anyhow::Result<u32> {
 
-        let running_attempts = self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
-            filter: SelectTaskRunAttemptsDataFilter {
-                task_run_id: None,
-                job_run_id: None,
-                task_id: None,
-                status: Some(TaskRunAttemptStatus::Running),
-            },
-            sort: None,
-        }).await?;
+        let running_attempts = self.select_running_attempts(&mut *conn).await?;
 
         // A Running attempt with waiting_since set is asleep in one of flowlite's own wait
         // loops, holding a slot it is not using - see src/crud/multistatements/waiting.rs.
@@ -92,15 +107,7 @@ impl CRUD {
     /// `count_running_attempts`.
     pub async fn claimed_limit_slots(&self, conn: &mut SqliteConnection) -> anyhow::Result<BTreeMap<String, u32>> {
 
-        let running_attempts = self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
-            filter: SelectTaskRunAttemptsDataFilter {
-                task_run_id: None,
-                job_run_id: None,
-                task_id: None,
-                status: Some(TaskRunAttemptStatus::Running),
-            },
-            sort: None,
-        }).await?;
+        let running_attempts = self.select_running_attempts(&mut *conn).await?;
 
         let mut claimed_limit_slots = BTreeMap::new();
 
@@ -132,15 +139,7 @@ impl CRUD {
     /// sees an idle-looking machine with thirty processes on it.
     pub async fn count_waiting_attempts(&self, conn: &mut SqliteConnection) -> anyhow::Result<u32> {
 
-        let running_attempts = self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
-            filter: SelectTaskRunAttemptsDataFilter {
-                task_run_id: None,
-                job_run_id: None,
-                task_id: None,
-                status: Some(TaskRunAttemptStatus::Running),
-            },
-            sort: None,
-        }).await?;
+        let running_attempts = self.select_running_attempts(&mut *conn).await?;
 
         let waiting = running_attempts
             .iter()

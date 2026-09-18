@@ -28,21 +28,25 @@ impl CRUD {
         task_run_attempt_id: i64,
     ) -> anyhow::Result<bool> {
 
-        let attempts = self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
+        // The filter has no id, so the row is found in memory - which makes the status a
+        // matter of how much comes back. Running is the only status that can be stamped
+        // anyway, and every row carries its whole `output`, so asking for the live set
+        // rather than the table keeps a directory with months of run history from reading
+        // months of captured stdout to answer a question about one attempt.
+        let running_attempts = self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
             filter: SelectTaskRunAttemptsDataFilter {
                 task_run_id: None,
                 job_run_id: None,
                 task_id: None,
-                status: None,
+                status: Some(TaskRunAttemptStatus::Running),
             },
             sort: None,
         }).await?;
 
-        let Some(attempt) = attempts.into_iter().find(|attempt| attempt.id == task_run_attempt_id) else {
-            return Ok(false);
-        };
+        let found = running_attempts.iter().any(|attempt| attempt.id == task_run_attempt_id);
 
-        if attempt.status != TaskRunAttemptStatus::Running {
+        // Not Running, or gone entirely: either way this caller has nothing to speak for.
+        if !found {
             return Ok(false);
         }
 
@@ -113,7 +117,7 @@ mod tests {
     }
 
     /// The reason this is a multistatement rather than one update: a process can outlive
-    /// the attempt whose id it inherited - a backgrounded `job-run wait` still polling
+    /// the attempt whose id it inherited - a backgrounded `job-run stop --wait` still polling
     /// after its parent task settled - and must not be able to free a slot on a row that
     /// finished. Reading first is what refuses it.
     #[tokio::test]
