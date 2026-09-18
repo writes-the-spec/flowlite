@@ -582,6 +582,13 @@ It reads `config.toml` for the maxima and the on-disk database for the counts di
 it answers for a data directory whose server is down as readily as one whose server is up —
 the same guarantee `status` makes by reading the lock file instead of asking the process.
 
+`max_running_attempts` bounds attempts *doing work*. An attempt asleep inside
+`job submit --wait`, `job-run stop --wait`, or an MCP call with `wait_seconds` is not one of
+them: it gives its slot back for as long as it polls, and takes it again when the wait
+returns. So the number of task processes alive at once is not bounded by this key, and a
+machine composing heavily can show a low number in use with many processes running.
+`flowlite limits` says how many are waiting.
+
 ## Runs from the command line
 
 `job submit` returns as soon as the run is written, which is what an unattended scheduler
@@ -636,6 +643,12 @@ flowlite job-run stop 42 --wait && flowlite job-run rerun 42
 Unlike `job submit --wait` it exits 0 whichever status the run settled to: the stop did
 what it was asked either way. It makes the same unserved-directory check, and refuses the
 same way.
+
+flowlite knows about its own waits, and only those. A task blocked on `sleep`, on a slow
+HTTP call, or inside an agent waiting on a provider holds its slot throughout — nothing
+reads a command to guess what it is doing. A task waiting on a run *of its own job* still
+deadlocks against `max_parallel_runs`: that gate counts job runs rather than attempts, so
+it has no way to know the waiting attempt is the one it is blocking.
 
 ### A run from a file
 
@@ -1042,6 +1055,11 @@ is refused exactly as `--param` refuses it.
 agent gets an outcome in one call instead of a polling loop. It returns as soon as the run
 settles; if the time runs out first the run comes back merely unfinished rather than as an
 error, since its id is what lets the agent ask again. A value above 300 clamps to 300.
+
+It holds no slot for that span either, the same as `--wait` on the command line — but an
+agent that goes on to wait on its own model provider before deciding what to submit next
+holds its slot the whole time, since flowlite only recognises the wait it just made, not
+whatever the agent does around it.
 
 **A submit into a directory nothing is serving writes a run that will not start.** It is
 allowed, as on the command line, and the tool result says so beside the JSON: the run stays
