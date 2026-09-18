@@ -263,7 +263,7 @@ impl JobRunStopCmd {
             return Ok(());
         }
 
-        let job_run = wait_for_job_run(&crud, &mut conn, self.job_run_id, poll_interval).await?;
+        let job_run = wait_for_job_run(&crud, &mut conn, self.job_run_id, poll_interval, None).await?;
 
         // No settled status is a failure here, unlike `job submit --wait`: this command
         // asked for the run to settle and it settled. Which status it settled to is the

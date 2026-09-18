@@ -1,11 +1,16 @@
 //! The bounded wait shared by `submit_job`, `get_job_run` and `stop_job_run`.
 //!
-//! `wait_for_job_run` (`src/shared/wait.rs`) already polls a run at the orchestrator's
-//! own interval until it finishes. This wraps that same loop in `tokio::time::timeout`
-//! rather than rewriting it, so the polling loop itself gains no notion of a deadline. On
-//! elapse the run is read once more and returned unfinished, never as an error: "still
-//! running, here is the id" is an answer, and a timeout error would throw away the id the
-//! agent needs to ask again.
+//! `wait_for_job_run` (`src/shared/wait.rs`) already polls a run at the orchestrator's own
+//! interval until it finishes, and takes the deadline as an argument rather than being
+//! wrapped in one here. On elapse it reads the run once more and returns it unfinished,
+//! never as an error: "still running, here is the id" is an answer, and a timeout error
+//! would throw away the id the agent needs to ask again.
+//!
+//! The deadline belongs down there because that function also marks the waiting attempt as
+//! holding no slot, and clears the mark on its way out. A `tokio::time::timeout` around it
+//! from here would drop that future when the bound elapsed, skipping the clear - and this
+//! bound elapses on the ordinary path, not an exceptional one. So all this module does now
+//! is turn `wait_seconds` into that argument.
 //!
 //! No transaction wraps the poll, on purpose: `src/toolkit.rs`'s `MIGRATION_LOCK` is held
 //! only while a connection's own schema migration runs, never across a sleep, so a
@@ -52,10 +57,7 @@ pub(crate) async fn wait_for_settled_job_run(
     let poll_interval = crud.toolkit.app_config.orchestrator.poll_interval();
     let bound = Duration::from_secs(wait_seconds);
 
-    match tokio::time::timeout(bound, wait_for_job_run(crud, conn, job_run_id, poll_interval)).await {
-        Ok(result) => result,
-        Err(_elapsed) => select_job_run(crud, conn, job_run_id).await,
-    }
+    wait_for_job_run(crud, conn, job_run_id, poll_interval, Some(bound)).await
 }
 
 #[cfg(test)]

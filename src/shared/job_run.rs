@@ -358,6 +358,7 @@ mod tests {
             &mut conn,
             job_run.id,
             std::time::Duration::from_millis(1),
+            None,
         ).await.unwrap();
 
         assert_eq!(settled.status, JobRunStatus::Aborted);

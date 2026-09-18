@@ -163,7 +163,7 @@ impl JobSubmitCmd {
         // The run is read back even without --wait, so that --json prints one shape either
         // way and a caller can read .status off both.
         let job_run = match self.wait {
-            true => wait_for_job_run(&crud, &mut conn, job_run_id, poll_interval).await?,
+            true => wait_for_job_run(&crud, &mut conn, job_run_id, poll_interval, None).await?,
             false => select_job_run(&crud, &mut conn, job_run_id).await?,
         };
 
