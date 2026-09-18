@@ -29,13 +29,20 @@ fn data_dir(label: &str) -> PathBuf {
     dir
 }
 
+/// What the regression costs to report. Without it the parent waits out the default attempt
+/// timeout - an hour of a CI job to learn that the child was never dispatched - and with it
+/// the failure arrives in a minute. A minute rather than a few seconds because the passing
+/// path spawns two runs and a server on whatever machine CI gave us, and a timeout tight
+/// enough to be brisk there is one loose enough to flake.
+const PARENT_TIMEOUT_SECONDS: u32 = 60;
+
 /// The composition `FLOWLITE_DATA_DIR` is injected for: a task that submits another job's
 /// run and waits for it. The binary is named by absolute path because a task command runs
 /// under `sh -c` with whatever PATH the server inherited, which in a test is not this
 /// build's target directory.
 fn parent_yaml() -> String {
     format!(
-        "id: parent\nname: Parent\ntasks:\n  - id: launch\n    command: {BINARY} job submit child --wait\n",
+        "id: parent\nname: Parent\ntasks:\n  - id: launch\n    timeout: {PARENT_TIMEOUT_SECONDS}\n    command: {BINARY} job submit child --wait\n",
     )
 }
 
@@ -43,8 +50,8 @@ const CHILD: &str = "id: child\nname: Child\ntasks:\n  - id: work\n    command: 
 
 /// Before this feature the parent's attempt held the only slot while it polled, so the
 /// child's attempt stayed Queued for ever and the parent waited until its own timeout. The
-/// assertion is simply that the parent run reaches a successful end at all, within a bound
-/// far below any attempt timeout.
+/// assertion is simply that the parent run reaches a successful end at all - a regression
+/// fails it by timing the parent out, which is what the task's own `timeout:` bounds.
 #[test]
 fn a_task_waiting_on_a_child_run_does_not_hold_the_only_slot() {
 
@@ -67,7 +74,6 @@ fn a_task_waiting_on_a_child_run_does_not_hold_the_only_slot() {
     server.stop();
 
     assert!(out.status.success(), "parent run did not succeed\nstdout: {stdout}\nstderr: {stderr}");
-    assert!(stdout.contains("child ran") || !stdout.is_empty(), "{stdout}");
 }
 
 /// The other half of the same fact, read off the gate rather than off the outcome: while

@@ -569,7 +569,13 @@ NAME         IN USE  MAX
 global           32   32  FULL
 openai_api        0    -
 warehouse         3    3  FULL
+
+2 attempts are waiting on another run, holding no slot
 ```
+
+The line under the table appears only when something is waiting, and says where the
+processes went: those attempts are running, but asleep inside a wait of flowlite's own, so
+they are in none of the rows above.
 
 A row whose in-use count has reached a non-zero max is marked `FULL`, which is the answer to
 "why is nothing running". A limit configured `0` means no ceiling at all, not zero slots,
@@ -1019,7 +1025,11 @@ occurrence again — an ad-hoc run, or one whose instant has gone by.
 
 `get_serve_status` and `list_limits` are the pair an agent reaches for when a run does not
 progress: the first says whether anything is serving the directory at all, the second what
-a `queued` run is waiting behind.
+a `queued` run is waiting behind. `list_limits` returns the rows `flowlite limits --json`
+prints under `limits`, plus `waiting_attempts`: how many attempts are running but asleep in
+a wait of flowlite's own. They hold no slot and are counted in none of the rows, so without
+that field an agent reads `global 0/32` on a machine running thirty commands, concludes
+nothing is happening and submits more.
 
 `init_data_dir` takes no arguments: the directory is the one `-D` named, so an agent cannot
 point it somewhere nobody asked for. Nothing is overwritten, and the result says which files
@@ -1056,7 +1066,8 @@ agent gets an outcome in one call instead of a polling loop. It returns as soon 
 settles; if the time runs out first the run comes back merely unfinished rather than as an
 error, since its id is what lets the agent ask again. A value above 300 clamps to 300.
 
-It holds no slot for that span either, the same as `--wait` on the command line — but an
+It holds no slot for that span either, the same as `--wait` on the command line, and takes
+it back when the call returns — whether the run settled or the bound ran out first. But an
 agent that goes on to wait on its own model provider before deciding what to submit next
 holds its slot the whole time, since flowlite only recognises the wait it just made, not
 whatever the agent does around it.
