@@ -63,7 +63,7 @@ impl Orchestrator {
     /// Each attempt is in its own process group, so nothing kills them for us: before
     /// they were grouped, Ctrl-C reached them only because they shared this process's
     /// foreground group.
-    pub async fn shutdown(self: &Self) {
+    pub async fn shutdown(&self) {
 
         self.stopping.store(true, Ordering::SeqCst);
         self.signals.publish();
@@ -96,7 +96,7 @@ impl Orchestrator {
     ///
     /// Every wake-up is registered before any Poller is spawned, so the first service's
     /// own startup pass can never publish to a signal the others haven't registered yet.
-    pub fn start(self: &Self) {
+    pub fn start(&self) {
 
         let job_run_dispatcher_wakeup = self.signals.register();
         let job_run_monitor_wakeup = self.signals.register();

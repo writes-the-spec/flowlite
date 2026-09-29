@@ -151,7 +151,7 @@ impl CRUD {
             .bind(data.input.job_run_id)
             .bind(&data.input.job_id)
             .bind(&data.input.task_id)
-            .bind(&data.input.stream)
+            .bind(data.input.stream)
             .bind(self.toolkit.get_current_ts())
             .bind(&data.input.content)
             .execute(executor)

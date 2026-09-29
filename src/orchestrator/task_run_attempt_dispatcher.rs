@@ -733,6 +733,10 @@ impl Service for TaskRunAttemptDispatcher {
 
 
 #[cfg(test)]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "a test holds the environment lock for its whole run, on purpose - see test_support",
+)]
 mod tests {
     use super::*;
     use crate::crud::job_run::JobRunStatus;

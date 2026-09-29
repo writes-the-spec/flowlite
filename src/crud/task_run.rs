@@ -217,7 +217,7 @@ impl CRUD {
             .bind(sqlx::types::Json(&data.input.secret_env))
             .bind(&data.input.working_dir)
             .bind(self.toolkit.get_current_ts())
-            .bind(&data.input.status)
+            .bind(data.input.status)
             .execute(executor)
             .await?;
 

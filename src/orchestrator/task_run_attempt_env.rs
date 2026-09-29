@@ -36,6 +36,10 @@ use crate::run_dir::task_output_path;
 /// two are joined here. This is the one place in the codebase a secret's value exists
 /// outside its own config, and only for as long as it takes to build this map for one
 /// spawn.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is an independent input the dispatcher gathers for one spawn",
+)]
 pub fn build_task_run_attempt_env(
     task_run: &TaskRun,
     job_run: &JobRun,

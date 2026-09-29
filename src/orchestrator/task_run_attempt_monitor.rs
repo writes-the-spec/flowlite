@@ -579,6 +579,10 @@ fn timeout_note(task_run_attempt_child: &TaskRunAttemptChild, now: DateTime<Utc>
 
 
 #[cfg(test)]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "a test holds the environment lock for its whole run, on purpose - see test_support",
+)]
 mod tests {
     use super::*;
     use crate::test_support::{has_exited, read_command_file, read_pid_file, reading_the_environment};

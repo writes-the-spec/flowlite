@@ -7,6 +7,10 @@
 //! all fifteen until the day that hid four unused `Toolkit` methods and six unused
 //! `CronTrigger` ones. Widen one only when something outside the crate genuinely needs it.
 
+// A module's main file is named after it - crud/crud.rs, scheduler/scheduler.rs - and
+// the skills point at those paths.
+#![allow(clippy::module_inception)]
+
 pub mod app_config;
 pub mod cli;
 pub(crate) mod mcp;

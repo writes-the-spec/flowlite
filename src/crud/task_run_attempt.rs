@@ -182,7 +182,7 @@ impl CRUD {
             .bind(&data.input.task_id)
             .bind(self.toolkit.get_current_ts())
             .bind(data.input.attempt)
-            .bind(&data.input.status)
+            .bind(data.input.status)
             .execute(executor)
             .await?;
 

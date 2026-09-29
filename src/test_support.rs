@@ -53,8 +53,6 @@ use crate::crud::schedule_job::{InsertScheduleJobData, InsertScheduleJobDataInpu
 /// alone and fails in a full run, blaming whichever load or spawn happened to overlap.
 static ENVIRONMENT: RwLock<()> = RwLock::new(());
 
-/// Taken by every test that loads a config or spawns a command. Bind it to a name - a
-/// `let _` drops the guard on the spot and holds nothing.
 /// The `BTreeMap<String, String>` shape `env`, `secret_env` and `parameters` all take,
 /// from the pairs a test actually cares about.
 pub fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -64,6 +62,11 @@ pub fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Taken by every test that loads a config or spawns a command. Bind it to a name - a
+/// `let _` drops the guard on the spot and holds nothing.
+///
+/// A std lock held across awaits, which clippy flags: blocking is the point here, since
+/// every test it waits on runs on a thread of its own.
 pub fn reading_the_environment() -> RwLockReadGuard<'static, ()> {
     ENVIRONMENT.read().unwrap_or_else(PoisonError::into_inner)
 }

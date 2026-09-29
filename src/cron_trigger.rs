@@ -26,8 +26,8 @@ impl CronTrigger {
         schedule: &Schedule,
     ) -> Self {
         Self {
-            schedule: CronSchedule::from_str(&*schedule.cron).unwrap(),
-            timezone: Tz::from_str(&*schedule.timezone).unwrap(),
+            schedule: CronSchedule::from_str(&schedule.cron).unwrap(),
+            timezone: Tz::from_str(&schedule.timezone).unwrap(),
             start_date: schedule.start_date,
             end_date: schedule.end_date,
             disabled: schedule.disabled,

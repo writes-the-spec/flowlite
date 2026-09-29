@@ -246,10 +246,10 @@ impl CRUD {
             .bind(&data.input.job_description)
             .bind(sqlx::types::Json(&data.input.parameters))
             .bind(self.toolkit.get_current_ts())
-            .bind(&data.input.scheduled_at)
+            .bind(data.input.scheduled_at)
             .bind(&data.input.schedule_id)
             .bind(data.input.parent_task_run_attempt_id)
-            .bind(&data.input.status)
+            .bind(data.input.status)
             .execute(executor)
             .await?;
 

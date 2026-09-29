@@ -140,7 +140,7 @@ impl TaskRunAttemptChildren {
     }
 
     pub async fn insert(
-        self: &Self,
+        &self,
         task_run_attempt_id: i64,
         running_task_run_attempt: TaskRunAttemptChild,
     ) {
@@ -148,7 +148,7 @@ impl TaskRunAttemptChildren {
     }
 
     pub async fn remove(
-        self: &Self,
+        &self,
         task_run_attempt_id: i64,
     ) -> Option<TaskRunAttemptChild> {
         self.children.lock().await.remove(&task_run_attempt_id)
@@ -160,7 +160,7 @@ impl TaskRunAttemptChildren {
     ///
     /// The attempt rows are left Running on purpose: `Orchestrator::recover` settles them
     /// on the next start.
-    pub async fn terminate_all(self: &Self, grace: Duration) {
+    pub async fn terminate_all(&self, grace: Duration) {
 
         let mut children = self.children.lock().await;
 
@@ -185,6 +185,10 @@ impl TaskRunAttemptChildren {
 
 
 #[cfg(test)]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "a test holds the environment lock for its whole run, on purpose - see test_support",
+)]
 mod tests {
     use crate::crud::job_run::JobRunStatus;
     use crate::crud::task_run_attempt::TaskRunAttemptStatus;

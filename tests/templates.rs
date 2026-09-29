@@ -157,15 +157,16 @@ fn every_vendored_package_matches_the_licenses_file() {
         }
 
         // The table's short form, e.g. "v25" where SOURCE.md says "v25 (variable, ...)".
-        if let Some(version) = source
+        let version = source
             .lines()
             .find(|line| line.trim_start().starts_with("| Version"))
             .and_then(|line| line.split('|').nth(2))
-            .and_then(|value| value.split_whitespace().next())
+            .and_then(|value| value.split_whitespace().next());
+
+        if let Some(version) = version
+            && !licenses.contains(version)
         {
-            if !licenses.contains(version) {
-                problems.push(format!("{name}: SOURCE.md says {version}, the licenses file does not"));
-            }
+            problems.push(format!("{name}: SOURCE.md says {version}, the licenses file does not"));
         }
     }
 

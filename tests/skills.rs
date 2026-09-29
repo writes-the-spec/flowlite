@@ -219,7 +219,7 @@ fn columns(sql: &str) -> Vec<String> {
 
     sql.lines()
         .filter_map(|line| {
-            let mut words = line.trim().split_whitespace();
+            let mut words = line.split_whitespace();
             let name = words.next()?;
             let kind = words.next()?;
 
