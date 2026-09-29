@@ -31,9 +31,10 @@ use crate::crud::task_run_attempt_output::{DeleteTaskRunAttemptOutputsData, Dele
 
 impl CRUD {
 
-    /// Deletes every job run matching `data.filter`, and every row across the five child
-    /// tables that carries its `job_run_id`, child-first, in one transaction - so no other
-    /// reader ever sees a run whose tasks are half gone.
+    /// Deletes every job run matching `data.filter`, every run its tasks submitted, and every
+    /// row across the five child tables that carries one of their `job_run_id`s, child-first,
+    /// in one transaction - so no other reader ever sees a run whose tasks are half gone.
+    /// Answers the ids of every run it deleted, descendants included.
     ///
     /// The filter is resolved to ids *inside* that transaction, so the guard a caller
     /// expresses in the filter and the delete it authorises are one atomic step. The
@@ -57,7 +58,7 @@ impl CRUD {
     /// rather than leaving a silent orphan. An entirely empty `DeleteJobRunsDataFilter`
     /// deletes every job run in the database, and everything that hangs off it - see the
     /// module doc for why that is not guarded against here.
-    pub async fn delete_job_runs_with_children(&self, conn: &mut SqliteConnection, data: &DeleteJobRunsData) -> anyhow::Result<()> {
+    pub async fn delete_job_runs_with_children(&self, conn: &mut SqliteConnection, data: &DeleteJobRunsData) -> anyhow::Result<Vec<i64>> {
 
         let mut tx = conn.begin().await?;
 
@@ -86,68 +87,88 @@ impl CRUD {
             .map(|job_run| job_run.id)
             .collect::<Vec<_>>();
 
+        let mut deleted = Vec::new();
+
         for id in ids {
 
-            self.delete_task_run_attempt_outputs(&mut *tx, &DeleteTaskRunAttemptOutputsData {
-                filter: DeleteTaskRunAttemptOutputsDataFilter {
-                    id: None,
-                    task_run_attempt_id: None,
-                    task_run_id: None,
-                    job_run_id: Some(id),
-                    job_id: None,
-                    task_id: None,
-                    stream: None,
-                },
-            }).await?;
+            // A run's descendants go with it, deepest first: each references an attempt of
+            // the run above it, and the foreign key refuses to lose that attempt first.
+            let descendants = self.select_job_run_descendants(&mut *tx, id).await?;
 
-            self.delete_task_run_attempts(&mut *tx, &DeleteTaskRunAttemptsData {
-                filter: DeleteTaskRunAttemptsDataFilter {
-                    task_run_id: None,
-                    job_run_id: Some(id),
-                    task_id: None,
-                    status: None,
-                },
-            }).await?;
+            for descendant_id in descendants.iter().rev().map(|descendant| descendant.id) {
+                self.delete_job_run_rows(&mut *tx, descendant_id).await?;
+                deleted.push(descendant_id);
+            }
 
-            self.delete_task_runs(&mut *tx, &DeleteTaskRunsData {
-                filter: DeleteTaskRunsDataFilter {
-                    id: None,
-                    job_run_id: Some(id),
-                    job_id: None,
-                    task_id: None,
-                    status: None,
-                },
-            }).await?;
-
-            self.delete_job_run_stops(&mut *tx, &DeleteJobRunStopsData {
-                filter: DeleteJobRunStopsDataFilter {
-                    id: None,
-                    job_run_id: Some(id),
-                },
-            }).await?;
-
-            self.delete_job_run_notifications(&mut *tx, &DeleteJobRunNotificationsData {
-                filter: DeleteJobRunNotificationsDataFilter {
-                    id: None,
-                    job_run_id: Some(id),
-                    notify_on: None,
-                    channel: None,
-                    status: None,
-                },
-            }).await?;
-
-            self.delete_job_runs(&mut *tx, &DeleteJobRunsData {
-                filter: DeleteJobRunsDataFilter {
-                    id: Some(id),
-                    job_id: None,
-                    status: None,
-                    schedule_id: None,
-                    scheduled_at_gt: None,
-                },
-            }).await?;
+            self.delete_job_run_rows(&mut *tx, id).await?;
+            deleted.push(id);
         }
 
         tx.commit().await?;
+
+        Ok(deleted)
+    }
+
+    /// One run's rows across the six tables, children first.
+    async fn delete_job_run_rows(&self, conn: &mut SqliteConnection, id: i64) -> anyhow::Result<()> {
+
+        self.delete_task_run_attempt_outputs(&mut *conn, &DeleteTaskRunAttemptOutputsData {
+            filter: DeleteTaskRunAttemptOutputsDataFilter {
+                id: None,
+                task_run_attempt_id: None,
+                task_run_id: None,
+                job_run_id: Some(id),
+                job_id: None,
+                task_id: None,
+                stream: None,
+            },
+        }).await?;
+
+        self.delete_task_run_attempts(&mut *conn, &DeleteTaskRunAttemptsData {
+            filter: DeleteTaskRunAttemptsDataFilter {
+                task_run_id: None,
+                job_run_id: Some(id),
+                task_id: None,
+                status: None,
+            },
+        }).await?;
+
+        self.delete_task_runs(&mut *conn, &DeleteTaskRunsData {
+            filter: DeleteTaskRunsDataFilter {
+                id: None,
+                job_run_id: Some(id),
+                job_id: None,
+                task_id: None,
+                status: None,
+            },
+        }).await?;
+
+        self.delete_job_run_stops(&mut *conn, &DeleteJobRunStopsData {
+            filter: DeleteJobRunStopsDataFilter {
+                id: None,
+                job_run_id: Some(id),
+            },
+        }).await?;
+
+        self.delete_job_run_notifications(&mut *conn, &DeleteJobRunNotificationsData {
+            filter: DeleteJobRunNotificationsDataFilter {
+                id: None,
+                job_run_id: Some(id),
+                notify_on: None,
+                channel: None,
+                status: None,
+            },
+        }).await?;
+
+        self.delete_job_runs(&mut *conn, &DeleteJobRunsData {
+            filter: DeleteJobRunsDataFilter {
+                id: Some(id),
+                job_id: None,
+                status: None,
+                schedule_id: None,
+                scheduled_at_gt: None,
+            },
+        }).await?;
 
         Ok(())
     }
@@ -335,6 +356,34 @@ mod tests {
             limit: Some(1),
             offset: None,
         }).await.unwrap()
+    }
+
+    /// A child references an attempt of its parent, so deleting the parent without it
+    /// would fail on the foreign key - and a grandchild the same one level down.
+    #[tokio::test]
+    async fn deleting_a_job_run_deletes_the_runs_its_tasks_submitted() {
+
+        let db = TestDb::new().await;
+
+        let parent = db.insert_job_run(JobRunStatus::Succeeded).await;
+        let parent_task_run = db.insert_task_run(parent.id, TaskRunStatus::Succeeded).await;
+        let parent_attempt = db.insert_task_run_attempt(&parent_task_run, 1, TaskRunAttemptStatus::Succeeded).await;
+
+        let child = db.insert_child_job_run(&parent_attempt, JobRunStatus::Succeeded).await;
+        let child_task_run = db.insert_task_run(child.id, TaskRunStatus::Succeeded).await;
+        let child_attempt = db.insert_task_run_attempt(&child_task_run, 1, TaskRunAttemptStatus::Succeeded).await;
+
+        let grandchild = db.insert_child_job_run(&child_attempt, JobRunStatus::Succeeded).await;
+        let unrelated = db.insert_job_run(JobRunStatus::Succeeded).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let mut deleted = db.crud.delete_job_runs_with_children(&mut conn, &delete_by_id(parent.id)).await.unwrap();
+        deleted.sort();
+
+        assert_eq!(deleted, vec![parent.id, child.id, grandchild.id]);
+        assert!(job_run_row(&db, child.id).await.is_none());
+        assert!(job_run_row(&db, grandchild.id).await.is_none());
+        assert!(job_run_row(&db, unrelated.id).await.is_some());
     }
 
     /// Every row a run can own - across all six tables - is gone once it is deleted, and

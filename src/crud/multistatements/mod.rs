@@ -10,6 +10,7 @@ pub mod delete_job_run;
 pub mod delete_job_runs_with_children;
 pub mod invalidate_job_run;
 pub mod job_run_definition;
+pub mod job_run_descendants;
 pub mod job_run_reads;
 pub mod limits;
 pub mod rerun_job;

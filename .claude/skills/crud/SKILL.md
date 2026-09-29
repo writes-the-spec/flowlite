@@ -18,6 +18,7 @@ A method that runs **one** statement lives in its entity's file. A method that r
 | [job_run_definition.rs](../../../src/crud/multistatements/job_run_definition.rs) | Not an operation: the `JobRunDefinition` vocabulary those two share, the merges that build one, and `insert_job_run_definition` — the only place a run's config is written |
 | [limits.rs](../../../src/crud/multistatements/limits.rs) | `is_job_at_max_parallel_runs`, `count_running_attempts`, `claimed_limit_slots` |
 | [secret_env.rs](../../../src/crud/multistatements/secret_env.rs) | `check_secret_env_is_satisfied` and the pure policy under it |
+| [job_run_descendants.rs](../../../src/crud/multistatements/job_run_descendants.rs) | `select_job_run_descendants` — every run a run's tasks submitted, recursively |
 | [job_run_reads.rs](../../../src/crud/multistatements/job_run_reads.rs) | `select_job_run_with_task_runs`, `select_task_run_attempt_logs` |
 | [ad_hoc_job.rs](../../../src/crud/multistatements/ad_hoc_job.rs) | `seed_ad_hoc_job` and `JobIdAlreadyInstalled` |
 | [skip_job_run.rs](../../../src/crud/multistatements/skip_job_run.rs) | `skip_job_run` — the job run and every task run it owns, for a run nobody ever started |

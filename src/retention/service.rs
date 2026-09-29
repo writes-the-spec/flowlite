@@ -204,10 +204,19 @@ impl Service for RetentionService {
 
         let mut conn = self.conn_pool.acquire().await?;
 
+        // The run's descendants are deleted with it, and a parent that did not wait for its
+        // children can finish before them - so it is left for a later pass until every one
+        // has finished, rather than taking a running child with it.
+        let descendants = self.crud.select_job_run_descendants(&mut conn, *row).await?;
+
+        if descendants.iter().any(|descendant| !descendant.status.is_finished()) {
+            return Ok(());
+        }
+
         // Never an entirely empty filter: that would match every row in job_run and
         // delete every job run in the database, by design of
         // `delete_job_runs_with_children` — see that method's own doc comment.
-        self.crud.delete_job_runs_with_children(&mut conn, &DeleteJobRunsData {
+        let deleted = self.crud.delete_job_runs_with_children(&mut conn, &DeleteJobRunsData {
             filter: DeleteJobRunsDataFilter {
                 id: Some(*row),
                 job_id: None,
@@ -221,11 +230,13 @@ impl Service for RetentionService {
         // returning an error here would have the next pass re-select an id that no longer
         // exists and fail on it for ever. A directory left behind is a directory; a poller
         // that cannot get past one row is every run of every job stopping.
-        if let Err(error) = remove_job_run_dir(&self.app_config.data_dir, *row) {
-            eprintln!(
-                "Job run {} was deleted but its directory could not be removed: {:#}",
-                row, error,
-            );
+        for job_run_id in deleted {
+            if let Err(error) = remove_job_run_dir(&self.app_config.data_dir, job_run_id) {
+                eprintln!(
+                    "Job run {} was deleted but its directory could not be removed: {:#}",
+                    job_run_id, error,
+                );
+            }
         }
 
         Ok(())
@@ -502,6 +513,40 @@ mod tests {
         service_for(&db).handle(&job_run.id).await.unwrap();
 
         assert!(!dir.exists());
+    }
+
+    /// A parent that did not wait for its child can finish first. Deleting it then would
+    /// delete the child with it, still running, so it waits for a pass after the child is
+    /// done - and takes the child's directory with it.
+    #[tokio::test]
+    async fn a_parent_is_kept_until_the_runs_it_submitted_have_finished() {
+        let db = TestDb::new().await;
+
+        let parent = db.insert_job_run(JobRunStatus::Succeeded).await;
+        let task_run = db.insert_task_run(parent.id, TaskRunStatus::Succeeded).await;
+        let attempt = db.insert_task_run_attempt(&task_run, 1, crate::crud::task_run_attempt::TaskRunAttemptStatus::Succeeded).await;
+        let child = db.insert_child_job_run(&attempt, JobRunStatus::Running).await;
+
+        let child_dir = crate::run_dir::job_run_dir(&db.app_config().data_dir, child.id).unwrap();
+
+        service_for(&db).handle(&parent.id).await.unwrap();
+
+        assert_eq!(db.job_run(parent.id).await.id, parent.id);
+        assert!(child_dir.exists());
+
+        db.crud.update_job_runs(&*db.conn_pool, &crate::crud::job_run::UpdateJobRunsData {
+            input: crate::crud::job_run::UpdateJobRunsDataInput {
+                status: Some(JobRunStatus::Succeeded),
+                started_at: None,
+                finished_at: None,
+            },
+            filter: crate::crud::job_run::UpdateJobRunsDataFilter { id: Some(child.id) },
+        }).await.unwrap();
+
+        service_for(&db).handle(&parent.id).await.unwrap();
+
+        assert_eq!(db.crud.count_finished_job_runs(&mut db.conn_pool.acquire().await.unwrap()).await.unwrap(), 0);
+        assert!(!child_dir.exists());
     }
 
     #[tokio::test]

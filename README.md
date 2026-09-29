@@ -870,6 +870,10 @@ max_deletes_per_pass = 100     # the most runs one pass deletes, 0 for no cap
 first pass against an already-large backlog cannot hold the single SQLite writer for
 minutes.
 
+A run is deleted together with the runs its tasks submitted (see [Runs a task
+submits](#runs-a-task-submits)), and waits until every one of those has finished too. A
+child can still go earlier, under its own job's `keep_runs`.
+
 **Deleting rows frees SQLite's pages for reuse but does not shrink `flowlite.db`** — the
 database stops growing rather than gets smaller. Get the space back with the server
 stopped:
