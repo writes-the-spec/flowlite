@@ -4,7 +4,7 @@ use crate::crud::CRUD;
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus, UpdateTaskRunAttemptsData, UpdateTaskRunAttemptsDataFilter, UpdateTaskRunAttemptsDataInput};
 use crate::crud::task_run_attempt_output::{InsertTaskRunAttemptOutputData, InsertTaskRunAttemptOutputDataInput, TaskRunAttemptOutputStream};
-use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
+use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren, Termination};
 use crate::poller::Service;
 use crate::run_dir::{job_run_dir, task_output_path};
 use crate::signals::Signals;
@@ -60,15 +60,19 @@ impl TaskRunAttemptMonitor {
             return self.set_to_invalid(task_run_attempt, None).await;
         };
 
+        // Already asked to exit, so its status was decided then; all that is left is
+        // waiting for it to go, or for the grace to run out.
+        if let Some(status) = task_run_attempt_child.terminating.as_ref().map(|termination| termination.status) {
+            return self.handle_terminating(task_run_attempt, task_run_attempt_child, status).await;
+        }
+
         match self.derive_next_status(task_run_attempt, &mut task_run_attempt_child).await {
             Ok(TaskRunAttemptStatus::Succeeded) =>
                 self.set_to_succeeded(task_run_attempt, &mut task_run_attempt_child).await,
             Ok(TaskRunAttemptStatus::Failed) =>
                 self.set_to_failed(task_run_attempt, &mut task_run_attempt_child).await,
-            Ok(TaskRunAttemptStatus::TimedOut) =>
-                self.set_to_timed_out(task_run_attempt, &mut task_run_attempt_child).await,
-            Ok(TaskRunAttemptStatus::Aborted) =>
-                self.set_to_aborted(task_run_attempt, &mut task_run_attempt_child).await,
+            Ok(status @ (TaskRunAttemptStatus::TimedOut | TaskRunAttemptStatus::Aborted)) =>
+                self.begin_termination(task_run_attempt, task_run_attempt_child, status).await,
             Ok(TaskRunAttemptStatus::Running) => {
                 let result = self.record_output(task_run_attempt, &mut task_run_attempt_child).await;
                 self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
@@ -118,7 +122,7 @@ impl TaskRunAttemptMonitor {
     /// handle — unreachable while its checks cover every case. See
     /// `JobRunDispatcher::set_to_invalid` for why it settles rather than raises.
     ///
-    /// A held process is killed before the drain, for the reason `set_to_timed_out` gives,
+    /// A held process is killed before the drain, for the reason `finish_termination` gives,
     /// rather than leaked; with none held there is nothing to kill or drain.
     async fn set_to_invalid(
         &self,
@@ -269,44 +273,75 @@ impl TaskRunAttemptMonitor {
         ).await
     }
 
-    /// Kills the process that ran past its timeout and times the attempt out.
-    async fn set_to_timed_out(
+    /// Asks a timed-out or stopped command to exit with SIGTERM, and decides now what the
+    /// attempt settles as however it then exits. The monitor never waits in a pass - every
+    /// other attempt would wait behind it - so the child goes back in the map and later
+    /// passes finish it in `handle_terminating`. With no grace configured it is killed and
+    /// settled at once.
+    async fn begin_termination(
         &self,
         task_run_attempt: &TaskRunAttempt,
-        task_run_attempt_child: &mut TaskRunAttemptChild,
+        mut task_run_attempt_child: TaskRunAttemptChild,
+        status: TaskRunAttemptStatus,
     ) -> anyhow::Result<()> {
 
-        // The kill comes before the drain: killing is what closes the pipes, and a closed
-        // pipe is the EOF that ends a reader. Draining first would wait out the whole of
-        // the EOF timeout on a process that is still running and still holding them.
-        task_run_attempt_child.kill_process_group().await;
+        let grace = self.app_config.orchestrator.kill_grace();
 
-        self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
+        if grace.is_zero() {
+            return self.finish_termination(task_run_attempt, &mut task_run_attempt_child, status).await;
+        }
 
-        self.finish_task_run_attempt(
-            task_run_attempt,
-            TaskRunAttemptStatus::TimedOut,
-            None,
-        ).await
+        task_run_attempt_child.terminate_process_group();
+
+        task_run_attempt_child.terminating = Some(Termination {
+            status,
+            kill_at: Utc::now() + grace,
+        });
+
+        let result = self.record_output(task_run_attempt, &mut task_run_attempt_child).await;
+        self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
+        result
     }
 
-    /// Kills the process of a stopped job run and aborts the attempt.
-    async fn set_to_aborted(
+    /// A command that was asked to exit: settled once nothing of its group is left, or
+    /// killed and settled once the grace runs out. How it exited does not matter - it
+    /// exited because it was told to.
+    async fn handle_terminating(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        mut task_run_attempt_child: TaskRunAttemptChild,
+        status: TaskRunAttemptStatus,
+    ) -> anyhow::Result<()> {
+
+        let past_grace = task_run_attempt_child.terminating
+            .as_ref()
+            .is_some_and(|termination| Utc::now() >= termination.kill_at);
+
+        if past_grace || task_run_attempt_child.process_group_is_gone() {
+            return self.finish_termination(task_run_attempt, &mut task_run_attempt_child, status).await;
+        }
+
+        let result = self.record_output(task_run_attempt, &mut task_run_attempt_child).await;
+        self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
+        result
+    }
+
+    /// Kills whatever of the group is left, drains and settles. The kill comes before the
+    /// drain: killing is what closes the pipes, and a closed pipe is the EOF that ends a
+    /// reader. Draining first would wait out the whole EOF timeout on a process still
+    /// holding them.
+    async fn finish_termination(
         &self,
         task_run_attempt: &TaskRunAttempt,
         task_run_attempt_child: &mut TaskRunAttemptChild,
+        status: TaskRunAttemptStatus,
     ) -> anyhow::Result<()> {
 
-        // Killed before drained, for the reason `set_to_timed_out` gives.
         task_run_attempt_child.kill_process_group().await;
 
         self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
 
-        self.finish_task_run_attempt(
-            task_run_attempt,
-            TaskRunAttemptStatus::Aborted,
-            None,
-        ).await
+        self.finish_task_run_attempt(task_run_attempt, status, None).await
     }
 
     /// Records whatever the readers have delivered so far and returns immediately.
@@ -520,13 +555,37 @@ impl Service for TaskRunAttemptMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{has_exited, read_pid_file, reading_the_environment};
+    use crate::test_support::{has_exited, read_command_file, read_pid_file, reading_the_environment};
     use std::time::Duration;
     use crate::crud::job_run::JobRunStatus;
     use crate::crud::task_run::TaskRunStatus;
     use crate::crud::task_run_attempt_output::{SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort};
     use crate::test_support::TestDb;
     use chrono::TimeDelta;
+
+    /// Runs the monitor's passes a poller would, until the attempt settles or `within`
+    /// runs out.
+    async fn until_settled(
+        db: &TestDb,
+        monitor: &TaskRunAttemptMonitor,
+        task_run_attempt: &TaskRunAttempt,
+        within: Duration,
+    ) -> TaskRunAttemptStatus {
+
+        let deadline = tokio::time::Instant::now() + within;
+
+        loop {
+            monitor.handle(task_run_attempt).await.unwrap();
+
+            let status = db.task_run_attempt(task_run_attempt.id).await.status;
+
+            if status != TaskRunAttemptStatus::Running || tokio::time::Instant::now() > deadline {
+                return status;
+            }
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
 
     /// A running attempt with a process handed to the monitor, ready for `handle`.
     async fn running_attempt(db: &TestDb) -> TaskRunAttempt {
@@ -843,6 +902,96 @@ mod tests {
 
         assert_eq!(db.task_run_attempt(task_run_attempt.id).await.status, TaskRunAttemptStatus::Succeeded);
         assert_eq!(db.job_run_stop_count(child.id).await, 0);
+    }
+
+    /// The point of the grace: a command asked to exit gets to finish what it was doing.
+    /// It exits 0 from its trap and still settles Aborted, since it exited because it was
+    /// told to.
+    #[tokio::test]
+    async fn a_stopped_command_is_given_its_grace_to_exit_cleanly() {
+        let _environment = reading_the_environment();
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+        let cleaned = db.data_dir().join("cleaned");
+        let ready = db.data_dir().join("ready");
+
+        db.insert_job_run_stop(task_run_attempt.job_run_id).await;
+        db.spawn_running_child(
+            &task_run_attempt,
+            &format!("trap 'echo cleaned > {}; exit 0' TERM; echo ready > {}; while true; do sleep 0.1; done", cleaned.display(), ready.display()),
+            Utc::now() + TimeDelta::seconds(3600),
+        ).await;
+
+        // The trap is set before this is written, so a SIGTERM before it would kill sh
+        // outright and test nothing.
+        read_command_file(&ready).await;
+
+        let monitor = db.task_run_attempt_monitor_with_kill_grace(10);
+
+        monitor.handle(&task_run_attempt).await.unwrap();
+        assert_eq!(db.task_run_attempt(task_run_attempt.id).await.status, TaskRunAttemptStatus::Running);
+
+        assert_eq!(read_command_file(&cleaned).await, "cleaned");
+
+        let settled = until_settled(&db, &monitor, &task_run_attempt, Duration::from_secs(5)).await;
+        assert_eq!(settled, TaskRunAttemptStatus::Aborted);
+    }
+
+    /// A command that ignores SIGTERM is killed once the grace runs out, and not before.
+    #[tokio::test]
+    async fn a_command_that_ignores_sigterm_is_killed_when_the_grace_runs_out() {
+        let _environment = reading_the_environment();
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+        let ready = db.data_dir().join("ready");
+
+        db.insert_job_run_stop(task_run_attempt.job_run_id).await;
+        db.spawn_running_child(
+            &task_run_attempt,
+            &format!("trap '' TERM; echo ready > {}; while true; do sleep 0.1; done", ready.display()),
+            Utc::now() + TimeDelta::seconds(3600),
+        ).await;
+
+        read_command_file(&ready).await;
+
+        let monitor = db.task_run_attempt_monitor_with_kill_grace(1);
+
+        monitor.handle(&task_run_attempt).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        monitor.handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(db.task_run_attempt(task_run_attempt.id).await.status, TaskRunAttemptStatus::Running);
+
+        let settled = until_settled(&db, &monitor, &task_run_attempt, Duration::from_secs(5)).await;
+        assert_eq!(settled, TaskRunAttemptStatus::Aborted);
+    }
+
+    /// A timeout takes the same path as a stop, and keeps its own status.
+    #[tokio::test]
+    async fn a_timed_out_command_is_given_its_grace_too() {
+        let _environment = reading_the_environment();
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+        let cleaned = db.data_dir().join("cleaned");
+        let ready = db.data_dir().join("ready");
+
+        db.spawn_running_child(
+            &task_run_attempt,
+            &format!("trap 'echo cleaned > {}; exit 0' TERM; echo ready > {}; while true; do sleep 0.1; done", cleaned.display(), ready.display()),
+            Utc::now() - TimeDelta::seconds(1),
+        ).await;
+
+        // The trap is set before this is written, so a SIGTERM before it would kill sh
+        // outright and test nothing.
+        read_command_file(&ready).await;
+
+        let monitor = db.task_run_attempt_monitor_with_kill_grace(10);
+
+        monitor.handle(&task_run_attempt).await.unwrap();
+        assert_eq!(read_command_file(&cleaned).await, "cleaned");
+
+        let settled = until_settled(&db, &monitor, &task_run_attempt, Duration::from_secs(5)).await;
+        assert_eq!(settled, TaskRunAttemptStatus::TimedOut);
     }
 
     #[tokio::test]

@@ -474,9 +474,11 @@ impl TaskRunAttemptDispatcher {
 
         let running_task_run_attempt = TaskRunAttemptChild {
             child,
+            process_group_id: process_group_id.map(|pid| pid as i32),
             chunks,
             readers,
             times_out_at,
+            terminating: None,
         };
 
         self.children.insert(task_run_attempt.id, running_task_run_attempt).await;

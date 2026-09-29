@@ -39,18 +39,20 @@ A separate enum from `TaskRunStatus` (which has `Planned`/`Waiting` where this h
 - **No child** → `set_to_invalid`. The map holds only this process's spawns, so this is the restart path (or a child lost to an error mid-pass): no exit status, no group, no readers — no outcome can honestly be claimed. Output persisted earlier stays. Settled, not raised, so the task run and job run above don't strand a parallel slot. A command a crash left running is killed by recovery at the next start — see [Picking up after a crash](../SKILL.md#picking-up-after-a-crash).
 - **Child present** → `derive_next_status`, in order:
   1. **exited?** (`try_wait`) → zero: `set_to_succeeded`; non-zero: `Failed`.
-  2. **past `times_out_at`?** (spawn time + `task_run.timeout`, so dispatch wait doesn't count) → `TimedOut`, killing the group.
+  2. **past `times_out_at`?** (spawn time + `task_run.timeout`, so dispatch wait doesn't count) → `TimedOut`, ending the group (below).
   3. **job run stopped?** → `Aborted`, killing the group.
   4. otherwise `Running` → `record_output`, child put back.
   - any other status → `set_to_invalid`, killing the group, logged as a bug. A derive error puts the child back and returns `Err`.
 
-**Precedence** (same rule as [job_run.md](job_run.md)): a real outcome outranks a stop, so a process that already exited reports its exit and one past its timeout reports the timeout; a still-running one is killed on the same pass. 1 and 2 carry nothing between them.
+**Precedence** (same rule as [job_run.md](job_run.md)): a real outcome outranks a stop, so a process that already exited reports its exit and one past its timeout reports the timeout; a still-running one is asked to exit on the same pass. 1 and 2 carry nothing between them.
 
 `set_to_succeeded` reads the result the command wrote to `$FLOWLITE_TASK_OUTPUT`: over `[orchestrator] max_task_output_bytes` or not UTF-8 → the attempt is `Failed` (never truncated — half a document parses as a whole one), with the reason appended to its stderr.
 
 **Every outcome is written by `finish_task_run_attempt`**, which sets `finished_at`, publishes, and — for any status but `Succeeded` — first calls `CRUD::stop_child_job_runs`, so runs the attempt submitted live only as long as it does unless it succeeded (see the [parent skill](../SKILL.md#stopping-a-run)).
 
-**Kills go through `TaskRunAttemptChild::kill_process_group`**, which `killpg`s the group before reaping the `sh`. Its third caller is shutdown: `serve` stops `with_graceful_shutdown` on Ctrl-C or SIGTERM and calls `Orchestrator::shutdown` → `TaskRunAttemptChildren::kill_all`. This is deliberate, since a task in its own group no longer dies with the terminal — and why the map lives on the `Orchestrator`. Shutdown leaves the rows `Running` (writing statuses would race the still-running pollers); `Orchestrator::recover` settles them `Invalid` at the next start.
+**A timeout or a stop ends the group in two steps, across passes.** `begin_termination` sends `SIGTERM` (`terminate_process_group`), records a `Termination` — the status it will settle as, and `kill_at` = now + `[orchestrator] kill_grace_seconds` (default 10) — on the in-memory `TaskRunAttemptChild`, and puts the child back; the monitor never waits inside a pass. Later passes go to `handle_terminating`: once `process_group_is_gone` (leader reaped and `killpg(pgid, 0)` answers `ESRCH`) or `kill_at` has passed, `finish_termination` `SIGKILL`s whatever is left, drains and settles the recorded status — however the process exited, since it exited because it was told to. A grace of 0 kills and settles at once, which `TestDb::task_run_attempt_monitor` uses so single-pass tests stay single-pass. The group id is kept on the child (`process_group_id`) because `Child::id` answers `None` once the leader is reaped. The invalid paths still kill at once.
+
+**Shutdown:** `serve` stops `with_graceful_shutdown` on Ctrl-C or SIGTERM and calls `Orchestrator::shutdown`, which sets the pollers' stop flag (`Poller::stop_when`), wakes them, waits for each to finish its current pass — so no attempt is started, and no child is out of the map, during the wait — then `TaskRunAttemptChildren::terminate_all`: `SIGTERM` to every group together, one shared grace, `SIGKILL` for the rest. The map lives on the `Orchestrator` for this. Shutdown leaves the rows `Running`; `Orchestrator::recover` settles them `Invalid` at the next start.
 
 It never touches a task run row: retries and task run status are `TaskRunMonitor`'s.
 
@@ -65,7 +67,7 @@ It never touches a task run row: retries and task run status are `TaskRunMonitor
 - `Running`: `record_output` `try_recv`s and never waits, so output lands at most one pass late.
 - Terminal: `finish_reading` waits for the channel to close (both readers at EOF), bounded by `[orchestrator] reader_eof_timeout_seconds` (default 2) because a grandchild that escaped the group can hold a pipe open; on timeout it aborts the readers.
 
-**Kill before drain** on timeout and stop: closing the pipes is what produces EOF, so draining first would wait out the whole bound.
+**Kill before drain** in `finish_termination`: closing the pipes is what produces EOF, so draining first would wait out the whole bound.
 
 Each pass writes at most one [`task_run_attempt_output`](../../entities/references/task_run_attempt_output.md) row per stream with new output. It is data-only, so it **never publishes** — see [How they coordinate](../SKILL.md#how-they-coordinate). The final output lands **before** the status, so a terminal attempt has complete output.
 

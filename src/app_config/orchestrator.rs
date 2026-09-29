@@ -25,6 +25,9 @@ pub struct AppConfigOrchestrator {
     pub max_task_output_bytes: u64,
     /// The most task run attempts that may be running at once, across every job. 0 for no limit.
     pub max_running_attempts: u32,
+    /// How long a command has between SIGTERM and SIGKILL - on a stop, a timeout and a
+    /// shutdown alike - to finish a write and exit. 0 kills at once.
+    pub kill_grace_seconds: u64,
 }
 
 impl Default for AppConfigOrchestrator {
@@ -37,6 +40,7 @@ impl Default for AppConfigOrchestrator {
             read_buffer_bytes: 8192,
             max_task_output_bytes: 1024 * 1024,
             max_running_attempts: 32,
+            kill_grace_seconds: 10,
         }
     }
 }
@@ -52,5 +56,9 @@ impl AppConfigOrchestrator {
 
     pub fn reader_eof_timeout(&self) -> Duration {
         Duration::from_secs(self.reader_eof_timeout_seconds)
+    }
+
+    pub fn kill_grace(&self) -> Duration {
+        Duration::from_secs(self.kill_grace_seconds)
     }
 }

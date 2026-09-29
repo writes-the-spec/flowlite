@@ -1,7 +1,9 @@
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use crate::app_config::AppConfig;
 use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 
 
 /// One background service a Poller drives: the rows it owns, and what it does with
@@ -26,6 +28,8 @@ pub struct Poller<S: Service> {
     service: Arc<S>,
     wakeup: Arc<Notify>,
     app_config: AppConfig,
+    /// Set by whoever owns the loop to end it after the pass in flight; see `stop_when`.
+    stopping: Option<Arc<AtomicBool>>,
 }
 
 
@@ -40,30 +44,52 @@ impl<S: Service> Poller<S> {
             service,
             wakeup,
             app_config,
+            stopping: None,
         }
     }
 
-    /// Spawns the polling loop and returns immediately, restarting it on error.
-    pub fn start(self) {
+    /// Ends the loop at the first wake-up after `stopping` is set, never in the middle of a
+    /// pass - so a pass that has taken a child process out of `TaskRunAttemptChildren`
+    /// always puts it back. The owner publishes a wake-up after setting it, or the loop
+    /// notices only at its next interval.
+    pub fn stop_when(mut self, stopping: Arc<AtomicBool>) -> Self {
+        self.stopping = Some(stopping);
+        self
+    }
+
+    /// Spawns the polling loop and returns immediately, restarting it on error. The handle
+    /// resolves once a loop given `stop_when` has stopped; one without it never does.
+    pub fn start(self) -> JoinHandle<()> {
 
         tokio::spawn(async move {
             loop {
-                if let Err(e) = self.run().await {
-                    let backoff = self.app_config.orchestrator.error_backoff();
+                let Err(e) = self.run().await else {
+                    return;
+                };
 
-                    eprintln!(
-                        "{} error, restarting in {}s: {e:?}",
-                        self.service.name(),
-                        backoff.as_secs(),
-                    );
-                    tokio::time::sleep(backoff).await;
+                if self.is_stopping() {
+                    return;
                 }
+
+                let backoff = self.app_config.orchestrator.error_backoff();
+
+                eprintln!(
+                    "{} error, restarting in {}s: {e:?}",
+                    self.service.name(),
+                    backoff.as_secs(),
+                );
+                tokio::time::sleep(backoff).await;
             }
-        });
+        })
 
     }
 
-    /// Handles every row the service selects, once per wake-up, until selecting fails.
+    fn is_stopping(&self) -> bool {
+        self.stopping.as_ref().is_some_and(|stopping| stopping.load(Ordering::SeqCst))
+    }
+
+    /// Handles every row the service selects, once per wake-up, until selecting fails or
+    /// the owner asks it to stop.
     async fn run(&self) -> anyhow::Result<()> {
 
         // Burst, tokio's default MissedTickBehavior, is left as-is: it is what the loops
@@ -79,6 +105,10 @@ impl<S: Service> Poller<S> {
             tokio::select! {
                 _ = timer.tick() => {}
                 _ = self.wakeup.notified() => {}
+            }
+
+            if self.is_stopping() {
+                return Ok(());
             }
 
             let rows = self.service.select().await?;
@@ -197,6 +227,39 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    /// Stopping never cuts a pass short - a pass may be holding a child process it took
+    /// out of the shared map - and no pass starts after it.
+    #[tokio::test(start_paused = true)]
+    async fn a_stopped_poller_finishes_its_pass_and_starts_no_other() {
+        let (selected, mut selects) = unbounded_channel();
+        let (entered_handle, mut entered) = unbounded_channel();
+        let release_handle = Arc::new(Notify::new());
+
+        let service = Arc::new(BlockingService {
+            selected,
+            entered_handle,
+            release_handle: release_handle.clone(),
+        });
+
+        let stopping = Arc::new(AtomicBool::new(false));
+        let wakeup = Arc::new(Notify::new());
+
+        let poller = Poller::new(service, wakeup.clone(), app_config_polling_every(1))
+            .stop_when(stopping.clone())
+            .start();
+
+        selects.recv().await.unwrap();
+        entered.recv().await.unwrap();
+
+        stopping.store(true, Ordering::SeqCst);
+        wakeup.notify_one();
+        release_handle.notify_one();
+
+        poller.await.unwrap();
+
+        assert!(selects.try_recv().is_err());
     }
 
     #[tokio::test(start_paused = true)]

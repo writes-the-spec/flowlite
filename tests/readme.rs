@@ -32,6 +32,7 @@ fn the_readme_prints_the_real_defaults() {
         ("orchestrator", "max_stream_bytes", orchestrator.max_stream_bytes.to_string()),
         ("orchestrator", "read_buffer_bytes", orchestrator.read_buffer_bytes.to_string()),
         ("orchestrator", "max_running_attempts", orchestrator.max_running_attempts.to_string()),
+        ("orchestrator", "kill_grace_seconds", orchestrator.kill_grace_seconds.to_string()),
         ("ui", "page_size", ui.page_size.to_string()),
         ("ui", "max_page_size", ui.max_page_size.to_string()),
         ("ui", "refresh_interval_seconds", ui.refresh_interval_seconds.to_string()),

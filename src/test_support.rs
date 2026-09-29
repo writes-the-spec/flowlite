@@ -535,13 +535,25 @@ impl TestDb {
         )
     }
 
+    /// With no kill grace, so a stop or a timeout settles in the one pass a test runs;
+    /// `task_run_attempt_monitor_with_kill_grace` is the monitor for the grace itself.
     pub fn task_run_attempt_monitor(&self) -> TaskRunAttemptMonitor {
+        self.task_run_attempt_monitor_with_kill_grace(0)
+    }
+
+    pub fn task_run_attempt_monitor_with_kill_grace(&self, kill_grace_seconds: u64) -> TaskRunAttemptMonitor {
         TaskRunAttemptMonitor::new(
             self.crud.clone(),
             self.conn_pool.clone(),
             self.children.clone(),
             self.signals.clone(),
-            self.app_config(),
+            AppConfig {
+                orchestrator: AppConfigOrchestrator {
+                    kill_grace_seconds,
+                    ..self.app_config().orchestrator
+                },
+                ..self.app_config()
+            },
         )
     }
 
@@ -551,6 +563,7 @@ impl TestDb {
 
         let mut app_config = self.app_config();
         app_config.orchestrator.max_task_output_bytes = max_task_output_bytes;
+        app_config.orchestrator.kill_grace_seconds = 0;
 
         TaskRunAttemptMonitor::new(
             self.crud.clone(),
@@ -1227,6 +1240,9 @@ impl TestDb {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
+            // Its own group, as the dispatcher spawns it, so the monitor's signals reach
+            // the command the way they do in production.
+            .process_group(0)
             .spawn()
             .unwrap()
     }
@@ -1263,10 +1279,12 @@ impl TestDb {
         self.children.insert(
             task_run_attempt.id,
             TaskRunAttemptChild {
+                process_group_id: child.id().map(|pid| pid as i32),
                 child,
                 chunks,
                 readers,
                 times_out_at,
+                terminating: None,
             },
         ).await;
     }

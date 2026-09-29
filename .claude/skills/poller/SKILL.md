@@ -18,7 +18,7 @@ pub trait Service: Send + Sync + 'static {
 }
 ```
 
-`Poller::new(Arc::new(service), wakeup, app_config).start()` spawns the loop and returns immediately.
+`Poller::new(Arc::new(service), wakeup, app_config).start()` spawns the loop and returns its `JoinHandle` immediately. `.stop_when(flag)` before `start` lets the owner end it: the loop checks the flag after each wake-up and returns, never mid-pass, and the handle then resolves. `Orchestrator::shutdown` uses it for its seven loops before the kill grace, publishing a wake-up after setting the flag; the three `serve.rs` loops have no stop and end with the process.
 
 ## What the loop guarantees
 

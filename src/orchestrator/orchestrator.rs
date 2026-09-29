@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::task::JoinHandle;
 use crate::crud::CRUD;
 use crate::orchestrator::recovery::{recover_orphaned_task_run_attempts, system_boot_time};
 use crate::orchestrator::job_run_dispatcher::JobRunDispatcher;
@@ -26,6 +28,9 @@ pub struct Orchestrator {
     pub children: Arc<TaskRunAttemptChildren>,
     /// config.toml, or its defaults.
     pub app_config: AppConfig,
+    /// Set by `shutdown`, so no service starts a pass - or an attempt - after it.
+    stopping: Arc<AtomicBool>,
+    pollers: std::sync::Mutex<Vec<JoinHandle<()>>>,
 }
 
 
@@ -43,16 +48,33 @@ impl Orchestrator {
             signals,
             children: Arc::new(TaskRunAttemptChildren::new()),
             app_config,
+            stopping: Arc::new(AtomicBool::new(false)),
+            pollers: std::sync::Mutex::new(Vec::new()),
         }
     }
 
-    /// Kills every task still running. Called once, as `serve` returns.
+    /// Ends every task still running. Called once, as `serve` returns.
+    ///
+    /// The services stop first, each after the pass it is in: otherwise, during the grace
+    /// below, a dispatcher would start new attempts and the monitor would settle the ones
+    /// being shut down. Then every command gets SIGTERM together and
+    /// `[orchestrator] kill_grace_seconds` to exit before SIGKILL.
     ///
     /// Each attempt is in its own process group, so nothing kills them for us: before
     /// they were grouped, Ctrl-C reached them only because they shared this process's
     /// foreground group.
     pub async fn shutdown(self: &Self) {
-        self.children.kill_all().await;
+
+        self.stopping.store(true, Ordering::SeqCst);
+        self.signals.publish();
+
+        let pollers = std::mem::take(&mut *self.pollers.lock().unwrap());
+
+        for poller in pollers {
+            let _ = poller.await;
+        }
+
+        self.children.terminate_all(self.app_config.orchestrator.kill_grace()).await;
     }
 
     /// Settles what an earlier run of the program left mid-flight, and kills the processes
@@ -131,13 +153,31 @@ impl Orchestrator {
             self.app_config.clone(),
         );
 
-        Poller::new(Arc::new(job_run_dispatcher), job_run_dispatcher_wakeup, self.app_config.clone()).start();
-        Poller::new(Arc::new(job_run_monitor), job_run_monitor_wakeup, self.app_config.clone()).start();
-        Poller::new(Arc::new(job_run_releaser), job_run_releaser_wakeup, self.app_config.clone()).start();
-        Poller::new(Arc::new(task_run_dispatcher), task_run_dispatcher_wakeup, self.app_config.clone()).start();
-        Poller::new(Arc::new(task_run_monitor), task_run_monitor_wakeup, self.app_config.clone()).start();
-        Poller::new(Arc::new(task_run_attempt_dispatcher), task_run_attempt_dispatcher_wakeup, self.app_config.clone()).start();
-        Poller::new(Arc::new(task_run_attempt_monitor), task_run_attempt_monitor_wakeup, self.app_config.clone()).start();
+        let pollers = vec![
+            Poller::new(Arc::new(job_run_dispatcher), job_run_dispatcher_wakeup, self.app_config.clone())
+                .stop_when(self.stopping.clone())
+                .start(),
+            Poller::new(Arc::new(job_run_monitor), job_run_monitor_wakeup, self.app_config.clone())
+                .stop_when(self.stopping.clone())
+                .start(),
+            Poller::new(Arc::new(job_run_releaser), job_run_releaser_wakeup, self.app_config.clone())
+                .stop_when(self.stopping.clone())
+                .start(),
+            Poller::new(Arc::new(task_run_dispatcher), task_run_dispatcher_wakeup, self.app_config.clone())
+                .stop_when(self.stopping.clone())
+                .start(),
+            Poller::new(Arc::new(task_run_monitor), task_run_monitor_wakeup, self.app_config.clone())
+                .stop_when(self.stopping.clone())
+                .start(),
+            Poller::new(Arc::new(task_run_attempt_dispatcher), task_run_attempt_dispatcher_wakeup, self.app_config.clone())
+                .stop_when(self.stopping.clone())
+                .start(),
+            Poller::new(Arc::new(task_run_attempt_monitor), task_run_attempt_monitor_wakeup, self.app_config.clone())
+                .stop_when(self.stopping.clone())
+                .start(),
+        ];
+
+        self.pollers.lock().unwrap().extend(pollers);
 
     }
 

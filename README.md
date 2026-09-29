@@ -16,8 +16,8 @@ Simplicity. It is a scheduler you can hold in your head.
   change.
 - **Runs remember themselves.** Every run keeps the config it executed, so a rerun replays
   that run rather than today's file.
-- **Nothing is left behind.** A timeout or a stop kills the whole process tree, and every
-  attempt keeps its output.
+- **Nothing is left behind.** A timeout or a stop ends the whole process tree — asked first,
+  killed after a grace period — and every attempt keeps its output.
 
 One project per server, bound to localhost: no auth to configure, no workers to scale, no
 Python.
@@ -386,7 +386,10 @@ credentials that run used.
 
 ## Timeouts and retries
 
-`timeout` is the seconds one attempt may run for before its process group is killed.
+`timeout` is the seconds one attempt may run for before its process group is ended — sent
+`SIGTERM`, and `SIGKILL` if it is still there `[orchestrator] kill_grace_seconds` later (10
+by default), the same as a stop and a shutdown. A command that exits on `SIGTERM`, which
+most do, gets to finish its write and let go of its locks first.
 `max_retries` is how many times a failed attempt is tried *again*, so `max_retries: 2` is
 three attempts in all, and `retry_delay` is the seconds to wait after a failure before the
 next attempt starts:
@@ -649,7 +652,9 @@ flowlite job-run delete 42                             # remove a run still wait
 ```
 
 `stop` writes a request rather than killing anything itself — the `serve` process notices
-it on a later pass and kills the task's process group. A run that has already finished is
+it on a later pass and sends the task's process group `SIGTERM`, then `SIGKILL` if it has
+not exited within `kill_grace_seconds`. A stop takes a second or two for a command that
+exits when asked, and at most that grace plus a second for one that does not. A run that has already finished is
 refused rather than silently accepted. Without `--wait` the command returns once that
 request is written, while the run is still going; `--wait` blocks until the run has
 settled, which is what a caller that means to start something else next wants:
@@ -913,7 +918,9 @@ timeout, you stopped it. `invalid` says something different — that flowlite ca
 for the row at all.
 
 The case that actually happens is a restart with work in flight. Shutting `serve` down
-kills the process groups it spawned and leaves those attempts marked running on purpose; a
+stops its services, gives every command it spawned `SIGTERM` together and the same
+`kill_grace_seconds` to exit, kills what is left, and leaves those attempts marked running
+on purpose; a
 crash or a `kill -9` leaves them with the processes still alive. Either way the next start
 has no exit status to read and no process to wait on, so no honest outcome can be claimed:
 
@@ -1130,6 +1137,7 @@ max_stream_bytes = 1048576      # per stream, per attempt: half its head, half i
 max_task_output_bytes = 1048576 # the most a task's result may be; over it the attempt fails
 read_buffer_bytes = 8192        # one read from a running command's pipe
 max_running_attempts = 32       # running task attempts across every job, 0 for no limit
+kill_grace_seconds = 10         # between SIGTERM and SIGKILL on a stop, timeout or shutdown
 
 [ui]
 page_size = 25                  # rows per page on the run, job and schedule lists

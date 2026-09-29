@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::time::Duration;
 use chrono::{DateTime, Utc};
+use crate::crud::task_run_attempt::TaskRunAttemptStatus;
 use crate::orchestrator::task_run_attempt_reader::TaskRunAttemptOutputChunk;
 use tokio::process::Child;
 use tokio::sync::Mutex;
@@ -10,6 +12,10 @@ use tokio::task::JoinHandle;
 /// The child process of one task run attempt, kept alive between polls.
 pub struct TaskRunAttemptChild {
     pub child: Child,
+    /// The group every signal goes to - the pid of the sh that was spawned, which the
+    /// dispatcher made a group leader. Kept rather than read off `child`, which answers
+    /// `None` once the leader is reaped while the rest of its group may still be running.
+    pub process_group_id: Option<i32>,
     /// Everything the readers have delivered and the monitor has not recorded yet.
     ///
     /// `recv` returning None is how the monitor learns both readers reached EOF, so the
@@ -18,6 +24,16 @@ pub struct TaskRunAttemptChild {
     pub chunks: UnboundedReceiver<TaskRunAttemptOutputChunk>,
     pub readers: [JoinHandle<()>; 2],
     pub times_out_at: DateTime<Utc>,
+    /// Set once the monitor has sent the group SIGTERM; see `Termination`.
+    pub terminating: Option<Termination>,
+}
+
+
+/// An attempt the monitor has asked to exit: the status it will settle as however it then
+/// exits, and when whatever is left of its group gets SIGKILL.
+pub struct Termination {
+    pub status: TaskRunAttemptStatus,
+    pub kill_at: DateTime<Utc>,
 }
 
 
@@ -44,13 +60,43 @@ impl TaskRunAttemptChild {
     /// the pid of the sh it spawned. The kill that follows reaps that sh.
     pub async fn kill_process_group(&mut self) {
 
-        if let Some(pid) = self.child.id() {
-            // Safe: killpg only delivers a signal, and a group that is already gone
-            // reports ESRCH, which is exactly the state we wanted.
-            unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
-        }
+        self.signal_process_group(libc::SIGKILL);
 
         let _ = self.child.kill().await;
+    }
+
+    /// Asks the command's whole process group to exit, which most tools do cleanly: an
+    /// agent finishes its write, git releases its lock.
+    pub fn terminate_process_group(&self) {
+        self.signal_process_group(libc::SIGTERM);
+    }
+
+    /// Whether nothing of the command is left - the sh reaped, and no process of its group
+    /// still running. The group can outlive its leader: a grandchild cleaning up after
+    /// SIGTERM is still in it.
+    pub fn process_group_is_gone(&mut self) -> bool {
+
+        // Reaped first, since an exited but unreaped leader still answers the probe below.
+        let leader_exited = matches!(self.child.try_wait(), Ok(Some(_)));
+
+        let Some(process_group_id) = self.process_group_id else {
+            return leader_exited;
+        };
+
+        // Signal 0 delivers nothing and only asks whether any process is there to receive.
+        // Safe for the same reason as `signal_process_group`.
+        let probe = unsafe { libc::killpg(process_group_id, 0) };
+
+        probe == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
+
+    fn signal_process_group(&self, signal: libc::c_int) {
+
+        if let Some(process_group_id) = self.process_group_id {
+            // Safe: killpg only delivers a signal, and a group that is already gone
+            // reports ESRCH, which is exactly the state we wanted.
+            unsafe { libc::killpg(process_group_id, signal) };
+        }
     }
 
 }
@@ -88,14 +134,27 @@ impl TaskRunAttemptChildren {
         self.children.lock().await.remove(&task_run_attempt_id)
     }
 
-    /// Kills every process still running, for shutdown. Takes them out of the map as it
-    /// goes, so nothing polling afterwards finds a process that is already dead.
+    /// Ends every process still running, for shutdown: SIGTERM to every group at once, then
+    /// SIGKILL to whatever has not exited when `grace` runs out. Called only once the
+    /// pollers have stopped, so nothing takes a child out of the map during the wait.
     ///
-    /// The attempt rows are left Running on purpose: writing statuses here would race the
-    /// pollers. `Orchestrator::recover` settles them on the next start.
-    pub async fn kill_all(self: &Self) {
+    /// The attempt rows are left Running on purpose: `Orchestrator::recover` settles them
+    /// on the next start.
+    pub async fn terminate_all(self: &Self, grace: Duration) {
 
         let mut children = self.children.lock().await;
+
+        for task_run_attempt_child in children.values() {
+            task_run_attempt_child.terminate_process_group();
+        }
+
+        let deadline = tokio::time::Instant::now() + grace;
+
+        while tokio::time::Instant::now() < deadline
+            && children.values_mut().any(|task_run_attempt_child| !task_run_attempt_child.process_group_is_gone())
+        {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
 
         for (_, mut task_run_attempt_child) in children.drain() {
             task_run_attempt_child.kill_process_group().await;
@@ -116,7 +175,7 @@ mod tests {
     /// Shutting down has to reach the command's whole process tree, the same as a timeout
     /// or a stop: leaving it running is what makes the next start's Invalid a lie.
     #[tokio::test]
-    async fn kill_all_kills_the_process_group_of_every_attempt() {
+    async fn shutdown_kills_the_process_group_of_every_attempt() {
 
         let _environment = reading_the_environment();
         let db = TestDb::new().await;
@@ -140,11 +199,66 @@ mod tests {
 
         let grandchild = crate::test_support::read_pid_file(&pid_file).await;
 
-        db.children.kill_all().await;
+        db.children.terminate_all(std::time::Duration::ZERO).await;
 
         assert!(
             crate::test_support::has_exited(grandchild).await,
             "the grandchild outlived the shutdown",
         );
+    }
+
+    /// Every command gets SIGTERM together and the same grace, so shutting down with a
+    /// cooperative command costs the moment it takes to exit, not the whole grace.
+    #[tokio::test]
+    async fn shutdown_lets_a_command_exit_cleanly_before_the_grace_runs_out() {
+
+        let _environment = reading_the_environment();
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, crate::crud::task_run::TaskRunStatus::Running).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
+        let cleaned = db.data_dir().join("cleaned");
+        let ready = db.data_dir().join("ready");
+
+        db.spawn_running_child(
+            &task_run_attempt,
+            &format!("trap 'echo cleaned > {}; exit 0' TERM; echo ready > {}; while true; do sleep 0.1; done", cleaned.display(), ready.display()),
+            chrono::Utc::now() + chrono::TimeDelta::seconds(3600),
+        ).await;
+
+        crate::test_support::read_command_file(&ready).await;
+
+        let started = std::time::Instant::now();
+        db.children.terminate_all(std::time::Duration::from_secs(10)).await;
+
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "waited {:?}", started.elapsed());
+        assert_eq!(std::fs::read_to_string(&cleaned).unwrap().trim(), "cleaned");
+    }
+
+    #[tokio::test]
+    async fn shutdown_kills_a_command_that_ignores_sigterm_once_the_grace_runs_out() {
+
+        let _environment = reading_the_environment();
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, crate::crud::task_run::TaskRunStatus::Running).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
+        let pid_file = db.data_dir().join("stubborn.pid");
+
+        db.spawn_running_child(
+            &task_run_attempt,
+            &format!("trap '' TERM; echo $$ > {}; while true; do sleep 0.1; done", pid_file.display()),
+            chrono::Utc::now() + chrono::TimeDelta::seconds(3600),
+        ).await;
+
+        let stubborn = crate::test_support::read_pid_file(&pid_file).await;
+
+        let started = std::time::Instant::now();
+        db.children.terminate_all(std::time::Duration::from_secs(1)).await;
+
+        assert!(started.elapsed() >= std::time::Duration::from_secs(1), "waited {:?}", started.elapsed());
+        assert!(crate::test_support::has_exited(stubborn).await, "the command outlived the shutdown");
     }
 }
