@@ -48,7 +48,7 @@ The `Poller` takes the whole `AppConfig` and reads both through `app_config.orch
 | `NotificationService` | [notifications skill](../notifications/SKILL.md) |
 | `RetentionService` | [src/retention/service.rs](../../../src/retention/service.rs) — deletes finished job runs past `[job_defaults] keep_runs` and `[retention] keep_runs_total`, alongside the [entities skill](../entities/SKILL.md)'s six disk tables |
 
-A service is started where its owner is: the eight by `Orchestrator::start`, the other three directly by [serve.rs](../../../src/cli/commands/serve.rs).
+A service is started where its owner is: the seven by `Orchestrator::start`, the other three directly by [serve.rs](../../../src/cli/commands/serve.rs).
 
 ## Rules
 

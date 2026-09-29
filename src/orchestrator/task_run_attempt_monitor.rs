@@ -444,7 +444,8 @@ impl TaskRunAttemptMonitor {
 
     }
 
-    /// Writes the terminal status, and only that: the output already went in.
+    /// Writes the terminal status, and stops the runs the attempt submitted unless it
+    /// succeeded. The output already went in.
     ///
     /// Every caller drains through `finish_reading` first, so **an attempt that reads as
     /// terminal has complete output**. Writing the status first would leave a window where
@@ -455,6 +456,14 @@ impl TaskRunAttemptMonitor {
         status: TaskRunAttemptStatus,
         output: Option<String>,
     ) -> anyhow::Result<()> {
+
+        // Before the status rather than after it: if this fails, the attempt is still
+        // Running with its process gone, so the next pass settles it invalid through here
+        // and tries again. Written after, a failure would never be retried.
+        if status != TaskRunAttemptStatus::Succeeded {
+            let mut conn = self.conn_pool.acquire().await?;
+            self.crud.stop_child_job_runs(&mut conn, task_run_attempt).await?;
+        }
 
         self.crud.update_task_run_attempts(
             &*self.conn_pool,
@@ -786,6 +795,56 @@ mod tests {
 
     /// A real outcome outranks a stop: a process that had already exited reports its exit
     /// status rather than being recorded as killed, even though its job run was stopped.
+    /// The parent is aborted by the stop, and a run it submitted and was waiting on goes
+    /// with it.
+    #[tokio::test]
+    async fn a_stopped_attempt_stops_the_runs_it_submitted() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+        let child = db.insert_child_job_run(&task_run_attempt, JobRunStatus::Running).await;
+
+        db.insert_job_run_stop(task_run_attempt.job_run_id).await;
+        db.spawn_running_child(
+            &task_run_attempt,
+            "sleep 30",
+            Utc::now() + TimeDelta::seconds(3600),
+        ).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(db.job_run_stop_count(child.id).await, 1);
+    }
+
+    /// A retry submits children of its own, so a failed attempt's must not run beside them.
+    #[tokio::test]
+    async fn a_failed_attempt_stops_the_runs_it_submitted() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+        let child = db.insert_child_job_run(&task_run_attempt, JobRunStatus::Running).await;
+
+        db.spawn_exited_child(&task_run_attempt, "exit 1", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(db.task_run_attempt(task_run_attempt.id).await.status, TaskRunAttemptStatus::Failed);
+        assert_eq!(db.job_run_stop_count(child.id).await, 1);
+    }
+
+    /// Submitting without waiting and exiting 0 hands the child off.
+    #[tokio::test]
+    async fn a_succeeded_attempt_leaves_the_runs_it_submitted_running() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+        let child = db.insert_child_job_run(&task_run_attempt, JobRunStatus::Running).await;
+
+        db.spawn_exited_child(&task_run_attempt, "exit 0", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        db.task_run_attempt_monitor().handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(db.task_run_attempt(task_run_attempt.id).await.status, TaskRunAttemptStatus::Succeeded);
+        assert_eq!(db.job_run_stop_count(child.id).await, 0);
+    }
+
     #[tokio::test]
     async fn an_exit_status_outranks_a_stop() {
         let db = TestDb::new().await;

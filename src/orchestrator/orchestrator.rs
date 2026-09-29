@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use crate::crud::CRUD;
-use crate::orchestrator::child_job_run_stopper::ChildJobRunStopper;
 use crate::orchestrator::recovery::{recover_orphaned_task_run_attempts, system_boot_time};
 use crate::orchestrator::job_run_dispatcher::JobRunDispatcher;
 use crate::orchestrator::job_run_monitor::JobRunMonitor;
@@ -84,7 +83,6 @@ impl Orchestrator {
         let task_run_monitor_wakeup = self.signals.register();
         let task_run_attempt_dispatcher_wakeup = self.signals.register();
         let task_run_attempt_monitor_wakeup = self.signals.register();
-        let child_job_run_stopper_wakeup = self.signals.register();
 
         let job_run_dispatcher = JobRunDispatcher::new(
             self.crud.clone(),
@@ -133,12 +131,6 @@ impl Orchestrator {
             self.app_config.clone(),
         );
 
-        let child_job_run_stopper = ChildJobRunStopper::new(
-            self.crud.clone(),
-            self.conn_pool.clone(),
-            self.signals.clone(),
-        );
-
         Poller::new(Arc::new(job_run_dispatcher), job_run_dispatcher_wakeup, self.app_config.clone()).start();
         Poller::new(Arc::new(job_run_monitor), job_run_monitor_wakeup, self.app_config.clone()).start();
         Poller::new(Arc::new(job_run_releaser), job_run_releaser_wakeup, self.app_config.clone()).start();
@@ -146,7 +138,6 @@ impl Orchestrator {
         Poller::new(Arc::new(task_run_monitor), task_run_monitor_wakeup, self.app_config.clone()).start();
         Poller::new(Arc::new(task_run_attempt_dispatcher), task_run_attempt_dispatcher_wakeup, self.app_config.clone()).start();
         Poller::new(Arc::new(task_run_attempt_monitor), task_run_attempt_monitor_wakeup, self.app_config.clone()).start();
-        Poller::new(Arc::new(child_job_run_stopper), child_job_run_stopper_wakeup, self.app_config.clone()).start();
 
     }
 

@@ -273,6 +273,20 @@ mod tests {
         assert!(error.contains("being stopped"), "{error}");
     }
 
+    #[tokio::test]
+    async fn an_attempt_that_ended_without_succeeding_cannot_submit() {
+
+        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+
+        let parent = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(parent.id, TaskRunStatus::Running).await;
+        let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Failed).await;
+
+        let error = submit_from(&db, Some(attempt.id)).await.unwrap_err().to_string();
+
+        assert!(error.contains("ended without succeeding"), "{error}");
+    }
+
     #[test]
     fn a_declared_default_is_carried_when_nothing_overrides_it() {
         let resolved = resolve_job_parameters(

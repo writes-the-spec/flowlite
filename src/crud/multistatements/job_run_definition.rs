@@ -17,7 +17,7 @@ use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilt
 use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotificationStatus, NotificationChannel, NotifyOn};
 use crate::crud::task::Task;
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, TaskRunStatus};
-use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter};
+use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, TaskRunAttemptStatus};
 
 /// A job's definition, as one job run will execute it. `submit_job` builds it from the
 /// config the YAML declares now and `rerun_job` from an earlier run's snapshot, and the
@@ -183,8 +183,8 @@ impl CRUD {
     /// The parent a run submitted from inside a task is linked to, checked before the run
     /// is written. An attempt whose row is gone links nothing - retention deleted its run
     /// under a process that outlived it - since there is no parent left to show. A parent
-    /// run that is being stopped refuses the submission, or a task being stopped could
-    /// start new work on its way out.
+    /// run that is being stopped, or an attempt that ended without succeeding, refuses the
+    /// submission, or work on its way out could start more.
     pub(super) async fn resolve_parent_task_run_attempt(
         &self,
         conn: &mut SqliteConnection,
@@ -209,6 +209,15 @@ impl CRUD {
         let Some(attempt) = attempts.into_iter().next() else {
             return Ok(None);
         };
+
+        // Its children are stopped when it ends this way, so one submitted afterwards - by a
+        // process that outlived it - would be the only one left running.
+        if attempt.status.is_finished() && attempt.status != TaskRunAttemptStatus::Succeeded {
+            anyhow::bail!(
+                "Task run attempt {} has already ended without succeeding, so it cannot submit new runs",
+                attempt.id,
+            );
+        }
 
         let stop = self.select_job_run_stop(&mut *conn, &SelectJobRunStopsData {
             filter: SelectJobRunStopsDataFilter {

@@ -51,6 +51,11 @@ pub async fn recover_orphaned_task_run_attempts(
             ),
         }
 
+        // The runs it submitted go the way an invalid attempt's children always do, and
+        // before the status for the reason `TaskRunAttemptMonitor` gives.
+        let mut conn = conn_pool.acquire().await?;
+        crud.stop_child_job_runs(&mut conn, &task_run_attempt).await?;
+
         crud.update_task_run_attempts(
             &**conn_pool,
             &UpdateTaskRunAttemptsData {
@@ -220,6 +225,23 @@ mod tests {
             db.task_run_attempt(task_run_attempt.id).await.status,
             TaskRunAttemptStatus::Invalid,
         );
+    }
+
+    /// Invalid is an ending without success like any other, so the runs the attempt
+    /// submitted are stopped with it.
+    #[tokio::test]
+    async fn the_runs_an_orphaned_attempt_submitted_are_stopped() {
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
+        let child = db.insert_child_job_run(&task_run_attempt, JobRunStatus::Running).await;
+
+        recover_orphaned_task_run_attempts(&db.crud, &db.conn_pool, None).await.unwrap();
+
+        assert_eq!(db.job_run_stop_count(child.id).await, 1);
     }
 
     /// A row from before the column existed has no group to kill, and still has to settle.

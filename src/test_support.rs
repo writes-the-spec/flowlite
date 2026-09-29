@@ -15,7 +15,6 @@ use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTas
 use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
 use crate::orchestrator::job_run_dispatcher::JobRunDispatcher;
 use crate::orchestrator::job_run_monitor::JobRunMonitor;
-use crate::orchestrator::child_job_run_stopper::ChildJobRunStopper;
 use crate::orchestrator::job_run_releaser::JobRunReleaser;
 use crate::notifications::NotificationService;
 use crate::notifications::channel::NotificationChannels;
@@ -413,14 +412,6 @@ impl TestDb {
 
     pub fn job_run_monitor(&self) -> JobRunMonitor {
         JobRunMonitor::new(
-            self.crud.clone(),
-            self.conn_pool.clone(),
-            self.signals.clone(),
-        )
-    }
-
-    pub fn child_job_run_stopper(&self) -> ChildJobRunStopper {
-        ChildJobRunStopper::new(
             self.crud.clone(),
             self.conn_pool.clone(),
             self.signals.clone(),
@@ -1175,6 +1166,18 @@ impl TestDb {
             .into_iter()
             .find(|task_run_attempt| task_run_attempt.id == task_run_attempt_id)
             .unwrap()
+    }
+
+    pub async fn job_run_stop_count(&self, job_run_id: i64) -> usize {
+        self.crud.select_job_run_stops(&*self.conn_pool, &crate::crud::job_run_stop::SelectJobRunStopsData {
+            filter: crate::crud::job_run_stop::SelectJobRunStopsDataFilter {
+                id: None,
+                job_run_id: Some(job_run_id),
+            },
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap().len()
     }
 
     pub async fn insert_job_run_stop(&self, job_run_id: i64) {
