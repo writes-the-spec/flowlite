@@ -40,10 +40,16 @@ pub fn job_run_dir(data_dir: &str, job_run_id: i64) -> anyhow::Result<PathBuf> {
 /// A stable per-task name would let a retry inherit the last attempt's bytes - attempt 1
 /// writes a result and fails, attempt 2 writes nothing and succeeds, and the task's result
 /// is attempt 1's. This makes that impossible rather than leaving it to an unlink somebody
-/// has to remember. It also leaves a failed attempt's result on disk, which is what item 13
-/// of the agentic gap analysis needs to hand a retry the attempt before it.
+/// has to remember. It also leaves a failed attempt's result on disk, which is how a
+/// retry is handed it as `FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT`.
 pub fn task_output_path(job_run_dir: &Path, task_id: &str, attempt: u32) -> PathBuf {
     job_run_dir.join(OUTPUT_DIR).join(format!("{}.{}", task_id, attempt))
+}
+
+/// The log a retry is handed of the attempt before it - that attempt's stdout and stderr as
+/// they were captured - kept beside its result and named for it the same way.
+pub fn task_log_path(job_run_dir: &Path, task_id: &str, attempt: u32) -> PathBuf {
+    job_run_dir.join(OUTPUT_DIR).join(format!("{}.{}.log", task_id, attempt))
 }
 
 /// Creates a run's directory and the output directory inside it, so a task can write to

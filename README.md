@@ -311,6 +311,8 @@ The value is a fixed string: there is no `${...}` interpolation in it, for the r
 | `FLOWLITE_SCHEDULED_AT` | The instant a schedule fired for, as RFC3339. Set only for a scheduled run — a manual `job submit` gets no such variable at all, not an empty one. |
 | `FLOWLITE_TASK_OUTPUT` | The path to write this task's result to. See [Task results](#task-results). |
 | `FLOWLITE_INPUT_<TASK_ID>` | The path to the result of a task this one depends on, one variable per dependency that produced one. |
+| `FLOWLITE_PREVIOUS_ATTEMPT_LOG` | On a retry, the path to the failed attempt's stdout and stderr. See [Timeouts and retries](#timeouts-and-retries). |
+| `FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT` | On a retry, the path to the result the failed attempt wrote, if it wrote one. |
 
 **Parameters answer "which caller is this run for," not "which run is this."** A parameter
 is a fixed value carried unchanged from submit through every rerun, never re-evaluated, so
@@ -400,6 +402,14 @@ Each defaults to `[job_defaults]`: an hour, no retries, and 60 seconds between t
 the grounds that whatever a retry waits on rarely fixes itself within one second. Set
 `retry_delay: 0` to retry as soon as possible. Every attempt keeps its own output — see
 [Task output](#task-output).
+
+A retry is told why the attempt before it failed, so an agent's second attempt need not be
+the first one again. `$FLOWLITE_PREVIOUS_ATTEMPT_LOG` names a file holding that attempt's
+stdout and stderr, in the order they were written — including flowlite's own reason when it
+failed the attempt itself, for a result over `max_task_output_bytes` or one that is not
+UTF-8. `$FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT` names the result it wrote, and is set only if it
+wrote one. Only a failed attempt is retried — a timed-out one ends the task — so neither
+variable is ever set on attempt 1, and a rerun starts again from attempt 1.
 
 ## Run notifications
 

@@ -41,4 +41,4 @@ Retention's delete is then one `DELETE ... WHERE job_run_id = ?`.
 
 The task-run web route ([src/router/app/routes/task_runs/task_run_id/route.rs](../../../../src/router/app/routes/task_runs/task_run_id/route.rs)), and `job-run logs` ([src/cli/commands/job_run.rs](../../../../src/cli/commands/job_run.rs)) and the MCP `get_job_run_logs` tool through `CRUD::select_task_run_attempt_logs`; also `NotificationService`, for the output a message quotes. They group with `group_task_run_attempt_output`; an attempt with no rows is `TaskRunAttemptOutputStreams::default()` — empty, not unknown, so output is a `String`, not `Option<String>`.
 
-No orchestrator service reads it: only statuses pass between services.
+The one orchestrator reader is `TaskRunAttemptDispatcher::write_previous_attempt_files`, which copies a failed attempt's chunks, in id order, into the log file its retry is handed as `FLOWLITE_PREVIOUS_ATTEMPT_LOG`. That is data for the command, not coordination: only statuses pass between services.

@@ -6,13 +6,16 @@ use crate::crud::job_run::{JobRun, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRun};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus, UpdateTaskRunAttemptsData, UpdateTaskRunAttemptsDataFilter, UpdateTaskRunAttemptsDataInput};
-use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStream;
+use crate::crud::task_run_attempt_output::{
+    SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort,
+    TaskRunAttemptOutputStream,
+};
 use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
-use crate::orchestrator::task_run_attempt_env::build_task_run_attempt_env;
+use crate::orchestrator::task_run_attempt_env::{build_task_run_attempt_env, PreviousAttemptFiles};
 use crate::app_config::AppConfig;
 use crate::orchestrator::task_run_attempt_reader::read_task_run_attempt_stream;
 use crate::poller::Service;
-use crate::run_dir::{job_run_dir, task_output_path};
+use crate::run_dir::{job_run_dir, task_log_path, task_output_path};
 use crate::signals::Signals;
 use anyhow::Context;
 use chrono::{TimeDelta, Utc};
@@ -296,6 +299,7 @@ impl TaskRunAttemptDispatcher {
         let job_run_dir = job_run_dir(&self.app_config.data_dir, job_run.id)?;
 
         let inputs = self.get_inputs(&task_run, &job_run_dir).await?;
+        let previous_attempt = self.write_previous_attempt_files(task_run_attempt, &job_run_dir).await?;
 
         let env = build_task_run_attempt_env(
             &task_run,
@@ -304,6 +308,7 @@ impl TaskRunAttemptDispatcher {
             &self.app_config.data_dir,
             &job_run_dir,
             &inputs,
+            previous_attempt.as_ref(),
             &self.app_config.secrets,
         )?;
 
@@ -575,6 +580,73 @@ impl TaskRunAttemptDispatcher {
         Ok(inputs)
     }
 
+    /// For a retry, the files of the attempt before it: its captured output, written out
+    /// here as a log, and the result it left, if any. `None` for a first attempt.
+    ///
+    /// Written before `started_at`, so a failed write leaves the attempt `Queued` for the
+    /// next pass to try again, the way a missing secret does.
+    async fn write_previous_attempt_files(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        job_run_dir: &std::path::Path,
+    ) -> anyhow::Result<Option<PreviousAttemptFiles>> {
+
+        if task_run_attempt.attempt < 2 {
+            return Ok(None);
+        }
+
+        let previous_attempt_number = task_run_attempt.attempt - 1;
+
+        let attempts = self.crud.select_task_run_attempts(&*self.conn_pool, &SelectTaskRunAttemptsData {
+            filter: SelectTaskRunAttemptsDataFilter {
+                id: None,
+                task_run_id: Some(task_run_attempt.task_run_id),
+                job_run_id: None,
+                task_id: None,
+                status: None,
+            },
+            sort: None,
+        }).await?;
+
+        let previous_attempt = attempts
+            .into_iter()
+            .find(|attempt| attempt.attempt == previous_attempt_number)
+            .ok_or_else(|| anyhow::anyhow!(
+                "Task run {} has no attempt {} to hand attempt {}",
+                task_run_attempt.task_run_id,
+                previous_attempt_number,
+                task_run_attempt.attempt,
+            ))?;
+
+        let chunks = self.crud.select_task_run_attempt_outputs(&*self.conn_pool, &SelectTaskRunAttemptOutputsData {
+            filter: SelectTaskRunAttemptOutputsDataFilter {
+                id: None,
+                task_run_attempt_id: Some(previous_attempt.id),
+                task_run_id: None,
+                job_run_id: None,
+                job_id: None,
+                task_id: None,
+                stream: None,
+            },
+            sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),
+        }).await?;
+
+        // Both streams in the order they were captured, so it reads the way a terminal did.
+        let log: String = chunks.iter().map(|chunk| chunk.content.as_str()).collect();
+
+        let log_path = task_log_path(job_run_dir, &task_run_attempt.task_id, previous_attempt_number);
+
+        std::fs::write(&log_path, log)
+            .with_context(|| format!("Failed to write the previous attempt's log to {}", log_path.display()))?;
+
+        let output_path = task_output_path(job_run_dir, &task_run_attempt.task_id, previous_attempt_number);
+
+        Ok(Some(PreviousAttemptFiles {
+            log: log_path,
+            output: output_path.exists().then_some(output_path),
+        }))
+    }
+
     /// Loads the job run the attempt belongs to, for the parameters and the scheduled
     /// instant the run was submitted with. Read off the run rather than out of config, so
     /// an attempt receives what its run was submitted with however the YAML has moved.
@@ -653,6 +725,7 @@ mod tests {
     use super::*;
     use crate::crud::job_run::JobRunStatus;
     use crate::crud::task_run::TaskRunStatus;
+    use crate::crud::task_run_attempt_output::{InsertTaskRunAttemptOutputData, InsertTaskRunAttemptOutputDataInput};
     use crate::test_support::TestDb;
     use crate::test_support::{a_stdin_nothing_writes_to, read_command_file};
     use crate::test_support::{reading_the_environment, writing_the_environment};
@@ -1382,6 +1455,110 @@ mod tests {
         let seen = read_command_file(&path).await;
 
         assert_eq!(seen, "the plan");
+    }
+
+    /// Attempt 1 of `task_run`, failed, having written `chunks` in order and - if `result`
+    /// is given - a result; then a queued attempt 2 past its retry delay.
+    async fn failed_first_attempt(
+        db: &TestDb,
+        task_run: &TaskRun,
+        chunks: &[(TaskRunAttemptOutputStream, &str)],
+        result: Option<&str>,
+    ) -> TaskRunAttempt {
+
+        let first = db.insert_task_run_attempt(task_run, 1, TaskRunAttemptStatus::Failed).await;
+
+        for (stream, content) in chunks {
+            db.crud.insert_task_run_attempt_output(&*db.conn_pool, &InsertTaskRunAttemptOutputData {
+                input: InsertTaskRunAttemptOutputDataInput {
+                    task_run_attempt_id: first.id,
+                    task_run_id: task_run.id,
+                    job_run_id: task_run.job_run_id,
+                    job_id: task_run.job_id.clone(),
+                    task_id: task_run.task_id.clone(),
+                    stream: *stream,
+                    content: content.to_string(),
+                },
+            }).await.unwrap();
+        }
+
+        if let Some(result) = result {
+            let job_run_dir = crate::run_dir::job_run_dir(&db.app_config().data_dir, task_run.job_run_id).unwrap();
+            std::fs::write(task_output_path(&job_run_dir, &task_run.task_id, 1), result).unwrap();
+        }
+
+        let second = db.insert_task_run_attempt(task_run, 2, TaskRunAttemptStatus::Queued).await;
+        db.backdate_task_run_attempt(second.id, Utc::now() - TimeDelta::hours(1)).await;
+
+        db.task_run_attempt(second.id).await
+    }
+
+    /// A retry reads why the attempt before it failed - usually on stderr, since a failing
+    /// command rarely writes a result - and whatever result it did leave.
+    #[tokio::test]
+    async fn a_retry_is_handed_the_log_and_result_of_the_attempt_before_it() {
+
+        let _environment = reading_the_environment();
+
+        let db = TestDb::new().await;
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let seen_path = db.data_dir().join("seen.txt");
+
+        let task_run = db.insert_task_run_for_command(
+            job_run.id,
+            &format!(
+                // Renamed into place, so the file is never read half-written.
+                "{{ cat \"$FLOWLITE_PREVIOUS_ATTEMPT_LOG\"; cat \"$FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT\"; }} > {0}.tmp && mv {0}.tmp {0}",
+                seen_path.display(),
+            ),
+            60,
+        ).await;
+
+        let retry = failed_first_attempt(
+            &db,
+            &task_run,
+            &[
+                (TaskRunAttemptOutputStream::Stdout, "starting\n"),
+                (TaskRunAttemptOutputStream::Stderr, "boom\n"),
+                (TaskRunAttemptOutputStream::Stdout, "giving up\n"),
+            ],
+            Some("half a plan"),
+        ).await;
+
+        db.task_run_attempt_dispatcher().handle(&retry).await.unwrap();
+
+        assert_eq!(read_command_file(&seen_path).await, "starting\nboom\ngiving up\nhalf a plan");
+    }
+
+    /// The same convention as `FLOWLITE_INPUT_*`: no result, no variable.
+    #[tokio::test]
+    async fn a_retry_of_an_attempt_that_wrote_no_result_gets_only_the_log() {
+
+        let _environment = reading_the_environment();
+
+        let db = TestDb::new().await;
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let seen_path = db.data_dir().join("seen.txt");
+
+        let task_run = db.insert_task_run_for_command(
+            job_run.id,
+            &format!(
+                "echo \"${{FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT:-unset}} $(cat \"$FLOWLITE_PREVIOUS_ATTEMPT_LOG\")\" > {}",
+                seen_path.display(),
+            ),
+            60,
+        ).await;
+
+        let retry = failed_first_attempt(
+            &db,
+            &task_run,
+            &[(TaskRunAttemptOutputStream::Stderr, "boom")],
+            None,
+        ).await;
+
+        db.task_run_attempt_dispatcher().handle(&retry).await.unwrap();
+
+        assert_eq!(read_command_file(&seen_path).await, "unset boom");
     }
 
     /// The whole point of the channel, end to end: one task writes a result, the monitor

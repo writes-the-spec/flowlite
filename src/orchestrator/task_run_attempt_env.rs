@@ -27,6 +27,10 @@ use crate::run_dir::task_output_path;
 /// and holds an entry only for a dependency that produced one - so a task asks whether it
 /// got a result by asking whether the variable is set.
 ///
+/// `previous_attempt` is `Some` only for a retry, and names the files of the attempt before
+/// it: `FLOWLITE_PREVIOUS_ATTEMPT_LOG` always, `FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT` only if
+/// that attempt wrote a result.
+///
 /// `secrets` is the whole configured map, keyed by secret name rather than by variable
 /// name - `task_run.secret_env` is the other half, variable name to secret name, and the
 /// two are joined here. This is the one place in the codebase a secret's value exists
@@ -39,6 +43,7 @@ pub fn build_task_run_attempt_env(
     data_dir: &str,
     job_run_dir: &Path,
     inputs: &BTreeMap<String, PathBuf>,
+    previous_attempt: Option<&PreviousAttemptFiles>,
     secrets: &BTreeMap<String, String>,
 ) -> anyhow::Result<BTreeMap<String, String>> {
 
@@ -114,7 +119,34 @@ pub fn build_task_run_attempt_env(
         env.insert(task_input_env_name(task_id), path.to_string_lossy().into_owned());
     }
 
+    // Removed before they are set, since each is sometimes absent: a task's own `env:` must
+    // not be able to hand it a previous attempt that never happened, or a result it never
+    // wrote.
+    env.remove("FLOWLITE_PREVIOUS_ATTEMPT_LOG");
+    env.remove("FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT");
+
+    if let Some(previous_attempt) = previous_attempt {
+        env.insert(
+            "FLOWLITE_PREVIOUS_ATTEMPT_LOG".to_string(),
+            previous_attempt.log.to_string_lossy().into_owned(),
+        );
+
+        if let Some(output) = &previous_attempt.output {
+            env.insert(
+                "FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT".to_string(),
+                output.to_string_lossy().into_owned(),
+            );
+        }
+    }
+
     Ok(env)
+}
+
+/// What a retry is handed of the attempt before it, which failed - the only outcome
+/// `TaskRunMonitor` retries.
+pub struct PreviousAttemptFiles {
+    pub log: PathBuf,
+    pub output: Option<PathBuf>,
 }
 
 fn parameter_env_name(name: &str) -> String {
@@ -237,6 +269,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -255,6 +288,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -270,6 +304,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -287,6 +322,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -304,6 +340,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -322,6 +359,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -338,6 +376,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -362,6 +401,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -384,6 +424,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -407,6 +448,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -427,6 +469,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -447,6 +490,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -469,6 +513,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &inputs,
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -493,6 +538,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &inputs,
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -510,6 +556,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap();
 
@@ -528,6 +575,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &map(&[("warehouse_pw", "hunter2")]),
         ).unwrap();
 
@@ -556,6 +604,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &map(&[("warehouse_pw", "hunter2")]),
         ).unwrap();
 
@@ -574,6 +623,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &map(&[("warehouse_pw", "hunter2")]),
         ).unwrap();
 
@@ -597,6 +647,7 @@ mod tests {
             "/srv/flowlite",
             &run_dir(),
             &no_inputs(),
+            None,
             &BTreeMap::new(),
         ).unwrap_err().to_string();
 
@@ -606,5 +657,70 @@ mod tests {
         assert!(error.contains("warehouse_pw"), "{error}");
         assert!(error.contains("[secrets] in config.toml"), "{error}");
         assert!(error.contains("FLOWLITE_SECRETS__WAREHOUSE_PW"), "{error}");
+    }
+
+    #[test]
+    fn a_first_attempt_is_handed_no_previous_attempt() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[])),
+            &job_run(map(&[]), fixed_scheduled_at()),
+            &task_run_attempt(),
+            "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
+            None,
+            &map(&[]),
+        ).unwrap();
+
+        assert!(!env.contains_key("FLOWLITE_PREVIOUS_ATTEMPT_LOG"));
+        assert!(!env.contains_key("FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT"));
+    }
+
+    #[test]
+    fn a_retry_is_handed_the_previous_attempts_log_and_result() {
+        let previous_attempt = PreviousAttemptFiles {
+            log: run_dir().join(".output/extract.1.log"),
+            output: Some(run_dir().join(".output/extract.1")),
+        };
+
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[])),
+            &job_run(map(&[]), fixed_scheduled_at()),
+            &task_run_attempt(),
+            "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
+            Some(&previous_attempt),
+            &map(&[]),
+        ).unwrap();
+
+        assert_eq!(env.get("FLOWLITE_PREVIOUS_ATTEMPT_LOG").unwrap(), "/srv/flowlite/.flowlite/runs/7/.output/extract.1.log");
+        assert_eq!(env.get("FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT").unwrap(), "/srv/flowlite/.flowlite/runs/7/.output/extract.1");
+    }
+
+    /// A task's own `env:` cannot plant a previous attempt that never happened.
+    #[test]
+    fn a_task_cannot_forge_a_previous_attempt() {
+        let previous_attempt = PreviousAttemptFiles {
+            log: run_dir().join(".output/extract.1.log"),
+            output: None,
+        };
+
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[
+                ("FLOWLITE_PREVIOUS_ATTEMPT_LOG", "/tmp/forged"),
+                ("FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT", "/tmp/forged"),
+            ])),
+            &job_run(map(&[]), fixed_scheduled_at()),
+            &task_run_attempt(),
+            "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
+            Some(&previous_attempt),
+            &map(&[]),
+        ).unwrap();
+
+        assert_eq!(env.get("FLOWLITE_PREVIOUS_ATTEMPT_LOG").unwrap(), "/srv/flowlite/.flowlite/runs/7/.output/extract.1.log");
+        assert!(!env.contains_key("FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT"));
     }
 }
