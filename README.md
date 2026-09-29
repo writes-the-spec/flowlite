@@ -809,8 +809,13 @@ the task's child. `job-run get` names the task that submitted a run and the runs
 tasks submitted, the `get_job_run` tool and `--json` carry the same as `parent` and
 `child_job_run_ids`, and the run page links both ways.
 
-A task of a run that is being stopped cannot submit: the submission is refused rather than
-started by a run on its way out.
+A child is stopped when its parent is: stopping a run stops every unfinished run its tasks
+submitted, and theirs in turn. So does the attempt that submitted it ending in anything but
+success — a timeout, a failure, a crash — because a retry submits children of its own, and
+the failed attempt's would otherwise run beside them. A child of an attempt that succeeded
+is left to finish, since submitting without waiting is a thing a task may mean to do. And a
+task of a run that is being stopped cannot submit at all: the submission is refused rather
+than started by a run on its way out.
 
 ## Reruns
 

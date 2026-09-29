@@ -15,6 +15,7 @@ use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, SelectTas
 use crate::crud::task_run_attempt::{InsertTaskRunAttemptData, InsertTaskRunAttemptDataInput, SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
 use crate::orchestrator::job_run_dispatcher::JobRunDispatcher;
 use crate::orchestrator::job_run_monitor::JobRunMonitor;
+use crate::orchestrator::child_job_run_stopper::ChildJobRunStopper;
 use crate::orchestrator::job_run_releaser::JobRunReleaser;
 use crate::notifications::NotificationService;
 use crate::notifications::channel::NotificationChannels;
@@ -412,6 +413,14 @@ impl TestDb {
 
     pub fn job_run_monitor(&self) -> JobRunMonitor {
         JobRunMonitor::new(
+            self.crud.clone(),
+            self.conn_pool.clone(),
+            self.signals.clone(),
+        )
+    }
+
+    pub fn child_job_run_stopper(&self) -> ChildJobRunStopper {
+        ChildJobRunStopper::new(
             self.crud.clone(),
             self.conn_pool.clone(),
             self.signals.clone(),

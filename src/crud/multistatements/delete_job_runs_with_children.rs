@@ -93,14 +93,14 @@ impl CRUD {
 
             // A run's descendants go with it, deepest first: each references an attempt of
             // the run above it, and the foreign key refuses to lose that attempt first.
-            let descendants = self.select_job_run_descendants(&mut *tx, id).await?;
+            let descendants = self.select_job_run_descendants(&mut tx, id).await?;
 
             for descendant_id in descendants.iter().rev().map(|descendant| descendant.id) {
-                self.delete_job_run_rows(&mut *tx, descendant_id).await?;
+                self.delete_job_run_rows(&mut tx, descendant_id).await?;
                 deleted.push(descendant_id);
             }
 
-            self.delete_job_run_rows(&mut *tx, id).await?;
+            self.delete_job_run_rows(&mut tx, id).await?;
             deleted.push(id);
         }
 

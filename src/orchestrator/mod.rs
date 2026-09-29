@@ -1,6 +1,7 @@
 mod orchestrator;
 
 pub use crate::orchestrator::orchestrator::Orchestrator;
+pub mod child_job_run_stopper;
 pub mod job_run_dispatcher;
 pub mod job_run_releaser;
 pub mod recovery;

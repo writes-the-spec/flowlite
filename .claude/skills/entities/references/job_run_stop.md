@@ -10,7 +10,7 @@ A stop signal for a [`job_run`](job_run.md). **Insert-only** — there is no sta
 
 ## Written by
 
-The job-run detail web route ([src/router/app/routes/job_runs/job_run_id/route.rs](../../../../src/router/app/routes/job_runs/job_run_id/route.rs)). There is no CLI stop command.
+The job-run detail web route ([src/router/app/routes/job_runs/job_run_id/route.rs](../../../../src/router/app/routes/job_runs/job_run_id/route.rs)), `stop_job_run` ([src/shared/job_run.rs](../../../../src/shared/job_run.rs)) for `job-run stop` and the MCP `stop_job_run` tool, and `ChildJobRunStopper` ([src/orchestrator/child_job_run_stopper.rs](../../../../src/orchestrator/child_job_run_stopper.rs)) for a run a task submitted, once its parent run is being stopped or its parent attempt ended unsuccessfully.
 
 ## Deleted by
 

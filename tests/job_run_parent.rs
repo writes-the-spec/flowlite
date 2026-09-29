@@ -67,3 +67,51 @@ fn a_run_submitted_by_a_task_names_its_parent_and_is_named_by_it() {
     assert_eq!(child["parent"]["job_run_id"], parent_run_id);
     assert_eq!(child["parent"]["task_id"], "launch");
 }
+
+const SLOW_CHILD: &str = "id: child\nname: Child\ntasks:\n  - id: work\n    command: sleep 30\n";
+
+/// Stopping the parent stops the run its task submitted, rather than leaving it to sleep
+/// out its thirty seconds on its own.
+#[test]
+fn stopping_a_run_stops_the_run_its_task_submitted() {
+
+    let dir = data_dir();
+
+    install_job(&dir, "child.yaml", SLOW_CHILD);
+    install_job(&dir, "parent.yaml", &parent_yaml());
+
+    let mut server = ServerGuard::new(serve(&dir, 8140), libc::SIGTERM);
+
+    assert!(until(Duration::from_secs(10), || is_up(&dir)), "the server never came up");
+
+    let out = flowlite(&dir, &["job", "submit", "parent", "--json"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    let parent_run: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let parent_run_id = parent_run["id"].as_i64().unwrap();
+
+    let mut child_run_id = None;
+    let child_started = until(Duration::from_secs(10), || {
+        let parent = job_run_json(&dir, parent_run_id);
+
+        let Some(id) = parent["child_job_run_ids"][0].as_i64() else {
+            return false;
+        };
+
+        child_run_id = Some(id);
+        job_run_json(&dir, id)["status"] == "running"
+    });
+    assert!(child_started, "the child never started");
+
+    let stopped = flowlite(&dir, &["job-run", "stop", &parent_run_id.to_string()]);
+    assert!(stopped.status.success(), "{}", String::from_utf8_lossy(&stopped.stderr));
+
+    let child_run_id = child_run_id.unwrap();
+    let child_aborted = until(Duration::from_secs(10), || {
+        job_run_json(&dir, child_run_id)["status"] == "aborted"
+    });
+
+    server.stop();
+
+    assert!(child_aborted, "child ended {}", job_run_json(&dir, child_run_id)["status"]);
+}
