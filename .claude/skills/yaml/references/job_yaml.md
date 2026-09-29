@@ -93,6 +93,7 @@ At parse, in `from_yaml_str` (file-only fields, so checked once here rather than
 | Task id: ASCII letters, digits, `-`, `_` | Path component (`.output/<id>.<attempt>`) and part of `FLOWLITE_INPUT_<ID>`. |
 | No two ids map to one `FLOWLITE_INPUT_*` (`load-raw`/`load_raw`) | A dependent would get one path for two results. |
 | `secret_env` variable: valid env name, not `FLOWLITE_*` | Metadata is applied last and would overwrite it. |
+| `env` variable: not `FLOWLITE_*` (`validate_env_names`) | The prefix is flowlite's; the spawn drops any such name from `env:`, so it would never arrive. |
 | Secret name: lowercase, digits, `_`, no `__` | `FLOWLITE_SECRETS__*` can't carry others; `__` splits into nested keys. |
 | A name not in both `env` and `secret_env` at one level | Per level, so a task may still override a job's name across blocks. |
 

@@ -253,7 +253,9 @@ to.
 **A command does not inherit flowlite's own configuration.** Every `FLOWLITE_*` variable is
 stripped from the child before the layers above are applied — a server started with
 `FLOWLITE_SMTP__PASSWORD=...` does not hand that credential to every command it spawns.
-What a command is meant to have, flowlite injects by name.
+What a command is meant to have, flowlite injects by name — and the prefix is flowlite's
+alone, so a job's or task's `env:` may not use it either. Such a name is refused when the
+YAML is read, rather than dropped at spawn without a word.
 
 **A command's stdin is empty unless the task declares one.** By default it is `/dev/null`,
 not the terminal or pipe `flowlite serve` was started with, so anything a command reads from

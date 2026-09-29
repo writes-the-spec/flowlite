@@ -11,9 +11,9 @@ use crate::run_dir::task_output_path;
 /// this map is an overlay and never the whole environment.
 ///
 /// The one part of that inherited environment a command does not get is the `FLOWLITE_*`
-/// namespace, which the dispatcher strips before applying this overlay. So every
-/// `FLOWLITE_` variable a command sees is one this function put there, and nothing here
-/// can be defeated by what the server happened to be started with.
+/// namespace, which the dispatcher strips before applying this overlay, and this function
+/// drops the same prefix from the task's own `env:`. So every `FLOWLITE_` variable a
+/// command sees is one this function put there.
 ///
 /// The four layers are applied in the order the design fixes: the task's own env:, then
 /// its resolved secrets, then the run's parameters, then the run metadata. A secret comes
@@ -86,6 +86,12 @@ pub fn build_task_run_attempt_env(
         env.insert(name.clone(), value.clone());
     }
 
+    // The prefix is flowlite's, so nothing a task declared survives under it - including
+    // a name flowlite leaves unset on this spawn, like the `FLOWLITE_INPUT_*` of a
+    // dependency that produced nothing. The YAML refuses such names, but a rerun replays
+    // whatever an older run stored.
+    env.retain(|name, _| !name.starts_with("FLOWLITE_"));
+
     for (name, value) in job_run.parameters.0.iter() {
         env.insert(parameter_env_name(name), value.clone());
     }
@@ -118,12 +124,6 @@ pub fn build_task_run_attempt_env(
     for (task_id, path) in inputs {
         env.insert(task_input_env_name(task_id), path.to_string_lossy().into_owned());
     }
-
-    // Removed before they are set, since each is sometimes absent: a task's own `env:` must
-    // not be able to hand it a previous attempt that never happened, or a result it never
-    // wrote.
-    env.remove("FLOWLITE_PREVIOUS_ATTEMPT_LOG");
-    env.remove("FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT");
 
     if let Some(previous_attempt) = previous_attempt {
         env.insert(
@@ -722,5 +722,30 @@ mod tests {
 
         assert_eq!(env.get("FLOWLITE_PREVIOUS_ATTEMPT_LOG").unwrap(), "/srv/flowlite/.flowlite/runs/7/.output/extract.1.log");
         assert!(!env.contains_key("FLOWLITE_PREVIOUS_ATTEMPT_OUTPUT"));
+    }
+
+    /// Overwriting was never the gap - flowlite's own names land last. A name flowlite does
+    /// not set on this spawn was: a dependency that produced nothing, or one flowlite never
+    /// sets at all, came through from `env:` as if flowlite had put it there.
+    #[test]
+    fn a_flowlite_name_in_env_never_reaches_the_command() {
+        let env = build_task_run_attempt_env(
+            &task_run(map(&[
+                ("FLOWLITE_INPUT_PLAN", "/tmp/forged"),
+                ("FLOWLITE_ANYTHING", "forged"),
+                ("PLAIN", "kept"),
+            ])),
+            &job_run(map(&[]), fixed_scheduled_at()),
+            &task_run_attempt(),
+            "/srv/flowlite",
+            &run_dir(),
+            &no_inputs(),
+            None,
+            &map(&[]),
+        ).unwrap();
+
+        assert!(!env.contains_key("FLOWLITE_INPUT_PLAN"));
+        assert!(!env.contains_key("FLOWLITE_ANYTHING"));
+        assert_eq!(env.get("PLAIN").unwrap(), "kept");
     }
 }

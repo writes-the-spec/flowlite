@@ -140,6 +140,8 @@ impl JobYaml {
 
         job.validate_secret_env().with_context(|| format!("Invalid Job YAML at {}", label))?;
 
+        job.validate_env_names().with_context(|| format!("Invalid Job YAML at {}", label))?;
+
         Ok(job)
     }
 
@@ -188,6 +190,35 @@ impl JobYaml {
     /// `secret_env` can only ever come from a file - unlike a parameter, nothing at
     /// submit time can add or override one - so its self-consistency is checked here,
     /// once, rather than every time `CRUD` reads the job back out of the row.
+    /// The `FLOWLITE_` prefix is flowlite's: the spawn drops every such name from `env:`,
+    /// so a value set there would never reach the command. Refused here so that is said
+    /// out loud rather than discovered.
+    fn validate_env_names(&self) -> anyhow::Result<()> {
+
+        let blocks = std::iter::once((None, &self.env))
+            .chain(self.tasks.iter().map(|task| (Some(task.id.as_str()), &task.env)));
+
+        for (task_id, env) in blocks {
+            if let Some(name) = env.keys().find(|name| name.starts_with("FLOWLITE_")) {
+
+                let subject = match task_id {
+                    Some(task_id) => format!("Job '{}' task '{}'", self.id, task_id),
+                    None => format!("Job '{}'", self.id),
+                };
+
+                anyhow::bail!(
+                    "{} has an env variable named '{}', which starts with FLOWLITE_. That \
+                     prefix belongs to flowlite, which sets the variables under it itself and \
+                     drops any other from env: before the command starts.",
+                    subject,
+                    name,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     fn validate_secret_env(&self) -> anyhow::Result<()> {
         validate_secret_env_block(&self.id, None, &self.env, &self.secret_env)?;
 
@@ -484,6 +515,23 @@ secret_env:
         assert!(error.contains("FLOWLITE_TOKEN"), "{error}");
         assert!(error.contains("starts with FLOWLITE_"), "{error}");
         assert!(error.contains("Run metadata"), "{error}");
+    }
+
+    #[test]
+    fn an_env_variable_named_with_the_flowlite_prefix_is_rejected() {
+        let error = parse_error("
+id: nightly-sync
+name: Nightly Sync
+tasks:
+  - id: sync
+    command: ./sync.sh
+    env:
+      FLOWLITE_INPUT_PLAN: /tmp/forged
+");
+
+        assert!(error.contains("task 'sync'"), "{error}");
+        assert!(error.contains("FLOWLITE_INPUT_PLAN"), "{error}");
+        assert!(error.contains("starts with FLOWLITE_"), "{error}");
     }
 
     #[test]
