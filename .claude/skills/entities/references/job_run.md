@@ -1,38 +1,43 @@
 # `job_run` (disk)
 
-One execution of a [`job`](job.md). Created `Scheduled`, released to `Queued` by `JobRunReleaser` — or skipped by it outright, if it was stopped before that — driven to a terminal status by `JobRunDispatcher` and `JobRunMonitor`, and kept forever: this is the history.
+One execution of a [`job`](job.md), and its history until retention prunes it.
 
 | Column | Meaning |
 |---|---|
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`. Also the dispatcher's oldest-first order. |
-| `job_id` | The job this run is of. **No foreign key** — the job lives in the attached `mem` database, so one is impossible. |
-| `job_name`, `job_description` | **Snapshot copies** of `job.name`/`job.description` at submit time, so a finished run still displays as it was submitted however the YAML has moved. |
-| `parameters` | `NOT NULL`. The **resolved** set — `job.parameters`' defaults with the caller's overrides applied by `resolve_job_parameters` — not the declaration itself. |
-| `scheduled_at` | `NOT NULL DATETIME`. The instant this run is due — one of the cron occurrences the [Scheduler](../../scheduler/SKILL.md) computed for a scheduled run, or the submit instant (or an explicit `--schedule-at` / `schedule_at`) for a manual submission. Every run has one, so it is always injected onto the command as `FLOWLITE_SCHEDULED_AT` by [`build_task_run_attempt_env`](../../../../src/orchestrator/task_run_attempt_env.rs), overwriting anything a task's own `env:` (or the inherited process environment) tried to put there. |
-| `schedule_id` | Nullable `TEXT`. The schedule that asked for this run, or `NULL` for a run nobody scheduled — a manual `job submit`, or a rerun of any run. **No foreign key** — the schedule lives in the attached `mem` database, same reason as `job_id`. |
-| `parent_task_run_attempt_id` | Nullable. The [`task_run_attempt`](task_run_attempt.md) whose command submitted this run - `job submit`, `job-run rerun` or the MCP `submit_job` tool, reading `FLOWLITE_TASK_RUN_ATTEMPT_ID` from the environment the dispatcher gave that command - or `NULL` for a run no task submitted. Foreign key to `task_run_attempt (id)`; the parent job run is that attempt's `job_run_id`, which is what the `parent_job_run_id` select filter matches through. `CRUD::resolve_parent_task_run_attempt` links nothing for an attempt whose row is gone and refuses a submission from a run with a stop row. Not copied by `rerun_job`: a rerun's parent is whoever asked for it. |
+| `job_id` | **No foreign key** — the job lives in `mem`, so one is impossible. |
+| `job_name`, `job_description` | **Snapshot copies** of `job.name`/`job.description` at submit, so a finished run displays as submitted. |
+| `parameters` | `NOT NULL`. The **resolved** set — `job.parameters` defaults with the caller's overrides applied by `resolve_job_parameters`. |
+| `scheduled_at` | `NOT NULL DATETIME`. When the run is due: a cron occurrence from the [Scheduler](../../scheduler/SKILL.md), else the submit instant or `--schedule-at` / `schedule_at`. Always injected as `FLOWLITE_SCHEDULED_AT` by [`build_task_run_attempt_env`](../../../../src/orchestrator/task_run_attempt_env.rs), overriding `env:` and the inherited environment. |
+| `schedule_id` | Nullable `TEXT`. The schedule that asked for this run; `NULL` for a manual `job submit` or any rerun. **No foreign key** (in `mem`). |
+| `parent_task_run_attempt_id` | Nullable FK to `task_run_attempt (id)`: the attempt whose command submitted this run (`job submit`, `job-run rerun` or MCP `submit_job`, via `FLOWLITE_TASK_RUN_ATTEMPT_ID`); `NULL` if no task did. The parent job run is that attempt's `job_run_id` (the `parent_job_run_id` select filter). `CRUD::resolve_parent_task_run_attempt` links nothing if the attempt row is gone, and refuses if the attempt ended without succeeding or its run has a stop row. Not copied by `rerun_job`. |
 | `created_at` | Bound from `Toolkit::get_current_ts()`, like every timestamp here. |
-| `started_at` | Nullable. Written exactly once, by `JobRunDispatcher::set_to_running`. Task run retries never touch it. |
+| `started_at` | Nullable. Written once, by `JobRunDispatcher::set_to_running`; task run retries never touch it. |
 | `finished_at` | Nullable. Written with every terminal status. |
-| `status` | `JobRunStatus` — see the [orchestrator skill](../../orchestrator/references/job_run.md) for the nine variants and how task run statuses add up to one. `JobRunStatus::ALL` lists them in dashboard-filter order, and is what both that filter and the CLI's `--status` read. Every run is created `Scheduled`; `JobRunReleaser` ([src/orchestrator/job_run_releaser.rs](../../../../src/orchestrator/job_run_releaser.rs)) is the only thing that moves a run out of it — to `Queued` once `scheduled_at` has arrived, or straight to `Skipped` if the run was stopped first (see [`job_run_stop`](job_run_stop.md)). |
+| `status` | `JobRunStatus` — variants and how task run statuses add up to one are in the [orchestrator skill](../../orchestrator/references/job_run.md). `JobRunStatus::ALL` is the dashboard-filter order and what the CLI's `--status` parses. |
 
 ## Written by
 
-- **Inserted** by `CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/](../../../../src/crud/multistatements/)), always `Scheduled`, together with one [`task_run`](task_run.md) per task (`Planned` — the task run spelling of `Scheduled`) and one [`job_run_notification`](job_run_notification.md) per channel the job named, in the same call. `rerun_job` reads an existing run and its task runs and reproduces the snapshot rather than re-reading the YAML, so a rerun executes what the original did — including copying `parameters` and `scheduled_at` verbatim, not the job's current defaults or a fresh instant. A rerun of a scheduled run therefore still runs for the day it was originally scheduled for, and since that day is normally in the past it reaches `JobRunReleaser`'s notice almost immediately. `schedule_id` is the one field `rerun_job` deliberately does **not** copy: it always writes `NULL`, because the schedule asked for the original run, not for the rerun — copying it would make the rerun count as that schedule's own outstanding run.
-- **Updated** by `JobRunReleaser` (`Scheduled` → `Queued`/`Skipped`), `JobRunDispatcher` (`Queued` → `Running`/`Skipped`) and `JobRunMonitor` (`Running` → terminal), and by nothing else. No request handler and no CLI command writes a run status.
+- **Inserted** by `CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/](../../../../src/crud/multistatements/)), always `Scheduled`, with one `Planned` [`task_run`](task_run.md) per task and one [`job_run_notification`](job_run_notification.md) per channel per block. `rerun_job` replays the original's snapshot, `parameters` and `scheduled_at` verbatim (so a past occurrence is due at once), but writes `schedule_id` `NULL`, or the rerun would count as that schedule's outstanding run.
+- **Updated** by:
+  - `JobRunReleaser` ([src/orchestrator/job_run_releaser.rs](../../../../src/orchestrator/job_run_releaser.rs)) — `Scheduled` → `Queued` once `scheduled_at` arrives, `Skipped` if stopped first (see [`job_run_stop`](job_run_stop.md)), `Invalid` if nothing claims it.
+  - `JobRunDispatcher` — `Queued` → `Running`/`Skipped`/`Invalid`.
+  - `JobRunMonitor` — `Running` → terminal.
+  - `CRUD::delete_job_run` (`job-run delete`, MCP `delete_job_run`, the job-run web route) — `Scheduled` → `Deleted`, a tombstone, not a row delete; any other status is refused, checked inside its transaction against the releaser.
 
 ## Deleted by
 
-`RetentionService` ([src/retention/service.rs](../../../../src/retention/service.rs)), through `CRUD::delete_job_runs_with_children` ([src/crud/multistatements/](../../../../src/crud/multistatements/delete_job_runs_with_children.rs)) — never a run still `Scheduled`, `Queued` or `Running`, and never one still owing a `Pending` row in [`job_run_notification`](job_run_notification.md). Deleting a run deletes this row and, in the same transaction, every row across the other five tables here that carries its `job_run_id` — and the same for every run its tasks submitted, found by `CRUD::select_job_run_descendants` and deleted deepest first, since each child's `parent_task_run_attempt_id` references an attempt of the run above it. Retention leaves a run whose descendants have not all finished for a later pass.
+Only `RetentionService` ([src/retention/service.rs](../../../../src/retention/service.rs)), through `CRUD::delete_job_runs_with_children` ([src/crud/multistatements/](../../../../src/crud/multistatements/delete_job_runs_with_children.rs)). Never a run `Scheduled`, `Queued` or `Running`, nor one owing a `pending` [`job_run_notification`](job_run_notification.md). One transaction deletes the run, every row in the other five tables with its `job_run_id`, and every run its tasks submitted (`CRUD::select_job_run_descendants`) — deepest first, since each child's `parent_task_run_attempt_id` references an attempt of the run above. A run with an unfinished descendant waits for a later pass.
 
-**Retention is the only thing that deletes a row here.** The [Scheduler](../../scheduler/SKILL.md) only ever adds: a `Scheduled` run whose schedule has stopped wanting it — `submit_ahead` fell, the cron changed, the job left `jobs:`, the schedule was disabled or its YAML deleted — is left where it is and will be released and executed like any other. Stopping it (see [`job_run_stop`](job_run_stop.md)) is the only way to call one off.
-
-`[job_defaults] keep_runs` (or a job's own `keep_runs` override on [`mem.job`](job.md)) bounds how many of a job's newest finished runs survive; `[retention] keep_runs_total` is the ceiling across every job, oldest first, enforced after each job's own number. See [Retention](../../../../README.md#retention).
-
-Deleting a run also deletes the config snapshot a rerun would replay, so `job-run rerun` on a deleted run fails exactly as it would for an id that never existed — see [Reruns](../../../../README.md#reruns).
+- `[job_defaults] keep_runs` (or [`mem.job`](job.md)'s `keep_runs`) keeps a job's newest finished runs; `[retention] keep_runs_total` then caps all jobs, oldest first. See [Retention](../../../../README.md#retention).
+- `job-run rerun` of a deleted run fails as for an unknown id — see [Reruns](../../../../README.md#reruns).
+- **The [Scheduler](../../scheduler/SKILL.md) only adds.** A `Scheduled` run its schedule no longer wants (`submit_ahead` fell, cron changed, job left `jobs:`, schedule disabled or deleted) still runs. A stop (→ `Skipped`) calls it off for good; `job-run delete` (→ `Deleted`) frees the occurrence, which the Scheduler resubmits if it is still ahead.
 
 ## Read by
 
-`JobRunReleaser`, `JobRunDispatcher` and `JobRunMonitor` (the three that update it), `CRUD::is_job_at_max_parallel_runs` (counting this job's `Running` rows), the [Scheduler](../../scheduler/SKILL.md) (one lookup per (`schedule_id`, `job_id`, `scheduled_at`), asking whether it has already submitted that occurrence — across every status, not just `Scheduled`), the `job-run` CLI commands, and the home and job-run web routes.
+- `JobRunReleaser`, `JobRunDispatcher` and `JobRunMonitor`.
+- `CRUD::is_job_at_max_parallel_runs` — counts this job's `Running` rows.
+- The [Scheduler](../../scheduler/SKILL.md) — one lookup per (`schedule_id`, `job_id`, `scheduled_at`) for whether that occurrence exists, in any status but `Deleted`.
+- `RetentionService`, `CRUD::stop_child_job_runs`, the `job-run` CLI commands, MCP tools, and the home and job-run web routes.
 
-There is no `job_id` foreign key, but no run is created for a job that isn't there either: `submit_job` selects `mem.job` first and bails with `Job '<id>' not found`.
+No `job_id` foreign key, but `submit_job` selects `mem.job` first and bails with `Job '<id>' not found`.

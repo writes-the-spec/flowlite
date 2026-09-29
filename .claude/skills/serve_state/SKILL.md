@@ -5,37 +5,38 @@ description: The serve lock and state file (src/serve_state.rs) - how flowlite a
 
 # Serve lock and state (src/serve_state.rs)
 
-A data directory answers for itself. `.flowlite/` inside it holds `serve.lock` and `serve.json`, so a directory that is moved or copied stays self-describing and no central record can disagree with it.
+The answer lives in `.flowlite/` inside the data directory, so a moved or copied directory still describes itself and there is no central record to disagree with it.
 
-| | What it is | What it means |
+| File | What it is | What it means |
 |---|---|---|
 | `serve.lock` | an `flock` held by the running server | **the** answer to "is this served" |
-| `serve.json` | pid, address, port, started_at, version | *who* is serving it, readable only once the lock says somebody is |
+| `serve.json` | pid, address, port, started_at, version | *who* serves it. Read only after the lock shows somebody holds it |
 
-`ServeStatus` is the union of the two: `Down` (nobody holds the lock), `Starting` (lock held, no readable state yet — the window between taking the lock and binding the listener), `Up(ServeState)`.
+`ServeStatus`: `Down` (lock not held), `Starting` (lock held but no readable state yet, i.e. between taking the lock and binding the listener), `Up(ServeState)`.
 
-## The rule everything here follows
+## The lock answers, never the file
 
-**The lock answers, never the file.** A process killed with `SIGKILL` leaves `serve.json` behind but cannot keep an `flock`, so a reader that believed the file would report a server that is not there. `status` therefore *takes* the lock to ask — success means nobody held it, so the directory is `Down` — and reads the file only after the lock has proved somebody holds it.
-
-`read_state` is private for that reason. Everything asks through `status`.
+A process killed with `SIGKILL` leaves `serve.json` behind but can't keep an `flock`. So `status` *takes* the lock to ask: if it gets it, nobody held it and the directory is `Down`. It reads the file only after the lock shows it is held. `read_state` is private so that everything has to go through `status`.
 
 ## Traps
 
-- **A `ServeLock` must be bound to a name.** The lock lives in the file descriptor, so the value has to outlive the server: `let _lock = ServeLock::acquire(dir)?;` keeps it, and `let _ = ServeLock::acquire(dir)?;` drops it on the spot and releases the lock immediately.
-- **`status` must not write.** It opens the lock read-only and never creates it — asking whether a directory is served must not modify it, and read-only also lets a supervisor with read access, or a read-only mount, ask at all. `flock(LOCK_EX)` works fine on a read-only descriptor.
-- **`status` releases what it took, by dropping at the end of the function.** Nothing may be added between taking the lock and that drop.
-- **`write_state` renames a temp file into place** rather than truncating, so a concurrent `status` never catches a half-written file and calls a running server `Starting`.
-- **Winning the lock removes a stale `serve.json`.** That is not shutdown cleanup — there deliberately is none. A crash leaves the file for the next acquirer to remove, and in the meantime the lock is free so nothing reads the file as truth.
-- **This file is Unix-only**, through `AsRawFd` and `libc::flock`, and is not `cfg`-gated.
+- **Bind a `ServeLock` to a name.** The lock lives in the file descriptor. `let _lock = ServeLock::acquire(dir)?;` keeps it; `let _ = ...` drops it and releases the lock at once.
+- **`status` must not write.** It opens the lock read-only and never creates it, so a supervisor with read access or a read-only mount can still ask. `flock(LOCK_EX)` works on a read-only descriptor.
+- **`status` releases the lock by dropping it at the end of the function.** Add nothing between taking the lock and that drop.
+- **`write_state` renames a temp file into place** rather than truncating, so a concurrent `status` never reads a half-written file as `Starting`.
+- **Winning the lock removes a stale `serve.json`.** There is deliberately no shutdown cleanup. A crash leaves the file for the next acquirer to remove, and until then the lock is free, so nothing trusts the file.
+- **Unix-only** (`AsRawFd`, `libc::flock`), not `cfg`-gated.
 
 ## Who asks, and why
 
-| Caller | Asks because |
+| Caller | Why |
 |---|---|
-| [serve.rs](../../../src/cli/commands/serve.rs) | one server per directory; a second is refused naming the pid and URL that holds it |
-| [status.rs](../../../src/cli/commands/status.rs) | `flowlite status` is this question |
-| [shared/wait.rs](../../../src/shared/wait.rs) | a wait against an unserved directory would poll a row with no writer, for ever — see the [frontends skill](../frontends/SKILL.md) for how each frontend words that refusal |
-| [mcp/tools/result.rs](../../../src/mcp/tools/result.rs) | a submitted run comes back `scheduled`, and against an unserved directory it will never reach `queued` at all, so the result carries a warning |
+| [serve.rs](../../../src/cli/commands/serve.rs) | one server per directory; a second is refused, naming the holder's pid and URL |
+| [status.rs](../../../src/cli/commands/status.rs) | `flowlite status` asks exactly this |
+| [mcp/tools/get_serve_status.rs](../../../src/mcp/tools/get_serve_status.rs) | the MCP equivalent of `flowlite status`; both print `status_json` from [shared/serve_status.rs](../../../src/shared/serve_status.rs) |
+| [shared/wait.rs](../../../src/shared/wait.rs) | a wait on an unserved directory would poll a row nothing writes, forever. See the [frontends skill](../frontends/SKILL.md) for how each frontend words the refusal |
+| [mcp/tools/result.rs](../../../src/mcp/tools/result.rs) | a submitted run comes back `scheduled` and, unserved, never reaches `queued`, so the result carries a warning |
 
-Two things follow for anything new that asks. A *check* belongs before the work, once — `ensure_data_dir_is_served` reads it once before a wait rather than on every pass, so a wait may span a deliberate restart of `serve`. And `Starting` counts as served: that server holds the lock and will reach the row.
+For anything new that asks:
+- **Check once, before the work.** `ensure_data_dir_is_served` checks once before a wait, not on every pass, so a wait can survive a deliberate restart of `serve`.
+- **`Starting` counts as served.** That server holds the lock and will reach the row.

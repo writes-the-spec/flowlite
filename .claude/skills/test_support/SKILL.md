@@ -5,35 +5,30 @@ description: The shared test fixtures (src/test_support.rs) - TestDb, the enviro
 
 # Test support (src/test_support.rs)
 
-`#[cfg(test)]` in [lib.rs](../../../src/lib.rs), so it exists only for the crate's own unit tests. The integration tests under `tests/` link the library **without** `cfg(test)` and cannot use any of it — which is part of why they exist at all.
+`#[cfg(test)]` in [lib.rs](../../../src/lib.rs): unit tests only. `tests/` links the library without `cfg(test)` and can't use it.
 
 ## TestDb
 
-`TestDb::new()` is one test's own `flowlite.db` in a temp directory nothing else shares, plus a `CRUD`, a pool, a `Signals` and one `TaskRunAttemptChildren`.
+`TestDb::new()`: a private `flowlite.db` in a temp dir, plus `CRUD`, pool, `Signals` and one shared `TaskRunAttemptChildren`.
 
-**Services are built with their real CRUD, never a fake.** `TestDb` hands out a configured `JobRunDispatcher`, `TaskRunAttemptMonitor`, `NotificationService` and the rest, so a settle chain is asked what it wrote by reading the row back out of the table the next poll pass would read it from. That table is the only channel the services have between them, and a hand-built struct cannot stand in for it. The variants say what they vary — `task_run_attempt_dispatcher_with_secrets`, `_with_max_running_attempts`, `_with_concurrency_limits`.
+- **Services get their real CRUD, never a fake** (`job_run_dispatcher()`, `task_run_attempt_monitor()`, `notification_service()`, `scheduler()`, …). Assert by reading back the row the next poll pass would read — tables are the only channel between services. Variants name what they vary: `task_run_attempt_dispatcher_with_secrets`, `_with_max_running_attempts`, `_with_concurrency_limits`.
+- **Builders / readers:** `insert_job_run`, `insert_task_run_for_command`, `insert_task_run_depending_on`, `insert_task_run_attempt`, `orphan_task_run_attempt`, `backdate_task_run_attempt`; `job_run(id)`, `task_run_attempts(id)`. `map(&[("TZ", "UTC")])` builds the `BTreeMap` for `env`, `secret_env`, `parameters`.
+- **Seeded `mem`:** `TestDb::new_with_migrated_mem()` migrates `mem` under a private name and returns the connection keeping it alive (hold it). Only then use `insert_job` / `seed_schedule*`.
 
-Row builders come in the same spirit: `insert_job_run`, `insert_task_run_for_command`, `insert_task_run_depending_on`, `insert_task_run_attempt`, `orphan_task_run_attempt`, `backdate_task_run_attempt`, and readers like `job_run(id)` / `task_run_attempts(id)` to assert on what a pass wrote. `map(&[("TZ", "UTC")])` builds the `BTreeMap<String, String>` that `env`, `secret_env` and `parameters` all take.
+## Two hazards of one process
 
-## Two hazards, both about one process
+A binary's tests are **threads of one process**, so process-wide state is shared.
 
-Cargo runs a test binary's tests as **threads of one process**, so anything process-wide is shared between tests running in parallel.
-
-**`mem` is one shared-cache name per process.** `TestDb` deliberately leaves the memory schema unmigrated: no monitor reads a definition, and seeding `flowlite_mem` from a unit test races every other test's connection over that one name — the "database schema is locked: mem" failure. If a test genuinely needs seeded config, take a private name (`Toolkit::with_fresh_mem`, or `CRUD::crud_with_private_mem`) or write an integration test that drives the built binary instead. `tests/adhoc_submit.rs` and `tests/serve_secret_check.rs` are there for exactly this reason. See the [toolkit skill](../toolkit/SKILL.md).
-
-**The environment is one map per process.** A test that *sets* a variable takes `writing_the_environment()`; a test that *reads* the environment — loading an `AppConfig`, spawning a command — takes `reading_the_environment()`. One writer, many readers. It is a lock rather than a convention because the failure it prevents is the worst kind: a test that passes alone and fails in a full run, blaming whichever load or spawn happened to overlap.
-
-Both guards must be **bound to a name**. `let _guard = writing_the_environment();` holds it; `let _ = writing_the_environment();` drops it on the spot and holds nothing.
+- **`mem`:** `TestDb::new()` leaves it unmigrated on purpose — seeding the shared `flowlite_mem` races every other test ("database schema is locked: mem"). Use a private name (`new_with_migrated_mem`, `Toolkit::with_fresh_mem`, `crud_with_private_mem` in crud.rs tests) or an integration test driving the binary (`tests/adhoc_submit.rs`, `tests/serve_secret_check.rs`). See [toolkit skill](../toolkit/SKILL.md).
+- **Environment:** a test that *sets* a variable takes `writing_the_environment()`; one that *reads* it (loading `AppConfig`, spawning a command) takes `reading_the_environment()`. A lock, because the failure is a test that passes alone and fails in a full run. Bind it: `let _guard = ...` holds; `let _ = ...` drops at once.
 
 ## FakeSlack
 
-A real HTTP server on localhost, not a mock. It records each `FakeSlackPost` — authorization header, channel, text, blocks — and can be told to refuse a named conversation, so the delivered path is assertable end to end: the message a real run's rows build, the post it becomes, and the `sent` row written afterwards. `TestDb::notification_service_with_slack` points a `[slack]` section at it.
-
-It lives here rather than in `slack.rs` because both the channel's tests and the notification service's use it, and both have to agree with `post_payload` about what a post looks like. See the [notifications skill](../notifications/SKILL.md).
+A real localhost HTTP server, not a mock. Records each `FakeSlackPost` (auth header, channel, text, blocks); `FakeSlack::refusing` refuses named conversations. `TestDb::notification_service_with_slack` points `[slack]` at it. Lives here because the channel's and the notification service's tests both use it and must agree with `post_payload` ([notifications skill](../notifications/SKILL.md)).
 
 ## Rules
 
-- **Add a fixture here only when a second test needs it.** One test's setup belongs in that test.
-- **A builder inserts through `CRUD`**, not through hand-written SQL, so a test is exercising the same write path production takes.
-- **Name a variant for what it varies**, the way the dispatcher variants do, rather than adding a parameter to the plain one that every existing caller then has to pass.
-- **Prefer a unit test.** `tests/` is for what needs a second process — the built binary, a real lock, a real spawn — and its module docs say which reason applies.
+- **Add a fixture only when a second test needs it.**
+- **Builders insert through `CRUD`**, not raw SQL, to exercise production's write path.
+- **Name a variant for what it varies**; don't add a parameter every caller must pass.
+- **Prefer a unit test.** `tests/` is for what needs a second process — the built binary, a real lock, a real spawn; each file's module docs say which.

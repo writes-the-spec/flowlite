@@ -1,56 +1,42 @@
 # `job_run_notification` (disk)
 
-One "tell somebody how this run ended" for a [`job_run`](job_run.md), and the record of what happened when it came due. It is the only table with a status column that is not a run status.
+One "tell somebody how this run ended" for a [`job_run`](job_run.md), and the record of what happened. Its status is the only one that is not a run status.
 
 | Column | Meaning |
 |---|---|
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`. |
 | `job_run_id` | Foreign key to [`job_run`](job_run.md). |
-| `job_id` | Carried like every other parent id, so a row says which job it is about without a join. |
-| `notify_on` | Which ending this row is waiting for — `failure` or `success`. Spelled as the suffix of the block that declared it, so `on_success:` writes `success`. A column rather than something the sender works out afterwards: a job asking to hear either way carries **one row per block**, and the run ending once has to settle them differently. |
-| `channel` | How it is delivered — `email` or `slack`. A column rather than something the sender infers from `recipients`, so one row says for itself what delivering it means. Spelled exactly as the key inside the block that declared it. |
-| `recipients` | JSON array, addressed however `channel` addresses people: addresses for `email`, conversations for `slack`. Resolved at submit from what the job declared under that channel's key **in that block** — the two blocks are addressed independently, and usually differ. |
+| `job_id` | Carried like every parent id, so no join is needed. |
+| `notify_on` | `failure` or `success` — the ending it waits for, named after the declaring block. A column because a job may have **one row per block**, which one ending settles differently. |
+| `channel` | `email` or `slack`, as keyed in the block — stated, not inferred from `recipients`. |
+| `recipients` | JSON array: addresses for `email`, conversations for `slack`. Resolved at submit from that channel **in that block**; blocks are independent. |
 | `status` | `pending`, `sent`, `failed` or `skipped` — see below. |
-| `error` | Why a delivery failed; **empty** until one does — a notification nobody has tried has no error, not an unknown one. |
+| `error` | Why delivery failed; **empty** until then, not `NULL`. |
 | `created_at` | Bound from `Toolkit`. |
-| `sent_at` | `NULL` until it leaves. A timestamp that has not happened yet is the nullable case. |
+| `sent_at` | `NULL` until it leaves. |
 
-## `pending` means open, not ready
+## Statuses
 
-The row is written **when the run is submitted**, long before anyone knows whether it will be needed. So `pending` is "nobody has decided about this yet", and most passes over one are about a run that has not ended.
+Written **at submit**, so **`pending` means open, not ready** — usually the run is still going. Only [`NotificationService`](../../notifications/SKILL.md) closes a row:
 
-The other three are all closed, and only [`NotificationService`](../../notifications/SKILL.md) writes them:
-
-- `skipped` — the run ended some way other than the one this row was written for. For a `failure` row that is `Succeeded`, `Aborted` or `Skipped`; for a `success` row, everything but `Succeeded`. An ordinary outcome, not a failure: the row was written before that was knowable.
+- `skipped` — the run ended another way (`NotifyOn::wants`): a `failure` row wants `Failed`, `TimedOut` or `Invalid`; a `success` row only `Succeeded`. Ordinary, not an error.
 - `sent` — delivered, with `sent_at`.
-- `failed` — a delivery was tried and did not work, with the reason in `error`.
+- `failed` — the one delivery tried did not work, reason in `error`; also a channel with nothing configured, naming what is missing.
+
+**One attempt, recorded either way**, so a down relay is not hammered every pass. No retry policy, deliberately: it would need its own delay and count, and a loud failure beats an unseen one.
 
 ## Written by
 
-`CRUD::submit_job` and `CRUD::rerun_job` ([src/crud/multistatements/](../../../../src/crud/multistatements/)), through `insert_job_run_definition` — the same call that inserts the [`job_run`](job_run.md) and its [`task_run`](task_run.md)s, from the same snapshot. Who to tell, and what about, is part of a run's definition, exactly like its commands and its parameters, so it is frozen at submit and a rerun replays it: `submit_job` builds it from `mem.job.on_failure_recipients` and `on_success_recipients`, `rerun_job` from the earlier run's own rows.
+- **Inserted** by `CRUD::submit_job` / `CRUD::rerun_job` ([src/crud/multistatements/](../../../../src/crud/multistatements/)) via `insert_job_run_definition`, with the [`job_run`](job_run.md) and [`task_run`](task_run.md)s — frozen at submit like the rest of the definition: from `mem.job.on_failure_recipients`/`on_success_recipients`, or for a rerun the earlier run's rows. **One row per channel per block**, each delivered independently (a Slack outage does not swallow the mail); at most one of a run's `failure`/`success` rows is ever delivered.
+- **Updated** by `NotificationService` only. **The orchestrator never writes it**; `JobRunMonitor` does not know notifications exist.
 
-**One row per channel per block**, so a job naming both email and Slack on a failure is submitted with two, delivered and recorded independently — a Slack workspace that is down does not swallow the mail. A job that also names somebody on a success gets that row too, and exactly one of a run's `failure` and `success` rows can ever be delivered.
-
-**Nothing in the orchestrator writes this table.** `JobRunMonitor` finishes a run and publishes; it does not know notifications exist.
+Writing at submit means the row exists before the run can fail; inserted at finish, it would have to share the monitor's status-write transaction or be lost, since a monitor never revisits a finished run. The cost is that most rows close `skipped`.
 
 ## Deleted by
 
-`RetentionService`, along with the [`job_run`](job_run.md) each row belongs to — see [job_run.md](job_run.md#deleted-by) for the policy.
+`RetentionService`, with its [`job_run`](job_run.md) — see [job_run.md](job_run.md#deleted-by).
 
 ## Read by
 
-`NotificationService`, which selects the `pending` rows — the open ones — whatever channel and whatever run they are about, and reads the run's status to decide what each deserves.
-
-`RetentionService` reads it too, in `select_deletable_job_runs` ([src/crud/multistatements/retention_candidates.rs](../../../../src/crud/multistatements/retention_candidates.rs)): a run with a `pending` row here is never a deletion candidate, whatever `keep_runs` or `keep_runs_total` would otherwise say. A `sent`, `failed` or `skipped` row owes nothing and does not hold a run back.
-
-## One attempt, recorded either way
-
-Every path that reaches a channel writes the row. That is what stops a relay that is down from being hammered once a second: a delivery that fails is recorded as `failed`, with the error on the row and in the log, and is not tried again. There is deliberately no retry policy — one would need its own delay and attempt count, and an alert nobody can see failed is worse than one that failed loudly.
-
-A channel with nothing configured is the same story: closed as `failed`, naming what is missing.
-
-## What writing it at submit buys
-
-The row cannot be lost at the moment it matters. When the notification was written by the monitor as it finished a failed run, that insert had to share a transaction with the status write — because a monitor only ever visits `Running` rows, so a status write that committed alone would have left a finished run nothing ever looks at again. Writing it at submit removes the problem rather than guarding it: by the time a run can fail, the row is already there.
-
-The cost is a row per run per channel per block, most of them closed as `skipped` — a run ends one way, so every row written for the other ending is spent. That is the record of a decision made, which is worth more than the bytes.
+- `NotificationService` — `pending` rows, deciding each from its run's status.
+- `RetentionService`, in `select_deletable_job_runs` ([src/crud/multistatements/retention_candidates.rs](../../../../src/crud/multistatements/retention_candidates.rs)): a run with a `pending` row is never deleted, whatever `keep_runs`/`keep_runs_total` say; closed rows don't hold it.

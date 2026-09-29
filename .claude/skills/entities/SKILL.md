@@ -5,10 +5,10 @@ description: Map of every entity in flowlite's two SQLite databases - what each 
 
 # Entities
 
-flowlite runs against **two SQLite databases per connection**, and every table belongs to exactly one of them. Which one is decided by a single question: **if the process restarts, should this row still exist?**
+Every table lives in one of two SQLite databases. **If the process restarts, should this row still exist?**
 
-- **No → the in-memory `mem` schema.** Config parsed from YAML, re-inserted on every startup by `CRUD::init` ([src/crud/crud.rs](../../../src/crud/crud.rs)). Losing it on restart is correct, not a bug.
-- **Yes → the persisted disk database.** Created while the app runs, and it has to survive.
+- **No → in-memory `mem`.** YAML config, re-inserted every startup by `CRUD::init` ([src/crud/crud.rs](../../../src/crud/crud.rs)); losing it on restart is correct.
+- **Yes → the disk database.** Data created while the app runs.
 
 | Object | Database | Holds |
 |---|---|---|
@@ -22,32 +22,26 @@ flowlite runs against **two SQLite databases per connection**, and every table b
 | [`task_run_attempt`](references/task_run_attempt.md) | disk | one execution of a task run's command |
 | [`task_run_attempt_output`](references/task_run_attempt_output.md) | disk | the output of one attempt, in append-only chunks |
 | [`job_run_stop`](references/job_run_stop.md) | disk | an insert-only "stop this run" signal |
-| [`job_run_notification`](references/job_run_notification.md) | disk | one failure email to send, and what happened when it was tried |
+| [`job_run_notification`](references/job_run_notification.md) | disk | one notification (per channel, per `on_failure`/`on_success` block) to send, and what happened when it was tried |
 
-The disk tables mirror the `mem` ones, but they are not views onto them: **a run carries its own copy of the config it was submitted with.** `submit_job` snapshots `command`, `depends_on`, `timeout`, `max_retries`, `retry_delay`, `env`, `secret_env`, `working_dir` and `limits` from `mem.task` onto each `task_run`, plus a job's resolved `parameters` and, onto the `job_run` itself, the instant it is due — every run has one, whether it names a schedule or not — so a run executes what it was submitted with however the YAML has moved since. The orchestrator therefore never reads a `mem` table — with one deliberate exception, `mem.job.max_parallel_runs`, which is a question about the job *now*. See [task_run.md](references/task_run.md).
+**A run carries its own copy of its config**; disk tables are not views onto `mem`. `submit_job` snapshots each task's config onto its `task_run`, and resolved `parameters` and `scheduled_at` onto the `job_run`, so a run executes what it was submitted with whatever the YAML does later. The orchestrator never reads `mem`, except `mem.job.max_parallel_runs` — a question about the job *now*. See [task_run.md](references/task_run.md).
 
 ## How the two databases are wired ([src/toolkit.rs](../../../src/toolkit.rs))
 
-- The disk database is a real file at `<data_dir>/flowlite.db`, opened `mode=rwc` by `Toolkit::create_db_if_not_exists`.
-- Every connection to it immediately runs `ATTACH DATABASE 'file:flowlite_mem?mode=memory&cache=shared' AS mem`. Because it is `cache=shared`, every connection sees the *same* in-memory data for the life of the process — it is not per-connection.
-- `Toolkit::get_conn_pool` / `get_conn` are the normal way to get a handle: disk file opened, `mem` attached, disk migrations run. Almost all app code uses these. A connection opened any other way has no `mem`, so every query reaching into a config table fails on the missing schema.
-- `Toolkit::get_memory_conn` connects to `mem` *without* the disk file, for standalone memory-schema setup only.
-- Two independent migration histories: `Toolkit::update_disk_schema` runs `db/schemas/disk/migrations`, `update_memory_schema` runs `db/schemas/memory/migrations`.
-
-Each history is a separate `sqlx::migrate!` with its own checksums, which is why **whether an existing disk migration may be edited depends on what has already applied it** — the [db-schema skill](../db-schema/SKILL.md) has that call and the rest of the mechanics. The memory side has no such question: `mem` starts empty in every process, so **a `mem` table never needs a migration at all** — change its `CREATE TABLE` and restart.
+- Disk: `<data_dir>/flowlite.db`, opened `mode=rwc` by `Toolkit::create_db_if_not_exists`. Every connection runs `ATTACH DATABASE 'file:flowlite_mem?mode=memory&cache=shared' AS mem`; `cache=shared` makes every connection see the *same* `mem` for the life of the process.
+- Use `Toolkit::get_conn_pool` / `get_conn` (disk opened, `mem` attached, disk migrations run). A connection opened otherwise has no `mem`, so config-table queries fail. `Toolkit::get_memory_conn` opens `mem` alone, for memory-schema setup only.
+- Two migration histories with separate checksums: `Toolkit::update_disk_schema` (`db/schemas/disk/migrations`) and `update_memory_schema` (`db/schemas/memory/migrations`). Editing an existing disk migration depends on what has applied it — see the [db-schema skill](../db-schema/SKILL.md). **A `mem` table never needs a new migration**: `mem` starts empty each process, so edit its `CREATE TABLE` and restart.
 
 ## Conventions every entity obeys
 
-**How a table is declared is the [db-schema skill](../db-schema/SKILL.md)'s.** Four rules shape every column and every entity struct here — how the table is keyed, when a column is `NOT NULL`, that no column carries a `DEFAULT`, and where a foreign key can and cannot reach — and they follow from which of the two databases the table is in, which is the question this skill answers. Read [declaring-a-table.md](../db-schema/references/declaring-a-table.md) before declaring anything. One of them shows up all over the reference files below: "an attempt that printed nothing has empty output, not unknown output" is the nullability rule talking.
-
-**Updated after insert?** Disk tables are; that is what `update_*` methods are for. `mem` tables are re-seeded fresh every startup and are insert-only, without exception — no config table carries live state, and none of them has an `update_*` method at all.
-
-**Deleted from, on the disk side only, and by one service.** `RetentionService` ([src/retention/service.rs](../../../src/retention/service.rs)) is the only thing in flowlite that deletes a row from any of these tables — no CLI command, no web route and no other service does, the Scheduler included. It deletes finished job runs old enough that nothing needs them — never one still `Scheduled`, `Queued` or `Running`, and never one still owing an undelivered notification — and with each one, every row across the other five disk tables that carries its `job_run_id`. Each reference file below says so under its own **Deleted by**. A job overrides how many of its own runs survive on `mem.job.keep_runs` (see [job.md](references/job.md)); `mem` tables are never deleted this way, since there is nothing to prune in a schema rebuilt fresh on every start.
+- **Declaring a table** (keys, `NOT NULL`, no `DEFAULT`, foreign key reach, all following from the database) is the [db-schema skill](../db-schema/SKILL.md)'s; read [declaring-a-table.md](../db-schema/references/declaring-a-table.md) first. "Empty, not unknown" in the references is its nullability rule.
+- **Updated after insert?** Disk tables are, via `update_*` methods. `mem` tables never: no live state, no `update_*` method.
+- **Rows are deleted only from disk tables, only by `RetentionService`** ([src/retention/service.rs](../../../src/retention/service.rs)) — no CLI command, route or other service, the Scheduler included. (`job-run delete` only tombstones a run as `Deleted`; see [job_run.md](references/job_run.md).) It deletes finished runs — never `Scheduled`/`Queued`/`Running`, never one owing a `pending` notification — with every row in the other five disk tables carrying the `job_run_id`, and every run its tasks submitted. Per-job survival is `mem.job.keep_runs` ([job.md](references/job.md)).
 
 ## Adding a new table
 
-1. Decide the database with the restart question above.
-2. Write the migration per the [db-schema skill](../db-schema/SKILL.md) — where the file goes, how it is named, whether an existing one may be edited instead (on the memory side it always may, and a new `add_*` file is always wrong), and how the table is keyed and its columns declared. Step 1's answer decides the keys and most of the nullability, so it is not a matter of preference. One thing worth repeating here: no schema prefix inside the migration, since each runs against its own database. The `mem.` prefix appears only later, in the SQL your CRUD methods write.
-3. If it is YAML-seeded, wire the insert into `CRUD::init`, incrementing the shared `row_id` counter, inside the existing transaction.
-4. Build the CRUD file per the [crud skill](../crud/SKILL.md), which also owns how a method takes its database handle.
+1. Decide the database with the restart question.
+2. Write the migration per the [db-schema skill](../db-schema/SKILL.md) (location, naming, edit vs. new — memory side: always edit, never a new `add_*` file — keys, columns). Step 1 decides the keys and most nullability. No schema prefix in a migration; `mem.` appears only in CRUD SQL.
+3. If YAML-seeded, insert in `CRUD::init`'s existing transaction, incrementing the shared `row_id` counter.
+4. Build the CRUD file per the [crud skill](../crud/SKILL.md) (including how a method takes its handle).
 5. Add a reference file here.

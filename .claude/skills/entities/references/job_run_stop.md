@@ -1,6 +1,6 @@
 # `job_run_stop` (disk)
 
-A stop signal for a [`job_run`](job_run.md). **Insert-only** — there is no status column, no update method, and stopping a run is never a status write on `job_run` itself.
+A stop signal for a [`job_run`](job_run.md). **Insert-only** — no status column, no update method; stopping a run is never a status write on `job_run`.
 
 | Column | Meaning |
 |---|---|
@@ -10,18 +10,21 @@ A stop signal for a [`job_run`](job_run.md). **Insert-only** — there is no sta
 
 ## Written by
 
-The job-run detail web route ([src/router/app/routes/job_runs/job_run_id/route.rs](../../../../src/router/app/routes/job_runs/job_run_id/route.rs)), `stop_job_run` ([src/shared/job_run.rs](../../../../src/shared/job_run.rs)) for `job-run stop` and the MCP `stop_job_run` tool, and `CRUD::stop_child_job_runs` ([src/crud/multistatements/stop_child_job_runs.rs](../../../../src/crud/multistatements/stop_child_job_runs.rs)) for the runs an attempt submitted, called by `TaskRunAttemptMonitor` and crash recovery when they settle that attempt as anything but `Succeeded`.
+- The job-run detail web route ([src/router/app/routes/job_runs/job_run_id/route.rs](../../../../src/router/app/routes/job_runs/job_run_id/route.rs)).
+- `stop_job_run` ([src/shared/job_run.rs](../../../../src/shared/job_run.rs)), for `job-run stop` and the MCP `stop_job_run` tool.
+- `CRUD::stop_child_job_runs` ([src/crud/multistatements/stop_child_job_runs.rs](../../../../src/crud/multistatements/stop_child_job_runs.rs)) — one row for each unfinished run an attempt submitted that has none yet, called by `TaskRunAttemptMonitor` and crash recovery when they settle that attempt as anything but `Succeeded`.
 
 ## Deleted by
 
-`RetentionService`, along with the [`job_run`](job_run.md) each row belongs to — see [job_run.md](job_run.md#deleted-by) for the policy.
+`RetentionService`, with its [`job_run`](job_run.md) — see [job_run.md](job_run.md#deleted-by).
 
 ## Read by
 
-Five of the seven orchestrator services, each on every pass — a signal wake-up or the one-second interval, whichever came first: `JobRunReleaser`, `JobRunDispatcher`, `TaskRunDispatcher`, `TaskRunAttemptDispatcher` and `TaskRunAttemptMonitor`. `JobRunReleaser` skips a `Scheduled` run stopped before it was ever released, and its task runs with it, through the same `CRUD::skip_job_run` `JobRunDispatcher` uses one status later; the other four each finish only what they own: a row that never started goes `Skipped`, an in-flight process is killed and its attempt goes `Aborted`.
+- Five of the seven orchestrator services, every pass: `JobRunReleaser`, `JobRunDispatcher`, `TaskRunDispatcher`, `TaskRunAttemptDispatcher` and `TaskRunAttemptMonitor`. The releaser skips a stopped `Scheduled` run and its task runs through `CRUD::skip_job_run`, as `JobRunDispatcher` does one status later; the others finish only what they own — a row that never started goes `Skipped`, an in-flight process is killed and its attempt goes `Aborted`.
+- `CRUD::stop_child_job_runs` (to skip a child already stopped) and `CRUD::resolve_parent_task_run_attempt` (refuses a submission from a task of a stopped run).
 
-The two remaining monitors never read it. **A stopped job run's status is derived like any other** — from its task runs, once they have all settled — so the stop reaches `job_run` only as the statuses it produced. See the [orchestrator skill](../../orchestrator/SKILL.md).
+`JobRunMonitor` and `TaskRunMonitor` never read it: **a stopped job run's status is derived like any other**, from its settled task runs. See the [orchestrator skill](../../orchestrator/SKILL.md).
 
 ## The pattern worth copying
 
-An insert-only signal table that the pollers check is how run control is done here, rather than mutating run state from an unrelated code path. A new control feature — pause, resume, retry-all — should follow the same shape: a small table, checked by whichever services own the rows it affects, with each of them deciding for itself what its own row's lifecycle makes correct.
+Run control is an insert-only signal table the pollers check, not run state mutated from an unrelated code path. A new control (pause, resume, retry-all) should be a small table checked by the services owning the affected rows, each deciding what its own row's lifecycle makes correct.

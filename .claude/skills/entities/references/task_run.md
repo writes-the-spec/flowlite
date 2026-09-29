@@ -1,15 +1,17 @@
 # `task_run` (disk)
 
-One [`task`](task.md) within one [`job_run`](job_run.md) — and **the config that task was submitted with**. One row per task of the job, inserted for *every* task, not just the ones without dependencies; ordering is enforced later, at dispatch time.
+One [`task`](task.md) within one [`job_run`](job_run.md), and **the config it was submitted with**. One row per task of the job; ordering is enforced at dispatch.
 
 | Column | Meaning |
 |---|---|
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`. |
 | `job_run_id` | Foreign key to [`job_run`](job_run.md). |
-| `job_id`, `task_id` | Which task this is a run of. No foreign key — the task is in `mem`. |
-| `command`, `stdin`, `depends_on`, `timeout`, `max_retries`, `retry_delay`, `env`, `secret_env`, `working_dir`, `limits` | **The snapshot.** Copied off `mem.task` by `submit_job`; see below. `env`, `secret_env` and `limits` are all exceptions to "copied": each is resolved from both `mem.job` and `mem.task` in `job_run_task_definition`, not `submit_job` directly, but by different rules. `env` and `secret_env` are `mem.job`'s own layered with `mem.task`'s own, the task's own winning a name both declare. `secret_env` is environment variable name to secret name, never a value. A name the task declares in one block also evicts the job's contribution to the *other* block, so a row's `env` and `secret_env` never share a name between them — the YAML layer only rejects a name declared in both blocks of the *same* level, not this cross-level case. `limits` is different again: it is the job's `limits:` **unioned** with the task's own, deduplicated and sorted — not layered, and nothing wins, because two lists of claimed resources have no sensible precedence between them the way a variable's value does. The result is a JSON array of named concurrency limits — `'[]'` for a run that claims none. `stdin` is a plain copy, and is snapshotted for the reason `command` is: a prompt the YAML has since reworded is not what this run asked. |
+| `job_id`, `task_id` | Which task. No foreign key — the task is in `mem`. |
+| `command`, `stdin`, `depends_on`, `timeout`, `max_retries`, `retry_delay`, `working_dir` | **The snapshot**, copied off `mem.task` by `submit_job`. `stdin` is snapshotted like `command`: a reworded prompt is not what this run asked. |
+| `env`, `secret_env` | From `job_run_task_definition`: the job's layered under the task's, task winning. `secret_env` maps variable → secret name, never a value. A task's name in one block evicts the job's from the *other*, so the two never share a name (the YAML layer only rejects both blocks at the same level). |
+| `limits` | From `job_run_task_definition`: job's and task's **unioned**, deduplicated, sorted — claims have no precedence. `'[]'` if none. |
 | `created_at` | Bound from `Toolkit`. |
-| `started_at` | Nullable. Written once, when the task run starts — it means "when the task run started", covering every attempt, not "when the current attempt started". |
+| `started_at` | Nullable. Written once, when the task run starts — covering every attempt, not the current one. |
 | `finished_at` | Nullable. Written with every terminal status. |
 | `status` | `TaskRunStatus` — see the [orchestrator skill](../../orchestrator/references/task_run.md). |
 
@@ -17,21 +19,23 @@ One [`task`](task.md) within one [`job_run`](job_run.md) — and **the config th
 
 ## The snapshot is the point of this table
 
-Every config field the orchestrator acts on is read here, never from `mem.task`. **No orchestrator file imports `crate::crud::task` or `crate::crud::job`, and none touches [`task_dependent`](task_dependent.md).** A run therefore executes what it was submitted with however the YAML has moved since — and `TaskRunDispatcher::get_dependent_task_runs` resolves `task_run.depends_on`, the copy, not the definition.
-
-The one deliberate exception in the whole orchestrator is `mem.job.max_parallel_runs`, which is read live because it is a question about the job now. Nothing enforces the rule: `mem` is attached to every pooled connection, so `mem.task` is one query away from any service that forgets.
+The orchestrator reads config only here. **No orchestrator file imports `crate::crud::task` or `crate::crud::job`, or touches [`task_dependent`](task_dependent.md)**; `TaskRunDispatcher::get_dependent_task_runs` resolves the copied `depends_on`. Sole exception: `mem.job.max_parallel_runs`, read live. Nothing enforces this — `mem` is one query away on every pooled connection.
 
 ## Written by
 
-- **Inserted** by `CRUD::submit_job` / `rerun_job`, all `Planned`, in the same call as their `job_run`.
-- **Updated** by `JobRunDispatcher::set_to_running` (`Planned` → `Waiting`, every task run of the job run it is starting, in one bulk update — the only door into `Waiting`, and so the only thing that makes a task run visible to its dispatcher), `TaskRunDispatcher` (`Waiting` → `Running`/`Skipped`), `TaskRunMonitor` (`Running` → terminal), and `JobRunDispatcher::set_to_skipped`, which skips every task run of a stopped, never-started job run in one bulk update.
+- **Inserted** by `CRUD::submit_job` / `rerun_job`, all `Planned`, with their `job_run`.
+- **Updated** by:
+  - `JobRunDispatcher::set_to_running` — `Planned` → `Waiting`, all of the job run's in one update; the only way into `Waiting`, so what makes a task run visible to `TaskRunDispatcher`.
+  - `TaskRunDispatcher` — `Waiting` → `Running`/`Skipped`.
+  - `TaskRunMonitor` — `Running` → terminal.
+  - Bulk settles of a never-started job run: `CRUD::skip_job_run` (→ `Skipped`; `JobRunReleaser`, `JobRunDispatcher`, for a stopped run), `CRUD::invalidate_job_run` (→ `Invalid`), `CRUD::delete_job_run` (→ `Skipped`, under a `Deleted` job run).
 
 ## Deleted by
 
-`RetentionService`, along with the [`job_run`](job_run.md) each row belongs to — see [job_run.md](job_run.md#deleted-by) for the policy.
+`RetentionService`, with its [`job_run`](job_run.md) — see [job_run.md](job_run.md#deleted-by).
 
 ## Read by
 
-`TaskRunDispatcher` (its own rows and its dependencies'), `TaskRunMonitor`, `JobRunMonitor` (all task runs of a job run, to settle it), `TaskRunAttemptDispatcher` (for `command`, `timeout` and `retry_delay` to spawn with, `stdin` for what the child reads — piped and written from a task of its own when it is non-empty, `/dev/null` when it is not — `working_dir` for the child's `current_dir` — the run's own directory when it is empty — and `env`/`secret_env` to pass to `build_task_run_attempt_env`), and the job-run and task-run web routes — the latter renders `env` on the task-run page, deliberately: it is plaintext on disk already, and hiding it would make a wrong `env:` undebuggable from the run.
-
-`secret_env` is rendered on the same page for the inverse reason, and a stronger one: not because the value is harmless to show, but because there is no value here to show. This column is a reference — variable name to secret name — and the value it names is resolved only at spawn, into the environment of one `sh` process, and never written anywhere. The task-run page can therefore say which credential a run used without ever being in a position to reveal it; there is no plaintext-on-disk argument to make because there is no plaintext on disk, and hiding the reference would only make a run that used the wrong secret undebuggable in exactly the way rendering `env` avoids.
+- `TaskRunDispatcher` (its own rows and its dependencies'), `TaskRunMonitor`, `JobRunMonitor` (all of a job run's, to settle it).
+- `TaskRunAttemptDispatcher` — `command`, `timeout`, `retry_delay`; `stdin` (written from its own task when non-empty, else `/dev/null`); `working_dir` as `current_dir`; `env`/`secret_env` for `build_task_run_attempt_env`; `limits` for the concurrency check.
+- The job-run and task-run web routes. The task-run page shows `env` deliberately (already plaintext on disk; hiding it makes a wrong `env:` undebuggable) and `secret_env` too — only the reference, since the value is resolved at spawn into one `sh` environment and stored nowhere.

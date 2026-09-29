@@ -5,44 +5,42 @@ description: Add or modify CRUD entities in src/crud/ (insert/select query modul
 
 # CRUD module conventions (src/crud/)
 
-Each entity gets its own file under `src/crud/`, exposed via `src/crud/mod.rs`, with methods implemented on the shared `CRUD` struct (defined in `src/crud/crud.rs`).
-
-A method that runs **one** statement lives in its entity's file. A method that runs **several** statements to do one thing lives under `src/crud/multistatements/` instead, because it spans more than one entity and so belongs to no single entity file. That split also decides how the method takes its database handle — see the two executor rules below.
-
-`src/crud/multistatements/` is one file per operation, named after it:
+Each entity has its own file under `src/crud/`, with methods on the shared `CRUD` struct ([src/crud/crud.rs](../../../src/crud/crud.rs)). A method running **one** statement lives in its entity's file. One running **several** statements for one operation spans entities, so it lives under `src/crud/multistatements/`, one file per operation:
 
 | File | Holds |
 |---|---|
-| [submit_job.rs](../../../src/crud/multistatements/submit_job.rs) | `submit_job`, and the parameter resolution it checks a caller's overrides with |
+| [submit_job.rs](../../../src/crud/multistatements/submit_job.rs) | `submit_job`; `resolve_job_parameters`, which checks a caller's overrides |
 | [rerun_job.rs](../../../src/crud/multistatements/rerun_job.rs) | `rerun_job` |
 | [job_run_definition.rs](../../../src/crud/multistatements/job_run_definition.rs) | Not an operation: the `JobRunDefinition` vocabulary those two share, the merges that build one, and `insert_job_run_definition` — the only place a run's config is written |
-| [limits.rs](../../../src/crud/multistatements/limits.rs) | `is_job_at_max_parallel_runs`, `count_running_attempts`, `claimed_limit_slots` |
-| [secret_env.rs](../../../src/crud/multistatements/secret_env.rs) | `check_secret_env_is_satisfied` and the pure policy under it |
-| [job_run_descendants.rs](../../../src/crud/multistatements/job_run_descendants.rs) | `select_job_run_descendants` — every run a run's tasks submitted, recursively |
+| [limits.rs](../../../src/crud/multistatements/limits.rs) | `is_job_at_max_parallel_runs`, `count_running_attempts`, `claimed_limit_slots`, `count_waiting_attempts` |
+| [secret_env.rs](../../../src/crud/multistatements/secret_env.rs) | `check_secret_env_is_satisfied` and its pure policy |
+| [job_run_descendants.rs](../../../src/crud/multistatements/job_run_descendants.rs) | `select_job_run_descendants` — runs a run's tasks submitted, recursively |
 | [job_run_reads.rs](../../../src/crud/multistatements/job_run_reads.rs) | `select_job_run_with_task_runs`, `select_task_run_attempt_logs` |
-| [ad_hoc_job.rs](../../../src/crud/multistatements/ad_hoc_job.rs) | `seed_ad_hoc_job` and `JobIdAlreadyInstalled` |
-| [skip_job_run.rs](../../../src/crud/multistatements/skip_job_run.rs) | `skip_job_run` — the job run and every task run it owns, for a run nobody ever started |
-| [stop_child_job_runs.rs](../../../src/crud/multistatements/stop_child_job_runs.rs) | `stop_child_job_runs` — a stop row for each unfinished run an attempt submitted, when it ends unsuccessfully |
-| [delete_job_run.rs](../../../src/crud/multistatements/delete_job_run.rs) | `delete_job_run` — the same pair for a `Scheduled` run somebody removed by hand, tombstoned as `Deleted` rather than erased, which is what frees its occurrence for the Scheduler |
+| [task_run_inputs.rs](../../../src/crud/multistatements/task_run_inputs.rs) | `select_task_run_outputs`, `TaskRunOutput` — what a run's tasks produced so far, for `FLOWLITE_TASK_OUTPUT` |
+| [ad_hoc_job.rs](../../../src/crud/multistatements/ad_hoc_job.rs) | `seed_ad_hoc_job`, `JobIdAlreadyInstalled` |
+| [skip_job_run.rs](../../../src/crud/multistatements/skip_job_run.rs) | `skip_job_run` — a job run plus its task runs, for a run nobody started |
+| [invalidate_job_run.rs](../../../src/crud/multistatements/invalidate_job_run.rs) | `invalidate_job_run` — the same pair, for a run no outcome claimed (a bug path, from `JobRunReleaser::set_to_invalid`) |
+| [delete_job_run.rs](../../../src/crud/multistatements/delete_job_run.rs) | `delete_job_run` — the same pair for a `Scheduled` run removed by hand, tombstoned as `Deleted` (not erased), which frees its occurrence for the Scheduler |
+| [delete_job_runs_with_children.rs](../../../src/crud/multistatements/delete_job_runs_with_children.rs) | `delete_job_runs_with_children` — erases a run's rows from all six tables |
+| [retention_candidates.rs](../../../src/crud/multistatements/retention_candidates.rs) | `count_finished_job_runs`, `select_job_ids_with_finished_job_runs`, `select_deletable_job_runs` — which finished runs retention may delete; how many is the retention service's call |
+| [stop_child_job_runs.rs](../../../src/crud/multistatements/stop_child_job_runs.rs) | `stop_child_job_runs` — a stop row per unfinished run an attempt submitted, when it ends unsuccessfully |
 
-A new operation gets its own file and a `pub mod` line, the way a new MCP tool does. Items only the sibling operations use are `pub(super)`, not `pub`.
+A new operation gets its own file and a `pub mod` line in `multistatements/mod.rs`; items only siblings use are `pub(super)`.
 
-Before writing a table's migration, figure out whether it's YAML-seeded config data or runtime-created data — see the [entities skill](../entities/SKILL.md). That decides whether it's `mem.<table>` (in-memory) or `<table>` (persisted disk), which in turn decides its primary-key style and whether it ever gets an `update_*` method.
+Before writing a migration, decide whether the table is YAML-seeded config or runtime data ([entities skill](../entities/SKILL.md)). That decides `mem.<table>` vs disk `<table>`, the key style, and whether it gets an `update_*`.
 
-For the conventions of each operation, see:
-
-- [references/insert.md](references/insert.md) — input struct shape, `()` vs `i64` return, binding JSON/bool/enum columns, multi-row inserts inside a transaction.
-- [references/select.md](references/select.md) — filter/sort/limit/offset struct shape, `QueryBuilder` with `WHERE 1=1`, filter kinds (equality, `LIKE`, comparison), joins, the plural→singular helper.
-- [references/update.md](references/update.md) — input/filter struct shape, the double-`Option` pattern for nullable columns, the empty-`SET` guard.
+- [references/insert.md](references/insert.md) — input struct, `()` vs `i64` return, binding JSON/bool/enum, multi-row inserts.
+- [references/select.md](references/select.md) — filter/sort/limit/offset, `QueryBuilder` with `WHERE 1=1`, filter kinds, counts, joins, singular helper.
+- [references/update.md](references/update.md) — double-`Option` for nullable columns, the empty-`SET` guard.
 
 ## Rules
 
-- One file per entity, named after the table (singular), under `src/crud/`. Add `pub mod widget;` to [src/crud/mod.rs](../../../src/crud/mod.rs). A method that spans several entities goes in its own file under [src/crud/multistatements/](../../../src/crud/multistatements/) rather than being forced into one of them.
-- **A refusal CRUD raises comes back as a typed value, not a finished sentence,** when its callers would word it differently. `seed_ad_hoc_job` raises `JobIdAlreadyInstalled` carrying the id and the jobs directory; `job submit -f` turns that into "drop -f" and the MCP tool into "submit it by name". Downcast it out of the `anyhow::Error` with `err.downcast::<T>()`.
-- **Policy stays with whoever it belongs to, not in CRUD.** Ask "whose rule is this?" — if one caller would be wrong to skip it and another legitimately skips it, it is that caller's. A settled run is refused by `flowlite job-run stop`, while the dashboard's stop route redirects instead; two surfaces differing is accepted over one rule in CRUD. What earns a multistatement is several *statements* that must run together for anyone doing the operation at all (`submit_job`), or a query answering "may this happen" (`is_job_at_max_parallel_runs`) that each caller then acts on itself.
-- **A multistatement contains no SQL.** `src/crud/multistatements/` composes the basic CRUD methods of the entity files — `insert_*`, `select_*`, `update_*`, `delete_*` — and nothing else. No `sqlx::query`, no `QueryBuilder`, no statement text. If a multistatement needs something no entity method offers, the answer is a new method on that entity, not a query inlined here. Every multistatement obeys this; the rule is written down so the next one does too. A count and a projection are basic entity work like any other — see [references/select.md](references/select.md#counts-and-projections).
-- Naming: `Insert<Entity>DataInput` wrapped by `Insert<Entity>Data { input }`; `Select<Entity>sDataFilter` / `Select<Entity>sDataSort` (enum — `job_run_stop`'s is `SelectJobRunStopsSort`, missing the `Data`, and is the one file not to copy) / `Select<Entity>sData { filter, sort, limit, offset }`; `Update<Entity>sDataInput` / `Update<Entity>sDataFilter` / `Update<Entity>sData { input, filter }`; plain entity struct (`Widget`) derives `sqlx::FromRow, Clone`.
-- **Single-statement methods take a generic executor.** Every `insert_*` / `select_*` / `update_*` in an entity file is an `impl CRUD` method generic over `E: sqlx::Executor<'e, Database = sqlx::Sqlite>`, so the caller passes whatever it already holds — a pool, a connection, or a transaction. One statement doesn't care which.
-- **Multistatement methods take `&mut SqliteConnection`, not a generic executor.** A method in `src/crud/multistatements/` (`submit_job`, `rerun_job`, `is_job_at_max_parallel_runs`) runs a sequence of statements that form one logical operation — insert the job run, then one task run per task — so it needs *one* connection rather than "any executor": it takes `conn: &mut SqliteConnection` and passes `&mut *conn` down to each single-statement method it calls. Don't instead make it generic over `E: sqlx::Executor + sqlx::Acquire` and acquire inside — that compiles on its own, but the method can then no longer be called with a `&mut SqliteConnection` from anywhere the future has to be `Send` (an axum handler, a `tokio::spawn`), where rustc rejects it with *"implementation of `sqlx::Acquire` is not general enough"*. A caller holding only a pool does `let mut conn = conn_pool.acquire().await?;` first.
-- If the entity is seeded from YAML config on startup, wire it into `CRUD::init` in [src/crud/crud.rs](../../../src/crud/crud.rs), incrementing the shared `row_id` counter and inserting inside the existing transaction.
-- Add the corresponding table migration if the table doesn't exist yet — the [db-schema skill](../db-schema/SKILL.md) owns where it goes, how it is named, and whether an existing migration may be edited instead.
+- One file per entity, named after the table (singular); add `pub mod widget;` to [src/crud/mod.rs](../../../src/crud/mod.rs). Cross-entity methods go under [src/crud/multistatements/](../../../src/crud/multistatements/).
+- **Refusals are typed values, not sentences,** when callers word them differently: `seed_ad_hoc_job` raises `JobIdAlreadyInstalled`; `job submit -f` says "drop -f", the MCP tool "submit it by name". Callers `err.downcast::<T>()`.
+- **Policy belongs to its caller.** If one caller must apply a rule and another legitimately skips it, it's the caller's: `flowlite job-run stop` refuses a settled run, the dashboard's stop route redirects — surfaces differing beats one rule in CRUD. A multistatement is earned only by statements that must run together for anyone doing the operation (`submit_job`), or a "may this happen" query each caller acts on (`is_job_at_max_parallel_runs`).
+- **A multistatement contains no SQL** — no `sqlx::query`, `QueryBuilder` or statement text. It composes entity `insert_*`/`select_*`/`update_*`/`delete_*`; if one is missing, add it to the entity. Counts and projections included ([select.md](references/select.md#counts-and-projections)).
+- Naming: `Insert<Entity>DataInput` in `Insert<Entity>Data { input }`; `Select<Entity>sDataFilter`, `Select<Entity>sDataSort` (enum), `Select<Entity>sData { filter, sort, limit, offset }`; `Update<Entity>sDataInput`, `Update<Entity>sDataFilter`, `Update<Entity>sData { input, filter }`; row struct `Widget` derives `sqlx::FromRow, Clone`. Don't copy `job_run_stop`'s `SelectJobRunStopsSort` (missing `Data`).
+- **Single-statement methods are generic over `E: sqlx::Executor<'e, Database = sqlx::Sqlite>`**, so callers pass a pool, connection or transaction.
+- **Multistatement methods take `conn: &mut SqliteConnection`** (one operation, one connection) and pass `&mut *conn` down. Not generic `E: sqlx::Executor + sqlx::Acquire`: that compiles but can't be called from a future that must be `Send` (axum handler, `tokio::spawn`) — *"implementation of `sqlx::Acquire` is not general enough"*. A pool holder does `let mut conn = conn_pool.acquire().await?;`.
+- YAML-seeded entities are wired into `CRUD::init` ([src/crud/crud.rs](../../../src/crud/crud.rs)): increment the shared `row_id` counter, insert inside the existing transaction.
+- The migration — where, its name, edit vs add — is the [db-schema skill](../db-schema/SKILL.md)'s.

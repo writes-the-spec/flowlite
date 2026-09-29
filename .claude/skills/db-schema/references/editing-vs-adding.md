@@ -1,50 +1,40 @@
 # Edit an existing migration, or add a new one?
 
-This is the decision that matters most, because it is one-way: an edit that breaks a database is only fixable by resetting that database.
+This decision is one-way: an edit that breaks a database is fixable only by resetting it.
 
-## Why editing is dangerous at all
+## Why editing is dangerous
 
-**`sqlx::migrate!` checksums every migration it applies** and stores the hash in `_sqlx_migrations`. On startup it re-reads the files and compares. Change one byte of an *applied* file and the process refuses to start:
+`sqlx::migrate!` stores a checksum of each applied migration in `_sqlx_migrations` and compares on startup. Change one byte of an *applied* file and the process refuses to start:
 
 ```
 migration <version> was previously applied but has been modified
 ```
 
-Nothing recovers from that except restoring the file byte-for-byte or resetting the database.
+Only restoring the file byte-for-byte or resetting the database recovers.
 
-## So the question is not "is editing nicer?"
-
-It is **"has any database applied this migration yet?"** Check, don't assume:
+## Check, don't assume
 
 ```bash
 sqlite3 "<data_dir>/flowlite.db" \
   "SELECT version, description FROM _sqlx_migrations ORDER BY version;"
 ```
 
-Check the default location too, which is where a dev instance lands if nobody passed `-D`:
+Also check the default location, where a dev instance lands without `-D`:
 
 - macOS — `~/Library/Application Support/flowlite/flowlite.db`
 - Linux — `~/.local/share/flowlite/flowlite.db`
 
-**None of this applies to `mem`.** The memory schema is built from nothing on every startup, so no memory migration is ever "already applied" anywhere but the running process. There is no checksum to break and no database to reset, which means **a `mem` table never needs a migration at all**: change its `CREATE TABLE` and restart. Do not check `_sqlx_migrations` for a memory migration, and do not add an `add_*` file beside a memory `create_*` file — the question this page answers only arises on the disk side.
+**`mem` is exempt.** The memory schema is rebuilt from nothing every startup, so there is no checksum to break and no `_sqlx_migrations` to check — edit the `CREATE TABLE` and restart.
 
 ## The call
 
 | State | Do | Why |
 |---|---|---|
-| **Nothing has applied it** — a table added minutes ago, pre-release, on a branch nobody has run | **Edit the original** | One migration describing the table as it actually is beats a create plus an alter that undoes half of it. The history stays a description of the schema rather than a diary of your afternoon. |
-| **Something has applied it** — someone's dev database, a deployed instance, CI with a persisted volume | **Add a new migration.** Never edit | The checksum will refuse to start their process, and they cannot fix it without losing data. |
-| **Unsure** | **Add a new one** | An unnecessary migration costs one file. A broken checksum costs somebody's database. |
-| **It is a `mem` table** | **Edit the `CREATE TABLE`.** Never add a migration | Nothing has applied it but the running process, and the next startup rebuilds the schema from scratch. A memory `add_*` file is always the wrong answer. |
+| **Nothing has applied it** — added minutes ago, pre-release, on a branch nobody ran | **Edit the original** | One migration describing the table beats a create plus an alter undoing half of it. |
+| **Something has applied it** — a dev database, a deployed instance, CI with a persisted volume | **Add a new migration.** Never edit | The checksum stops their process and they can't fix it without losing data. |
+| **Unsure** | **Add a new one** | An extra migration costs one file; a broken checksum costs a database. |
+| **A `mem` table** | **Edit the `CREATE TABLE`.** Never add a migration | Nothing but the running process has applied it. |
 
-When an edit is the right call and a stale dev database is the only thing in the way, deleting that database is the fix — it holds runs, not config, and config comes back from YAML on the next startup. **Say so out loud rather than doing it silently:** it is somebody's run history, and it is theirs to spend.
+When an edit is right and only a stale dev database is in the way, deleting that database is the fix — config comes back from YAML on startup, but it holds somebody's run history, so **say so rather than doing it silently**.
 
-## Worked example
-
-Adding `task_run_id`, `job_run_id`, `job_id` and `task_id` to `task_run_attempt_output`, a table created earlier the same day:
-
-1. Queried `_sqlx_migrations` in both default data directories. No database had the table at all — the migration existed only on the branch.
-2. **Edited `20260908120000_create_task_run_attempt_output_table.sql`** to include the four columns, their foreign keys and their indexes, rather than adding an alter that would have amended a table nobody had ever created.
-3. Ran `cargo test`, which builds each test's database from the migrations, so a broken file fails there first.
-
-Had one real database applied it, step 2 would have been a second migration — and since the four columns are `NOT NULL`, that migration would have had to be a rebuild if that database held any output rows, or a plain `ADD COLUMN` if it did not. See [altering-a-table.md](altering-a-table.md).
+Example: four `NOT NULL` columns added to `task_run_attempt_output` the day it was created, when no database had it, went into `20260908120000_create_task_run_attempt_output_table.sql` itself. Had a database applied it, they'd need a new migration — a rebuild if it held rows ([altering-a-table.md](altering-a-table.md)).

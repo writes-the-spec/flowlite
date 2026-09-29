@@ -1,6 +1,6 @@
 # Update methods
 
-Only mutable event/run entities get an `update_*` method — `job_run`, `task_run`, `task_run_attempt`, `schedule` all have one; config-seeded, insert-only entities (`job`, `task`, `task_dependent`, `schedule_job`) don't. Add one only when the entity actually changes state after creation.
+Only entities that change state after creation get an `update_*`: `job_run`, `task_run`, `task_run_attempt`, `job_run_notification`. Config-seeded entities (`job`, `task`, `task_dependent`, `schedule`, `schedule_job`) don't.
 
 ## Struct shape
 
@@ -24,17 +24,17 @@ pub struct Update<Entity>sData {
 }
 ```
 
-Field order in the struct definition is `input` then `filter` (the reverse of `Select<Entity>sData`, which is `filter` then `sort`/`limit`/`offset`) — follow the existing files' order rather than alphabetizing.
+Declare `input` before `filter`, as the existing files do.
 
-### The double-`Option` pattern
+### Double `Option` for nullable columns
 
-For a nullable column, the input field is `Option<Option<T>>`, not `Option<T>`:
+A nullable column's input field is `Option<Option<T>>`:
 
-- Outer `None` → "leave this column untouched" (field omitted from the `SET` clause).
-- Outer `Some(None)` → "set this column to `NULL`".
-- Outer `Some(Some(v))` → "set this column to `v`".
+- `None` — leave the column untouched (not in `SET`).
+- `Some(None)` — set it to `NULL`.
+- `Some(Some(v))` — set it to `v`.
 
-This is how `started_at`/`finished_at` are modeled in `job_run`, `task_run` and `task_run_attempt` — see [src/crud/job_run.rs](../../../../src/crud/job_run.rs) `UpdateJobRunsDataInput`. A non-nullable column (`status`, `stdout`, `stderr`) just uses a single `Option<T>` since there's no NULL case to distinguish.
+See `started_at`/`finished_at` in `UpdateJobRunsDataInput` ([src/crud/job_run.rs](../../../../src/crud/job_run.rs)). A `NOT NULL` column (`status`, `output`, `error`) uses a single `Option<T>`.
 
 ## Query building
 
@@ -73,16 +73,8 @@ where
 }
 ```
 
-Key points:
-
-- Build the `SET` clause with `query_builder.separated(", ")`, and push each bind with `separated.push_bind_unseparated(...)` (plain `push_bind` would insert an extra `", "` before the value).
-- **Guard against an empty `SET`**: after building the assignment list, check whether every `input` field was `None` and `return Ok(())` early. `UPDATE ... SET` with no assignments is invalid SQL — every existing `update_*` method has this guard, listing all its input fields in one `&&`-chained `is_none()` check. Do this check *before* appending `WHERE`.
-- After the guard, `query_builder.push(" WHERE 1=1")` and append filter clauses the same way selects do — `AND col = <bind>` per `Some` filter field.
-- Filters can reference columns not present in the input (e.g. `update_task_runs` filters on `status` — a value the update isn't necessarily changing) — treat the filter list independently from the input list.
-- Use `.build().execute(executor)` (a plain execute), not `.build_query_as()` — updates don't return rows.
-- Return type is always `anyhow::Result<()>`.
-
-## What NOT to do
-
-- Don't write separate single-column update methods (`set_status`, `set_finished_at`, ...) — one `update_<entity>s` method with an all-optional input covers every partial-update shape a caller needs.
-- Don't skip the empty-`SET` guard "because callers will always pass at least one field" — write it anyway; it's one line and it's in every existing update method.
+- Push each bind with `separated.push_bind_unseparated(...)`; plain `push_bind` would insert an extra `", "` before the value.
+- **Empty-`SET` guard:** `UPDATE ... SET` with no assignments is invalid SQL, so return `Ok(())` early when every input field is `None` — one `&&`-chained `is_none()` check over all of them, before appending `WHERE`. Write it even if callers "always" pass a field; every existing `update_*` has it.
+- Then `WHERE 1=1` plus `AND col = <bind>` per `Some` filter field, as in selects. Filters are independent of inputs (`update_task_runs` filters on `status`).
+- `.build().execute(executor)`, not `build_query_as()`; return `anyhow::Result<()>`.
+- One `update_<entity>s` with an all-optional input — no per-column `set_status`/`set_finished_at` methods.

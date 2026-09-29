@@ -1,78 +1,77 @@
 # Task run attempt
 
-`TaskRunAttemptStatus` lives in [src/crud/task_run_attempt.rs](../../../../src/crud/task_run_attempt.rs). One `task_run_attempt` row per execution of a task run's command, inserted `Queued` by `TaskRunDispatcher` for attempt 1 and by `TaskRunMonitor` for every retry — this is the only level that runs a process.
-
-Two services insert these rows, but never the same one: the dispatcher only visits `Queued` task runs and the monitor only `Running` ones, and each insert is part of the transition that service already owns — attempt 1 *is* the task run starting, a retry *is* the task run not finishing. Every transition on the row afterwards belongs to the attempt services alone. `attempt` itself is computed (`1`, then `last.attempt + 1`), so a `UNIQUE (task_run_id, attempt)` index is what turns a second process racing the first into a failed insert instead of a task run quietly executed twice.
+`TaskRunAttemptStatus` lives in [src/crud/task_run_attempt.rs](../../../../src/crud/task_run_attempt.rs). One `task_run_attempt` row per execution of a task run's command — the only level that runs a process. Every row is inserted `Queued` by `TaskRunMonitor` (attempt 1 and each retry, `attempt` = `1`, then `last.attempt + 1`); a `UNIQUE (task_run_id, attempt)` index turns a racing second insert into an error rather than a double execution. After the insert, every transition belongs to the attempt services.
 
 | Status | Meaning |
 |---|---|
 | `Queued` | Inserted, waiting for the dispatcher. |
-| `Running` | Its command was spawned; the monitor owns the process. |
-| `Succeeded` | The process exited 0. |
-| `Failed` | The process exited non-zero. |
-| `TimedOut` | The process ran past `task_run.timeout` and was killed. |
-| `Aborted` | The process was killed because the job run was stopped — or there was no process left to wait for. |
-| `Skipped` | The job run was stopped between the insert and the dispatch, so the command never started. |
+| `Running` | Command spawned; the monitor owns the process. |
+| `Succeeded` | Exited 0 and its result (if any) was recorded. |
+| `Failed` | Exited non-zero, or exited 0 with a result that couldn't be recorded. |
+| `TimedOut` | Ran past `task_run.timeout` and was killed. |
+| `Aborted` | Killed because the job run was stopped. |
+| `Skipped` | Job run stopped before dispatch; the command never started. |
+| `Invalid` | flowlite cannot account for it — see [Rows flowlite cannot read](../SKILL.md#rows-flowlite-cannot-read). |
 
-Same eight variants as `TaskRunStatus`, because both levels have the same dispatcher/monitor shape — but a separate enum, and `TaskRunMonitor` maps one onto the other explicitly. The `Queued` state is what makes an attempt skippable: a stop arriving in the one tick before it is cleared to run finds nothing to kill.
+A separate enum from `TaskRunStatus` (which has `Planned`/`Waiting` where this has `Queued`); `TaskRunMonitor` maps one onto the other explicitly. `Queued` is what makes an attempt skippable: a stop arriving before dispatch has nothing to kill.
 
 ## Dispatcher: Queued → Running / Skipped
 
-`TaskRunAttemptDispatcher` ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../../src/orchestrator/task_run_attempt_dispatcher.rs)) polls **all** `Queued` attempts, on a signal wake-up or its one-second interval, whichever comes first. It settles each row as exactly one outcome, each owning its own guard and returning whether it is what happened:
+`TaskRunAttemptDispatcher` ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../../src/orchestrator/task_run_attempt_dispatcher.rs)) polls all `Queued` attempts. `derive_next_status`, in order:
 
-1. `Skipped` — **job run stopped?** → `set_to_skipped`: `finished_at` set, `started_at` left NULL, the command never ran. Preceded only by the already-spawned check, so a stop cannot mask a command that may already be running.
-2. `Queued` — **`should_stay_queued`**: a retry whose delay has not passed (`attempt > 1` and `now < created_at + task_run.retry_delay`), the global `max_running_attempts` cap is full, or a limit the attempt claims is full → nothing is written and the row waits for a later pass. This is where `retry_delay`, the cap and the named limits are enforced, and it has to precede 3, which spawns unconditionally.
-3. `Running` — otherwise, `set_to_running`: load the attempt's `task_run` and `job_run` rows, build the environment with [`build_task_run_attempt_env`](../../../../src/orchestrator/task_run_attempt_env.rs) (the task's `env:`, then `FLOWLITE_PARAM_*` from `job_run.parameters`, then injected metadata, which includes `FLOWLITE_TASK_OUTPUT` and one `FLOWLITE_INPUT_<TASK_ID>` per dependency that produced a result — see the [entities skill](../../entities/references/job_run.md)), spawn `sh -c <command>` with that environment, piped stdout/stderr, and `task_run.working_dir` as its working directory — the run's own directory, `.flowlite/runs/<job run id>` under the data directory, when it is empty — **spawn one reader task per stream** over an mpsc, insert the child into `TaskRunAttemptChildren`, then write `Running` and `started_at = now`. This is the one outcome that does work outside the database, so a spawn failure propagates as the row's error and `Poller::run` logs it and moves to the next attempt.
+1. `Invalid` — **already spawned for?** (`started_at` set) → `set_to_invalid_already_spawned`. Only a crash between spawn and the `Running` write leaves this; the command may be running, and running it twice is worse than an unknown outcome. First, so a stop cannot mask it.
+2. `Skipped` — **job run stopped?** → `set_to_skipped`: `finished_at` set, `started_at` NULL. Before 3, so a stop beats a waiting retry rather than spawning when the delay ends.
+3. `Queued` — **`should_stay_queued`**: a retry inside its delay (`attempt > 1` and `now < created_at + task_run.retry_delay`), `[orchestrator] max_running_attempts` full (0 = no limit), or a claimed named limit (`task_run.limits`, via `a_claimed_limit_is_full`) full → nothing written. A limit name missing from `[concurrency_limits]` is treated as unlimited, with a log line. Must precede 4, which spawns unconditionally.
+4. `Running` — `set_to_running`: load the `task_run` and `job_run`, build the env with [`build_task_run_attempt_env`](../../../../src/orchestrator/task_run_attempt_env.rs) (task `env:`, then `FLOWLITE_PARAM_*` from `job_run.parameters`, then injected metadata including `FLOWLITE_TASK_OUTPUT` and one `FLOWLITE_INPUT_<TASK_ID>` per dependency that produced a result — see the [entities skill](../../entities/references/job_run.md)); the server's own `FLOWLITE_*` variables are stripped first. Spawn `sh -c <command>` with piped stdout/stderr, stdin null unless the task declares `stdin:`, working directory `task_run.working_dir` or, when empty, the run's own `.flowlite/runs/<job run id>`.
+5. anything else → `set_to_invalid`, logged as a bug.
 
-Step 1 before step 2 is what makes a stop beat a waiting retry: a job run stopped mid-delay skips the queued retry rather than spawning it when the delay runs out. Attempt 1 never reaches step 2 — it is inserted by `TaskRunDispatcher` as it starts the task run and has nothing to wait for, so the `attempt > 1` check spares it the task run query as well.
+`set_to_running` write order, each step there for a crash or race:
 
-**The child goes into the map before the status is written.** In the other order the monitor can see a `Running` attempt whose process isn't in the map yet and abort it.
+- `started_at` is written **before** the spawn (that is what step 1 reads), and cleared again if the spawn fails so the attempt can be retried. A spawn failure is the row's error for `Poller::run` to log.
+- One reader task per stream is spawned, the child goes **into `TaskRunAttemptChildren` before** `Running` and `process_group_id` are written — the other order lets the monitor see a `Running` attempt with no process and settle it `Invalid`.
 
-**Every attempt is spawned into its own process group** (`process_group(0)`), whose id is the pid of its `sh`. `sh -c` execs only for a single command; for anything with a `;`, a pipe or a background job it forks, so signalling the child alone leaves the command's real work running. The group is what makes a kill reach all of it — see the monitor's `kill_process_group` below. Keep the two together: the group is useless unsignalled, and `killpg` would signal a group that never existed.
+**Every attempt gets its own process group** (`process_group(0)`; id = pid of the `sh`). `sh -c` forks for anything with `;`, a pipe or a background job, so only a group kill reaches all of it. Keep the group and `kill_process_group` together.
 
 ## Monitor: Running → finished
 
-`TaskRunAttemptMonitor` ([src/orchestrator/task_run_attempt_monitor.rs](../../../../src/orchestrator/task_run_attempt_monitor.rs)) polls `Running` attempts on the same wake-up-or-interval schedule and takes their child out of `TaskRunAttemptChildren`:
+`TaskRunAttemptMonitor` ([src/orchestrator/task_run_attempt_monitor.rs](../../../../src/orchestrator/task_run_attempt_monitor.rs)) takes each `Running` attempt's child out of `TaskRunAttemptChildren`:
 
-- **No child** → `set_to_invalid` → `Invalid`, exactly as `TaskRunMonitor` does for a `Running` task run with no attempt: both are rows the program cannot read. The map holds only processes *this* run of the program spawned, so a `Running` row without one belongs to an earlier one — the restart path — or lost its child to an error mid-pass. There is no exit status to read, no group to kill and no reader left to drain, so no outcome can honestly be claimed; output persisted before the crash stays on the attempt, and only the ending is unknown. It is **settled**, not raised on, and logged once: leaving it `Running` stranded the task run and job run above it, and a `Running` job run holds one of its job's parallel slots for ever. A command left running by a crash is killed by the recovery pass at the next start, by the `process_group_id` on the row — see [Picking up after a crash](../SKILL.md#picking-up-after-a-crash).
-- **Child present** → each outcome owns its guard, drains the output itself and returns whether it fired, tried in this order:
-  1. **exited?** → `Succeeded` if it exited zero, `Failed` otherwise. One `try_wait` answers both, and it caches the status it reaped.
-  2. **past `task_run.timeout`?** → `TimedOut`, killing its group. Measured from the in-memory spawn time (`times_out_at`), so neither the wait for dispatch nor the spawn counts against it.
-  3. **job run stopped?** → `Aborted`, killing its group.
-  4. otherwise `Running` — persist the output so far and put the child back for the next tick.
-  6. Past all five → `anyhow::bail!`, unreachable while step 5 claims everything the others left.
+- **No child** → `set_to_invalid`. The map holds only this process's spawns, so this is the restart path (or a child lost to an error mid-pass): no exit status, no group, no readers — no outcome can honestly be claimed. Output persisted earlier stays. Settled, not raised, so the task run and job run above don't strand a parallel slot. A command a crash left running is killed by recovery at the next start — see [Picking up after a crash](../SKILL.md#picking-up-after-a-crash).
+- **Child present** → `derive_next_status`, in order:
+  1. **exited?** (`try_wait`) → zero: `set_to_succeeded`; non-zero: `Failed`.
+  2. **past `times_out_at`?** (spawn time + `task_run.timeout`, so dispatch wait doesn't count) → `TimedOut`, killing the group.
+  3. **job run stopped?** → `Aborted`, killing the group.
+  4. otherwise `Running` → `record_output`, child put back.
+  - any other status → `set_to_invalid`, killing the group, logged as a bug. A derive error puts the child back and returns `Err`.
 
-Steps 1–4 borrow the child (`&mut TaskRunAttemptChild`) rather than taking it, so the caller still owns it when none of them fires and can hand it to step 5.
+**Precedence** (same rule as [job_run.md](job_run.md)): a real outcome outranks a stop, so a process that already exited reports its exit and one past its timeout reports the timeout; a still-running one is killed on the same pass. 1 and 2 carry nothing between them.
 
-**Both kills go through `TaskRunAttemptChild::kill_process_group`**, which `killpg`s the group before reaping the `sh` — killing only the `sh` reported `TimedOut` or `Aborted` while the command's children carried on. There are three callers of it in all, and the third is shutdown:
+`set_to_succeeded` reads the result the command wrote to `$FLOWLITE_TASK_OUTPUT`: over `[orchestrator] max_task_output_bytes` or not UTF-8 → the attempt is `Failed` (never truncated — half a document parses as a whole one), with the reason appended to its stderr.
 
-- **A task no longer dies with the terminal, so `serve` kills it deliberately.** `sh` used to share flowlite's foreground process group, so Ctrl-C killed running tasks incidentally; with its own group it survives one. `serve` therefore serves `with_graceful_shutdown` on Ctrl-C or SIGTERM and then calls `Orchestrator::shutdown` → `TaskRunAttemptChildren::kill_all`, which drains the map and kills each group. That is why the map lives on the `Orchestrator` rather than inside `start`.
-- **Shutdown leaves the attempt rows `Running` on purpose**, and the next start does not settle them either — its monitor raises on them. Writing statuses during shutdown would race the pollers, which are still running, so the row survives the restart with nothing to interpret it.
-- **The restart path cannot kill anything.** The map is memory, so an attempt left by a `SIGKILL`ed or crashed flowlite keeps its process tree while its row keeps saying `Running`. Persisting the group id on the attempt row is what would let a start kill it; giving the row a terminal status is the other half.
+**Every outcome is written by `finish_task_run_attempt`**, which sets `finished_at`, publishes, and — for any status but `Succeeded` — first calls `CRUD::stop_child_job_runs`, so runs the attempt submitted live only as long as it does unless it succeeded (see the [parent skill](../SKILL.md#stopping-a-run)).
 
-**Order decides precedence here**, on the same rule as [job_run.md](job_run.md): a real outcome outranks a stop, so step 4 is the last of the finished outcomes. A process that already exited reports what it exited with rather than being recorded as killed, and one past its timeout reports the timeout. A process still running when its job run is stopped is still killed on the same pass, because steps 1–3 decline and step 4 is reached immediately. Steps 1 and 2 split the exit status between them and carry nothing in their relative order; step 5 guards nothing at all, so it stays last — the compiler holds it there, since it takes the child by value.
+**Kills go through `TaskRunAttemptChild::kill_process_group`**, which `killpg`s the group before reaping the `sh`. Its third caller is shutdown: `serve` stops `with_graceful_shutdown` on Ctrl-C or SIGTERM and calls `Orchestrator::shutdown` → `TaskRunAttemptChildren::kill_all`. This is deliberate, since a task in its own group no longer dies with the terminal — and why the map lives on the `Orchestrator`. Shutdown leaves the rows `Running` (writing statuses would race the still-running pollers); `Orchestrator::recover` settles them `Invalid` at the next start.
 
-It never reads or writes a task run row: retries and the task run status are `TaskRunMonitor`'s business.
+It never touches a task run row: retries and task run status are `TaskRunMonitor`'s.
 
 ## The shared children map
 
-`TaskRunAttemptChildren` ([src/orchestrator/task_run_attempt_children.rs](../../../../src/orchestrator/task_run_attempt_children.rs)) is a `Mutex<HashMap<task_run_attempt_id, TaskRunAttemptChild>>` created by `Orchestrator::start` and shared by the two attempt services: the dispatcher inserts, the monitor removes. It is the orchestrator's only cross-service state outside the database, and it is in memory only.
+`TaskRunAttemptChildren` ([src/orchestrator/task_run_attempt_children.rs](../../../../src/orchestrator/task_run_attempt_children.rs)) is a `Mutex<HashMap<task_run_attempt_id, TaskRunAttemptChild>>` held by the `Orchestrator` and shared by the two attempt services: the dispatcher inserts, the monitor removes. The orchestrator's only cross-service state outside the database, in memory only.
 
 ## Stdout/stderr
 
-**The pipes are not read on the poll pass.** `TaskRunAttemptDispatcher` spawns two tasks per attempt — see [src/orchestrator/task_run_attempt_reader.rs](../../../../src/orchestrator/task_run_attempt_reader.rs) — which own the pipes, read them with a plain await, validate UTF-8, cap recording at 1 MiB per stream and send `String` chunks down one mpsc. The monitor only drains that channel.
+**Pipes are never read on the poll pass** (the pass is serial, so per-attempt waits add up across every running attempt). The dispatcher spawns two readers ([src/orchestrator/task_run_attempt_reader.rs](../../../../src/orchestrator/task_run_attempt_reader.rs)) that own the pipes, validate UTF-8, record at most `[orchestrator] max_stream_bytes` per stream (kept as head and tail) and send `String` chunks down one unbounded mpsc. The monitor only drains it:
 
-The drain this replaced used a 10ms timeout per stream as its "pipe is empty" signal, which cost every running attempt 20ms of a **serial** one-second loop whether or not it wrote anything — at 50 running attempts a pass spent a full second on timeouts alone and stopped keeping up with its own interval.
+- `Running`: `record_output` `try_recv`s and never waits, so output lands at most one pass late.
+- Terminal: `finish_reading` waits for the channel to close (both readers at EOF), bounded by `[orchestrator] reader_eof_timeout_seconds` (default 2) because a grandchild that escaped the group can hold a pipe open; on timeout it aborts the readers.
 
-The two endings read output differently. The `Running` arm calls `record_output`, which `try_recv`s and never waits, so a running attempt's output reaches the table at most one pass after it was written. The four terminal arms call `finish_reading`, which waits for the channel to close — both readers at EOF — under a 2s bound, since a grandchild that escaped the process group can hold a pipe open and `Poller::run` handles rows in sequence.
+**Kill before drain** on timeout and stop: closing the pipes is what produces EOF, so draining first would wait out the whole bound.
 
-**The two rungs that kill do so before they drain**, because closing the pipes is what produces that EOF. Draining first would wait out the whole bound on every timeout and every stop.
-
-Either way the write is one row per stream per pass into [`task_run_attempt_output`](../../entities/references/task_run_attempt_output.md), and none for a stream with nothing new. It is a data-only write, so it deliberately never publishes — see the [orchestrator skill](../SKILL.md#how-they-coordinate). The terminal insert lands **before** the status, so an attempt that reads as terminal has complete output.
+Each pass writes at most one [`task_run_attempt_output`](../../entities/references/task_run_attempt_output.md) row per stream with new output. It is data-only, so it **never publishes** — see [How they coordinate](../SKILL.md#how-they-coordinate). The final output lands **before** the status, so a terminal attempt has complete output.
 
 ## Invariants
 
-- **A command is spawned exactly once per attempt row**, by the dispatcher. A `Running` attempt without a child is `Aborted`, never respawned — the retry comes from `TaskRunMonitor` inserting a *new* attempt row.
-- **Attempt 1 comes from `TaskRunDispatcher`**, which inserts it before writing the task run `Running`, so `TaskRunMonitor` never sees a `Running` task run with nothing to decide from. It raises if it ever does.
-- **Terminal statuses set the attempt's `finished_at`**, via `finish_task_run_attempt`.
-- **A new `TaskRunAttemptStatus` needs a handler in `TaskRunMonitor`** — see [task_run.md](task_run.md).
+- **A command is spawned at most once per attempt row.** A `Running` attempt without a child, or a `Queued` one with `started_at` set, is settled `Invalid`, never respawned; a retry is a new row from `TaskRunMonitor`.
+- **Attempt 1 comes from `TaskRunMonitor`**, inserted on its first pass over a `Running` task run with no attempts.
+- **Terminal statuses set `finished_at`** via `finish_task_run_attempt` (or the dispatcher's `set_to_skipped` / `set_to_invalid*`).
+- **A new `TaskRunAttemptStatus` needs a return in `TaskRunMonitor`** — see [task_run.md](task_run.md).

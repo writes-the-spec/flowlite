@@ -1,32 +1,30 @@
 # `task` (mem)
 
-One row per task of a job, declared inline under the job YAML's `tasks:` list. Like [`job`](job.md) this is a *definition*; what executes and carries state is a [`task_run`](task_run.md), and each execution of its command is a [`task_run_attempt`](task_run_attempt.md).
+One row per task under a job YAML's `tasks:` — a *definition*, like [`job`](job.md). State lives on [`task_run`](task_run.md) and [`task_run_attempt`](task_run_attempt.md).
 
 | Column | Meaning |
 |---|---|
 | `row_id` | YAML declaration order. `UNIQUE`. |
-| `task_id`, `job_id` | **Composite primary key** — a task id is unique per job, not globally. `job_id` is a foreign key to [`job`](job.md). |
-| `description` | `NOT NULL`, `''` when the YAML declares none. What the task does, in words; never read by anything that runs. |
+| `task_id`, `job_id` | **Composite primary key** — task ids are unique per job. `job_id` is a foreign key to [`job`](job.md). |
+| `description` | `NOT NULL`, `''` if none. Prose; never read by anything that runs. |
 | `command` | The shell command, run as `sh -c <command>`. |
-| `stdin` | `NOT NULL`, `''` when the task declares none, which spawns the command against `/dev/null`. Anything else is written to the command's stdin verbatim and the pipe closed — no shell reads it, which is what makes it the place for a prompt or a document that `command:` would expand. |
-| `depends_on` | JSON array of task ids in the same job. `NOT NULL`; a task with no dependencies stores `'[]'`. |
-| `limits` | `NOT NULL`. JSON array of named concurrency limits this task claims, on top of whatever its job claims, `'[]'` when it declares none. Resolved against `[concurrency_limits]` in `config.toml` — not validated here. |
-| `timeout` | Seconds. Defaults to 3600 in the YAML, not in the DDL. |
-| `max_retries` | Retries *after* the first attempt, so executions total `1 + max_retries`. Defaults to 0. |
-| `retry_delay` | Seconds to wait before each retry. Defaults to 60. |
-| `env` | `NOT NULL`, `'{}'` when the task declares none. Environment variables layered onto the command's, over whatever flowlite itself inherited. |
-| `secret_env` | `NOT NULL`, `'{}'` when the task declares none. Environment variable name to secret name — never a value — layered over the job's own `secret_env:` the same way `env` is. |
-| `working_dir` | `NOT NULL`, `''` meaning the job run's own directory — `.flowlite/runs/<job run id>` under the data directory, created when the run starts and deleted with it. A task that needs a fixed place, a checkout it maintains, names it here. |
+| `stdin` | `NOT NULL`; `''` spawns against `/dev/null`. Otherwise written verbatim and the pipe closed — no shell expands it, so it suits a prompt or document. |
+| `depends_on` | `NOT NULL` JSON array of task ids in the same job, `'[]'` if none. |
+| `limits` | `NOT NULL` JSON array of named concurrency limits, added to the job's, `'[]'` if none; not validated here. |
+| `timeout` | Seconds. Defaults to 3600 in the YAML, not the DDL. |
+| `max_retries` | Retries *after* the first attempt: `1 + max_retries` executions. Defaults to 0. |
+| `retry_delay` | Seconds before each retry. Defaults to 60. |
+| `env` | `NOT NULL`, `'{}'` if none. Layered over what flowlite inherited. |
+| `secret_env` | `NOT NULL`, `'{}'` if none. Variable name → secret name, never a value; layered over the job's like `env`. |
+| `working_dir` | `NOT NULL`. `''` means the run's own `.flowlite/runs/<job run id>` under the data dir, created at start and deleted with the run; name a path for a fixed place. |
 
 ## Written by
 
-`CRUD::init` only, from `JobYamlTask`. `CRUD::validate_job_tasks` rejects the job at startup if a task id is declared twice, if a `depends_on` id is not a task of the same job, or if the dependencies form a cycle — `TaskRunDispatcher` waits for every dependency to succeed, so any of those would leave the task runs queued and their job run running forever.
-
-Each task's dependency list is written to **two** places from the same source: `depends_on` here, and one normalized row per edge in [`task_dependent`](task_dependent.md).
+`CRUD::init` only, from `JobYamlTask`, also writing each edge to [`task_dependent`](task_dependent.md). `CRUD::validate_job_tasks` rejects at startup a duplicate task id, a `depends_on` id outside the job, or a cycle — each would leave the job run running forever.
 
 ## Read by
 
-- `CRUD::submit_job` — copies `command`, `stdin`, `depends_on`, `timeout`, `max_retries`, `retry_delay`, `env`, `secret_env` and `working_dir` onto every `task_run` it inserts. This is the snapshot the orchestrator then runs on. `description` is not copied: a run snapshots what it executes, and prose is not that.
-- The jobs and job-detail web routes, including the DAG ([src/router/app/routes/jobs/job_id/dag.rs](../../../../src/router/app/routes/jobs/job_id/dag.rs)), which describe the job **as defined now** rather than any run of it. The job page's task table lists `description`; the task page, `/jobs/{job_id}/tasks/{task_id}` ([src/router/app/routes/jobs/job_id/task_id/route.rs](../../../../src/router/app/routes/jobs/job_id/task_id/route.rs)), is the only place `command`, `stdin`, `env`, `secret_env` and `working_dir` are shown as declared. `stdin` is shown only when the task declares one, since an empty block on every other task would say nothing. `secret_env` renders as the reference only, variable name against secret name — the value it names is never read on this path at all.
+- `CRUD::submit_job` — copies `command`, `stdin`, `depends_on`, `timeout`, `max_retries`, `retry_delay`, `env`, `secret_env`, `working_dir` and `limits` onto every `task_run` (`env`, `secret_env` and `limits` merged with the job's). `description` is not copied: a run snapshots what it executes.
+- The jobs and job-detail web routes and DAG ([src/router/app/routes/jobs/job_id/dag.rs](../../../../src/router/app/routes/jobs/job_id/dag.rs)), showing the job **as defined now**; the job page lists `description`. Only the task page, `/jobs/{job_id}/tasks/{task_id}` ([src/router/app/routes/jobs/job_id/task_id/route.rs](../../../../src/router/app/routes/jobs/job_id/task_id/route.rs)), shows `command`, `stdin` (when declared), `env`, `secret_env` (the reference only; no secret is read) and `working_dir` as declared.
 
-**No orchestrator file reads this table.** Every config field a service acts on comes off `task_run`. Editing the YAML changes what future runs are submitted with and nothing about the runs already in flight — and equally, a wrong value is frozen onto every run submitted after the edit rather than fixable by editing the YAML back.
+**No orchestrator file reads this table.** A YAML edit affects future runs only; a wrong value stays frozen on runs submitted while it was there.

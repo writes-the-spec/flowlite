@@ -1,23 +1,21 @@
 # `job` (mem)
 
-One row per job YAML file under `<data_dir>/jobs/*.yml` — the *definition* of a job, never one of its executions. The execution is [`job_run`](job_run.md), and the two are not interchangeable: a `job` is the template, a `job_run` is one run of it.
-
-In-memory config, re-seeded on every startup, so nothing here survives a restart independently of the YAML.
+One row per job YAML file under `<data_dir>/jobs/*.yml` — the *definition*; an execution is a [`job_run`](job_run.md). Re-seeded every startup.
 
 | Column | Meaning |
 |---|---|
 | `row_id` | YAML declaration order. `UNIQUE`, not the primary key. |
-| `job_id` | **Primary key.** The `id:` from the YAML. |
+| `job_id` | **Primary key.** The YAML `id:`. |
 | `name` | Display label. Deliberately **not** unique and **not** a key. |
-| `description` | `NOT NULL`; the YAML `#[serde(default)]`s it to `""`, so the empty string arrives as a value. |
-| `max_parallel_runs` | How many of this job's runs may be `Running` at once. Defaults to 1; **`0` means no limit** and short-circuits the count entirely. |
-| `keep_runs` | How many of this job's newest finished runs retention keeps. Defaults to `[job_defaults] keep_runs`; **`0` means keep every run of this job**, leaving `[retention] keep_runs_total` as the only thing bounding it. Read by `RetentionService` — see below. |
-| `parameters` | `NOT NULL`. Declared name to default value, `'{}'` when the job declares none. This table only holds the declaration — resolving it against a caller's overrides happens in `submit_job`, not here. |
-| `env` | `NOT NULL`. Environment variables for every task of the job, `'{}'` when it declares none. Merged with each task's own `env:` by `submit_job` — the task wins a shared name — and only the merged result is stored, on `task_run.env`. |
-| `secret_env` | `NOT NULL`. Environment variable name to secret name — never a value — for every task of the job, `'{}'` when it declares none. Merged with each task's own `secret_env:` the same way `env` is, and only the merged result is stored, on `task_run.secret_env`. |
-| `on_failure_recipients` | `NOT NULL`. JSON object keyed by channel — `{"email": [...], "slack": [...]}` — from the YAML's `on_failure:` block, `'{}'` when it names nobody. A channel the YAML names nobody under is **absent**, not an empty array. Built by `job_notify_recipients`, which is the one place the YAML's per-channel fields become this map. Naming a recipient of a channel `config.toml` does not configure fails `CRUD::init` rather than being dropped. |
-| `on_success_recipients` | `NOT NULL`. The same shape, from the YAML's `on_success:` block, built by the same function and checked by the same startup check. Two columns rather than one map keyed by ending, because the two are read independently and a job commonly declares one and not the other. |
-| `limits` | `NOT NULL`. JSON array of named concurrency limits this job claims, `'[]'` when it declares none. Resolved against `[concurrency_limits]` in `config.toml` — not validated here; every one of the job's tasks claims these too, on top of its own. |
+| `description` | `NOT NULL`; serde defaults it to `""`. |
+| `max_parallel_runs` | How many of this job's runs may be `Running` at once. Defaults to 1; **`0` means no limit** and skips the count. |
+| `keep_runs` | How many of this job's newest finished runs retention keeps. Defaults to `[job_defaults] keep_runs`; **`0` keeps every run**, leaving only `[retention] keep_runs_total` to bound it. |
+| `parameters` | `NOT NULL`. Declared name → default, `'{}'` if none. Only the declaration; `submit_job` resolves overrides. |
+| `env` | `NOT NULL`, `'{}'` if none. Merged under each task's `env:` by `submit_job` (task wins); only the merge is stored, on `task_run.env`. |
+| `secret_env` | `NOT NULL`, `'{}'` if none. Variable name → secret name, never a value. Merged like `env`, stored on `task_run.secret_env`. |
+| `on_failure_recipients` | `NOT NULL`. `{"email": [...], "slack": [...]}` from `on_failure:`, `'{}'` if nobody; a channel naming nobody is **absent**, not `[]`. Built by `job_notify_recipients`. A recipient on a channel `config.toml` does not configure fails `CRUD::init`. |
+| `on_success_recipients` | `NOT NULL`. Same, from `on_success:`. Separate because the two are read independently and often only one is declared. |
+| `limits` | `NOT NULL` JSON array of named concurrency limits, `'[]'` if none; resolved against `[concurrency_limits]`, not validated here. Every task claims these on top of its own. |
 
 ## Written by
 
@@ -25,14 +23,17 @@ In-memory config, re-seeded on every startup, so nothing here survives a restart
 
 ## Read by
 
-- `CRUD::submit_job` ([src/crud/multistatements/submit_job.rs](../../../../src/crud/multistatements/submit_job.rs)) — copies `name` and `description` onto the `job_run` it inserts as `job_name`/`job_description`, and bails with `Job '<id>' not found` if the row is missing. It passes `parameters` to `resolve_job_parameters`, which raises if a caller's override names a parameter this row does not declare. It layers `env` under each task's own `env:` and `secret_env` under each task's own `secret_env:`, through the same `merge_job_and_task_maps` called once per block, the task's own winning a name both declare within that block. The two merges are then not left independent: a task's own declaration in either block also evicts this row's contribution to the *other* block for that name, which is what keeps a stored `task_run` from carrying one name in both — see [task_run.md](task_run.md).
-- `CRUD::is_job_at_max_parallel_runs` — reads `max_parallel_runs`. **This is the single definition field the orchestrator reads live**, everywhere else it reads the run's snapshot. Deliberate: "may I start another run?" is a question about the job now, so it is not frozen onto `job_run`. See [task_run.md](task_run.md).
-- `CRUD::submit_job` again for `on_failure_recipients` and `on_success_recipients`, which become the run's own [`job_run_notification`](job_run_notification.md) rows — **one per channel per block**, so a job naming both email and Slack on a failure is submitted with two, and one that also names somebody on a success with three. Each row carries the ending it waits for in `notify_on`. **Who to tell is frozen at submit like the rest of the definition** — not read live the way `max_parallel_runs` is — so a run stays notifiable after its YAML is edited or deleted, and a rerun tells whoever the original run would have told.
+- `CRUD::submit_job` ([src/crud/multistatements/submit_job.rs](../../../../src/crud/multistatements/submit_job.rs)):
+  - copies `name`/`description` onto the `job_run`; bails `Job '<id>' not found` if the row is missing;
+  - `resolve_job_parameters` raises on an override `parameters` does not declare;
+  - `merge_job_and_task_maps` layers `env`/`secret_env` under the task's, task winning; a task's name in either block also evicts the job's value from the other — see [task_run.md](task_run.md);
+  - the recipient columns become [`job_run_notification`](job_run_notification.md) rows, **one per channel per block**. Frozen at submit, so a run stays notifiable after its YAML changes and a rerun tells whoever the original would have.
+- `CRUD::is_job_at_max_parallel_runs` — `max_parallel_runs`, **the only field the orchestrator reads live** ("may I start another run?" is about the job now).
+- `RetentionService` ([src/retention/service.rs](../../../../src/retention/service.rs)) — `keep_runs`; a job id with no row here (ad-hoc, or YAML deleted) falls back to `[job_defaults] keep_runs`.
 - `job list` / `job submit` ([src/cli/commands/job.rs](../../../../src/cli/commands/job.rs)) and the home, jobs and job-detail web routes.
-- `RetentionService` ([src/retention/service.rs](../../../../src/retention/service.rs)) — reads `keep_runs` per job to decide how many of its finished runs survive. A job id with a finished [`job_run`](job_run.md) but no row here (an ad-hoc definition, or one whose YAML has since been deleted) falls back to `[job_defaults] keep_runs` instead — unlike `is_job_at_max_parallel_runs`, above, which treats a missing row as no limit at all.
 
 ## Gotchas
 
-- **`job submit <arg>` matches `job_id`, not `name`,** despite the argument's name. Don't copy the CLI arg naming as a model without checking which column it filters on.
-- `max_parallel_runs` is enforced in exactly one place, `JobRunDispatcher::is_job_at_max_parallel_runs`. Nothing rejects a submission for being over it — the run is created `Scheduled` like any other, and once `JobRunReleaser` moves it to `Queued` it queues there instead of starting. See the [orchestrator skill](../../orchestrator/references/job_run.md).
-- **A job run whose job is no longer in the config is never gated.** `is_job_at_max_parallel_runs` returns `false` when the row is missing, so a run left over from a deleted or renamed job starts on the next pass rather than queueing forever.
+- **`job submit <arg>` matches `job_id`, not `name`**, despite the argument's name.
+- `max_parallel_runs` is enforced only in `JobRunDispatcher::is_job_at_max_parallel_runs`; nothing rejects a submission over it — the run waits in `Queued`. See the [orchestrator skill](../../orchestrator/references/job_run.md).
+- **A run whose job left the config is never gated**: a missing row means no limit, so it starts rather than queueing forever.

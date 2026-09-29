@@ -5,7 +5,7 @@ description: The Service trait and the Poller that drives it (src/poller.rs) - t
 
 # Poller and Service (src/poller.rs)
 
-One loop, written once, driving ten services. A `Service` holds nothing but its own logic; the `Poller` owns the loop, the wake-ups and the error handling.
+One loop drives all ten services. A `Service` holds only its own logic; the `Poller` owns the loop, the wake-ups and the error handling.
 
 ```rust
 pub trait Service: Send + Sync + 'static {
@@ -22,39 +22,37 @@ pub trait Service: Send + Sync + 'static {
 
 ## What the loop guarantees
 
-- **It wakes on whichever comes first**, its `Notify` wake-up ([src/signals.rs](../../../src/signals.rs)) or its interval. A wake-up is advisory and carries no data — it says "look again", never at what. The row's own status column is the only information that travels between services.
-- **A wake-up published while the timer arm won is not lost.** A `Notified` future dropped unawaited keeps its permit, so the next `select!` sees it.
-- **A failing row is logged and skipped; the pass continues.** `handle` returning an error costs that row and nothing else, named through `row_context`. This is the loop's job, not any service's: failing the whole pass over one row would stop every other row, and the restarted loop would select the same bad row again.
-- **A failing `select` ends the pass**, is logged, and the loop restarts after the backoff. That is the only error that propagates.
-- **The interval is a safety net, not the driver.** It cannot be turned off: `flowlite job submit` writes a `job_run` from another process and so cannot publish, and the interval is the only thing that notices. Ticks use tokio's default `MissedTickBehavior::Burst`, so a pass longer than the interval is followed immediately by another rather than by a catch-up delay.
+- **Wakes on its `Notify`** ([src/signals.rs](../../../src/signals.rs)) **or its interval, whichever comes first.** A wake-up carries no data, it only means "look again". The row's status column is the only thing that passes between services.
+- **A wake-up published while the timer arm won is not lost**: a dropped `Notified` future keeps its permit for the next `select!`.
+- **A failing `handle` is logged (via `row_context`) and skipped; the pass continues.** Failing the pass would stall every other row, and the restarted loop would pick the same bad row again.
+- **A failing `select` ends the pass**, is logged, and the loop restarts after the backoff. This is the only error that propagates.
+- **The interval is a safety net and cannot be turned off.** `flowlite job submit` writes a `job_run` from another process and can't publish, so only the interval notices it. Ticks use tokio's default `MissedTickBehavior::Burst`: a pass longer than the interval is followed straight away by another.
 
 ## The two knobs
 
-Both live in `[orchestrator]` ([app_config skill](../app_config/SKILL.md)), and neither is a constant in this file:
+Both are in `[orchestrator]` ([app_config skill](../app_config/SKILL.md)), not constants here. The `Poller` reads them from the `AppConfig` it is given, so a test can set its own interval.
 
-| Key | Default | What it times |
+| Key | Default | Times |
 |---|---|---|
 | `poll_interval_seconds` | 1 | the safety-net tick |
 | `error_backoff_seconds` | 5 | the wait before restarting after a failed `select` |
-
-The `Poller` takes the whole `AppConfig` and reads both through `app_config.orchestrator`, so a test can build one polling every 5 seconds without touching the code under test.
 
 ## Who implements it
 
 | Service | Owned by |
 |---|---|
-| `JobRunReleaser`, `JobRunDispatcher`, `JobRunMonitor`, `TaskRunDispatcher`, `TaskRunMonitor`, `TaskRunAttemptDispatcher`, `TaskRunAttemptMonitor` | [orchestrator skill](../orchestrator/SKILL.md) |
+| `JobRunReleaser`, `JobRunDispatcher`, `JobRunMonitor`, `TaskRunDispatcher`, `TaskRunMonitor`, `TaskRunAttemptDispatcher`, `TaskRunAttemptMonitor` | [orchestrator skill](../orchestrator/SKILL.md), started by `Orchestrator::start` |
 | `Scheduler` | [scheduler skill](../scheduler/SKILL.md) |
 | `NotificationService` | [notifications skill](../notifications/SKILL.md) |
-| `RetentionService` | [src/retention/service.rs](../../../src/retention/service.rs) — deletes finished job runs past `[job_defaults] keep_runs` and `[retention] keep_runs_total`, alongside the [entities skill](../entities/SKILL.md)'s six disk tables |
+| `RetentionService` | [src/retention/service.rs](../../../src/retention/service.rs). Deletes finished job runs past `[job_defaults] keep_runs` and `[retention] keep_runs_total`, along with the [entities skill](../entities/SKILL.md)'s six disk tables |
 
-A service is started where its owner is: the seven by `Orchestrator::start`, the other three directly by [serve.rs](../../../src/cli/commands/serve.rs).
+The last three are started directly by [serve.rs](../../../src/cli/commands/serve.rs).
 
 ## Rules
 
-- **New per-row work goes in `handle`, never in the loop.** The loop is finished; it has no branches for a particular service.
-- **`select` returns the rows this service owns, by status.** A service selects on a status another service writes — that is the whole coupling between them, and adding a direct call from one service to another instead is the thing this shape exists to prevent.
-- **`select` selects, and does nothing else.** A `select` error ends the pass and costs the whole service its `error_backoff_seconds`, every pass, for as long as the error lasts — so per-pass work that is not the selecting (a sweep over some other set, say) does not belong there: one bad row would stall every row the service owns. `Scheduler::select` used to sweep runs of deleted schedules there and had to log and swallow its own errors to stay safe; the sweep is gone, and no `select` needs that treatment now.
-- **`row_context` is for an error line**, so name the row the way a person reading a log would: its id and what it belongs to.
-- **Wake-ups are registered before any `Poller` is spawned.** A poller's first pass runs the instant it is spawned, so a service registering its own wake-up inside the `Poller::new` call could miss a publish from one already running. See the orchestrator skill for the two-line shape.
-- **A service nothing publishes to takes a bare `Notify`** rather than registering with `Signals`, so it is not woken by every unrelated status change. The `Scheduler` is the example.
+- **Per-row work goes in `handle`, never in the loop.** The loop has no per-service branches.
+- **`select` returns the rows this service owns, by status.** Services are coupled only through the status one writes and another selects on. Never add a direct call from one service to another.
+- **`select` only selects.** A `select` error costs the whole service `error_backoff_seconds` on every pass until it clears, so other per-pass work (such as a sweep over some other set) must not go there, or one bad row stalls every row the service owns.
+- **`row_context` goes into an error line**: give the row's id and what it belongs to, as a log reader would want.
+- **Register wake-ups before spawning any `Poller`.** A poller's first pass runs as soon as it is spawned, so a wake-up registered inside `Poller::new` could miss a publish from a poller already running. The orchestrator skill has the two-line pattern.
+- **A service nothing publishes to takes a bare `Notify`** rather than registering with `Signals`, so unrelated status changes don't wake it. `Scheduler` and `RetentionService` do this.

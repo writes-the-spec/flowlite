@@ -4,15 +4,11 @@
 
 ```rust
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Select<Entity>sDataSort {
-    Alphabetical,
-    RowId,
-}
+pub enum Select<Entity>sDataSort { Alphabetical, RowId }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Select<Entity>sDataFilter {
-    pub <entity>_id: Option<String>,
-    // ...other optional filters
+    pub <entity>_id: Option<String>, // every field optional
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,15 +20,12 @@ pub struct Select<Entity>sData {
 }
 ```
 
-Every field in `Select<Entity>sDataFilter` is optional and additive — an empty filter returns everything. `sort`, `limit`, and `offset` are top-level optionals on `Select<Entity>sData`, not inside the filter.
-
-`limit`/`offset` are `Option<u32>` on the config tables and `Option<i64>` on the disk ones (`job_run`, `job_run_stop`) — both are live, so match the neighbours of whichever table you are adding rather than picking one. Either way the bind casts to `i64`.
-
-They are omitted entirely from the struct for tables that are always fetched in full for a given key (e.g. `task_run`, `task_run_attempt`, `task_dependent` — always scoped to one `job_run_id`/`task_run_id`). Only add them when callers actually need pagination.
+- Filter fields are additive; an empty filter returns everything.
+- `limit`/`offset` are `Option<u32>` on config tables, `Option<i64>` on disk ones (`job_run`, `job_run_stop`, `job_run_notification`) — match the neighbours; the bind casts to `i64` either way. Omit them for tables always read in full for a key (`task_run`, `task_run_attempt`, `task_dependent`) until a caller paginates.
 
 ## Query building
 
-Always build with `sqlx::QueryBuilder`, always start from `WHERE 1=1` so every filter clause can unconditionally `AND`:
+Always `sqlx::QueryBuilder` from `WHERE 1=1`, so every clause can `AND`:
 
 ```rust
 pub async fn select_widgets<'e, E>(&self, executor: E, data: &SelectWidgetsData) -> anyhow::Result<Vec<Widget>>
@@ -58,39 +51,37 @@ where
         query_builder.push(" LIMIT ");
         query_builder.push_bind(limit as i64);
     }
-
-    if let Some(offset) = data.offset {
-        query_builder.push(" OFFSET ");
-        query_builder.push_bind(offset as i64);
-    }
+    // OFFSET: same shape.
 
     Ok(query_builder.build_query_as::<Widget>().fetch_all(executor).await?)
 }
 ```
 
-Column list is explicit (`SELECT a, b, c FROM ...`), never `SELECT *` — the column order must line up with the `Widget` struct's `sqlx::FromRow` field order/names.
+- Explicit column list, never `SELECT *`: it must match the row struct's `FromRow` field names and order.
+- Sort: support at least creation order — `RowId` for config tables, `Id`/`IdDesc` for autoincrement run tables.
 
-### Filter kinds seen in this codebase
+### Filter kinds
 
-- **Equality**: `AND col = <bind>`, guarded by `if let Some(v) = &data.filter.col`.
-- **Substring match**: `name_like: Option<String>` binds `format!("%{}%", name)` against `LIKE` — see `SelectJobsDataFilter::name_like` in [src/crud/job.rs](../../../../src/crud/job.rs) and `SelectSchedulesDataFilter::name_like`.
-- **Comparison**: name the field after the operator, e.g. `scheduled_at_gt: Option<DateTime<Utc>>` → `AND scheduled_at > <bind>` (see `DeleteJobRunsDataFilter` in [src/crud/job_run.rs](../../../../src/crud/job_run.rs)). A plain name means equality, so the unsuffixed `scheduled_at` on `SelectJobRunsDataFilter` is `AND scheduled_at = <bind>` — the two sit side by side on the same entity, one per filter type.
-- **Instant**: an equality on a `DATETIME` matches the stored value exactly, so it only answers the caller that passes back the instant it inserted. `SelectJobRunsDataFilter::scheduled_at` is that caller's filter — the Scheduler asks after one cron occurrence at a time, the same value `CRUD::submit_job` wrote — and the doc comment on the field says so. Anything deriving an instant some other way wants a `_gt`/`_lt` window instead.
-- **Bool**: bind `if v { 1 } else { 0 }`, same as insert.
-- **Enum**: bind directly, same as insert (`status: Option<JobRunStatus>`).
-- **Any of several**: `statuses: Option<Vec<JobRunStatus>>` pushes `AND status IN (?, ?, ...)` with `query_builder.separated(", ")`. It sits *beside* the singular `status` rather than replacing it — "exactly this one" and "any of these" are different questions, and every existing caller keeps passing `statuses: None`. Pass a non-empty list: `IN ()` is not valid SQLite.
+| Kind | Shape |
+|---|---|
+| Equality | `AND col = <bind>` when `Some` |
+| Substring | `name_like` binds `format!("%{}%", name)` to `LIKE` (`SelectJobsDataFilter` in [src/crud/job.rs](../../../../src/crud/job.rs), `SelectSchedulesDataFilter`) |
+| Comparison | name the operator: `scheduled_at_gt` → `AND scheduled_at > <bind>` (`DeleteJobRunsDataFilter` in [src/crud/job_run.rs](../../../../src/crud/job_run.rs)); an unsuffixed name is equality |
+| Bool | bind `if v { 1 } else { 0 }` |
+| Enum | bind directly |
+| Any of several | `statuses: Option<Vec<JobRunStatus>>` → `AND status IN (?, ...)` via `separated(", ")`, beside the singular `status` (a different question). Pass a non-empty list: `IN ()` is not valid SQLite. |
+
+**Equality on a `DATETIME`** matches the stored value exactly, so it only serves a caller passing back the instant it inserted: `SelectJobRunsDataFilter::scheduled_at` is the Scheduler's (one cron occurrence, as `CRUD::submit_job` wrote it), and its doc comment says so. Any other caller wants a `_gt`/`_lt` window.
 
 ### Adding a field to an existing filter
 
-Nothing derives `Default`, and no construction site uses `..Default::default()`, so a new field is a compile error at **every** literal that builds the filter — around 35 of them for `SelectJobRunsDataFilter`. That is the intended cost: each site says `None` on purpose rather than inheriting a default nobody read. Add the field, then let `cargo build` list the sites.
+`SelectJobRunsDataFilter` doesn't derive `Default`, so a new field breaks every literal building it (about 50). Intended: each site says `None` on purpose — let `cargo build` list them. (`SelectSchedulesDataFilter` and `SelectScheduleJobsDataFilter` do derive `Default`, and the router's schedule routes use `..Default::default()`.)
 
-Where the entity has a shared clause-pusher, the clause goes there once and nowhere else. `push_job_run_filter` in [src/crud/job_run.rs](../../../../src/crud/job_run.rs) renders `SelectJobRunsDataFilter` for `select_job_runs`, `count_job_runs` and `select_job_run_job_ids` alike — this is the one place the repo's preference for redundancy over abstraction is overruled, because a clause added to the select and forgotten in the count makes retention's deletion window too wide. `delete_job_runs` has its own filter type and renders its own clauses, so a select-side field does not reach it.
+With a shared clause-pusher, add the clause there only. `push_job_run_filter` in [src/crud/job_run.rs](../../../../src/crud/job_run.rs) serves `select_job_runs`, `count_job_runs` and `select_job_run_job_ids` — the one place redundancy is overruled, since a clause missing from the count widens retention's deletion window. `delete_job_runs` has its own filter type; a select-side field doesn't reach it.
 
 ### Counts and projections
 
-A count (`count_job_runs`) and a distinct projection (`select_job_run_job_ids`) are basic single-statement entity work, and so live in the entity file next to `select_*` — never as a `QueryBuilder` inside a multistatement, and never as a `select_*` whose rows the caller then counts or dedupes in Rust. `count_running_attempts` in [limits.rs](../../../../src/crud/multistatements/limits.rs) is the counter-example that stays as it is: it counts a bounded set (attempts running right now), where materialising the rows costs nothing.
-
-Both take the select's own filter type rather than a copy of it:
+A count (`count_job_runs`) or distinct projection (`select_job_run_job_ids`) is entity work beside `select_*` — not a `QueryBuilder` in a multistatement, nor a `select_*` counted or deduped in Rust. `count_running_attempts` in [limits.rs](../../../../src/crud/multistatements/limits.rs) stays as is: its set is small and bounded. Both take the select's own filter so count and select can't drift:
 
 ```rust
 pub struct CountJobRunsData {
@@ -98,57 +89,25 @@ pub struct CountJobRunsData {
 }
 ```
 
-so a caller that counts and then selects over "the same rows" cannot drift between the two.
-
 ### Joins
 
-**No `select_*` in this codebase joins today.** `select_job_runs` used to join `mem.job` for the job's name, and that name is now written onto the `job_run` row at submit time instead, by `CRUD::submit_job`. Before adding a join, ask whether the column belongs on the row: joining a disk table to a `mem` one ties durable rows to config that is re-seeded from the YAML on every start, which is exactly why that one was removed.
-
-If a select does need a column from another table, join it directly in the base query string rather than doing a second round-trip. The query that was there is still the shape to copy:
-
-```rust
-// Illustrative — this query no longer exists.
-sqlx::QueryBuilder::new(
-    "SELECT jr.id, jr.job_id, j.name AS job_name, jr.created_at, jr.started_at, jr.finished_at, jr.status \
-     FROM job_run jr JOIN mem.job j ON j.job_id = jr.job_id WHERE 1=1"
-)
-```
-
-Alias every table when a join is involved, and prefix every column in the `SELECT` list with its table alias to avoid ambiguity.
-
-### Sort
-
-`Select<Entity>sDataSort` is a plain enum matched with `match sort { ... => query_builder.push(" ORDER BY ...") }`. Every entity should support at least sorting by its natural/creation order (`RowId` for config-seeded tables, `Id`/`IdDesc` for autoincrement run tables).
+**No `select_*` joins today.** First ask whether the column belongs on the row: joining disk to `mem` ties durable rows to config re-seeded every start (why `job_run` carries `job_name`, written by `CRUD::submit_job`, instead of joining `mem.job`). A justified join goes in the base query, with every table aliased and every column prefixed (`FROM job_run jr JOIN mem.job j ON j.job_id = jr.job_id`), not a second round-trip.
 
 ## Singular helper
 
-Where a caller needs one row, add a `select_<entity>` (singular) beside the plural that just takes the first result — never hand-write a second query for the "get one" case:
+For one row, add `select_<entity>` taking the plural's first result — never a second query:
 
 ```rust
 pub async fn select_widget<'e, E>(&self, executor: E, data: &SelectWidgetsData) -> anyhow::Result<Option<Widget>>
 where
     E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
 {
-    let widgets = self.select_widgets(executor, data).await?;
-    Ok(widgets.into_iter().next())
+    Ok(self.select_widgets(executor, data).await?.into_iter().next())
 }
 ```
 
-Callers pass `limit: Some(1)` if they want the database to stop early, but that's optional — the helper doesn't add it implicitly.
-
-Not every entity has one, and that is fine: `task_dependent` and `task_run_attempt` are only ever read in full for a key, so neither has a singular. One entity is simply misnamed — `schedule_job`'s is `select_schedule_job_internal` ([src/crud/schedule_job.rs](../../../../src/crud/schedule_job.rs)), whose body is exactly the two lines above. Copy the shape, not that name.
+It doesn't add `LIMIT 1`; callers pass `limit: Some(1)` if they want. `task_dependent` and `task_run_attempt` (read in full) have none. `schedule_job`'s is misnamed `select_schedule_job_internal` ([src/crud/schedule_job.rs](../../../../src/crud/schedule_job.rs)) — copy the shape, not the name.
 
 ## Row struct
 
-```rust
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
-pub struct Widget {
-    pub widget_id: String,
-    // ...other columns
-}
-```
-
-- Always derives `sqlx::FromRow, Clone` (plus `Debug, Serialize, Deserialize`).
-- JSON columns come back as `sqlx::types::Json<Vec<String>>` (see `Task::depends_on`), not `Vec<String>` directly.
-- `bool` columns come back as `bool` even though they're stored as `0`/`1` — `sqlx::FromRow` handles the coercion for SQLite.
-- Field names and order must match the `SELECT` list exactly.
+Derives `Debug, Serialize, Deserialize, sqlx::FromRow, Clone`; fields match the `SELECT` list exactly. JSON columns read as `sqlx::types::Json<Vec<String>>` (`Task::depends_on`); `bool` columns read as `bool` (stored `0`/`1`).

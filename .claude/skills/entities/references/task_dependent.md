@@ -1,12 +1,14 @@
 # `task_dependent` (mem)
 
-The dependency edges of [`task`](task.md), normalized one row per edge: `(job_id, task_id, dependent_task_id)`. No primary key — only `UNIQUE (row_id)` — and foreign keys on both `(task_id, job_id)` and `(dependent_task_id, job_id)` back to `task`.
+The dependency edges of [`task`](task.md), one row per edge: `(job_id, task_id, dependent_task_id)`. No primary key — only `UNIQUE (row_id)` — and foreign keys on `(task_id, job_id)` and `(dependent_task_id, job_id)` back to `task`.
+
+## Written by
+
+`CRUD::init`, from the same source and in the same transaction as `task.depends_on`.
 
 ## Read by nothing at all
 
-`CRUD::init` writes it and no code path anywhere selects it. It is not dead by accident: it is the normalized form of the same list `task.depends_on` holds as JSON, written from the same source in the same transaction, and it is the shape a reverse-edge query would need — *"which tasks depend on me?"* — which the JSON column cannot answer without scanning every row.
+No code path selects it. It is kept deliberately: it is the shape a reverse-edge query (*"which tasks depend on me?"*) needs, which the JSON column cannot answer without scanning every row.
 
-Two consequences worth knowing before touching it:
-
-- **It is not the runtime's dependency source.** `CRUD::submit_job` copies `task.depends_on` onto each `task_run`, and `TaskRunDispatcher::get_dependent_task_runs` resolves *that* copy. Adding an edge here changes nothing about execution.
-- **The two must be kept in sync** if you change how dependencies are declared. They are genuinely redundant — same source data, same list, written together — rather than two different concepts.
+- **It is not the runtime's dependency source.** `CRUD::submit_job` copies `task.depends_on` onto each `task_run`, and `TaskRunDispatcher::get_dependent_task_runs` resolves that copy. An edge added here changes nothing.
+- **Keep it in sync with `task.depends_on`** if you change how dependencies are declared — the two are the same list, stored twice.

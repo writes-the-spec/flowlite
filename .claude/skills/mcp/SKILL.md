@@ -5,30 +5,17 @@ description: Add or modify MCP tools in src/mcp/ - flowlite as a set of tools an
 
 # MCP module conventions (src/mcp/)
 
-`flowlite mcp` speaks the Model Context Protocol over stdin and stdout. [src/mcp/mod.rs](../../../src/mcp/mod.rs) holds `McpServer`, which owns an `Arc<Toolkit>` and a composed `ToolRouter`; each tool lives in its own file under `src/mcp/tools/`.
-
-Nine of the ten tools today are one CLI command's `--json` branch, reached without a shell: same filters, same sort, same fields, so a person reading a run through the CLI and an agent reading it through MCP read the same thing. `init_data_dir` is the tenth and has no twin to match - `flowlite init` prints prose - so it words its own shape, in `src/shared/` beside the others.
+`flowlite mcp` speaks MCP over stdin/stdout. [src/mcp/mod.rs](../../../src/mcp/mod.rs) holds `McpServer` (an `Arc<Toolkit>` and a composed `ToolRouter`); each tool is one file under `src/mcp/tools/`. Nine of the ten tools are a CLI command's `--json` branch without the shell (same filters, sort and fields); `init_data_dir` has no twin (`init` prints prose), so its `InitResult` shape is its own, in `src/shared/`.
 
 ## Adding a tool (e.g. `list_schedules`)
 
 1. Create `src/mcp/tools/list_schedules.rs`:
 
 ```rust
-//! `list_schedules`: the schedules declared in the data directory.
-
-use std::sync::Arc;
-
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::{self, JsonSchema};
 use rmcp::{tool, tool_router};
-use serde::Deserialize;
-
-use crate::crud::schedule::{Schedule, SelectSchedulesData, SelectSchedulesDataFilter};
-use crate::crud::CRUD;
-use crate::mcp::McpServer;
-use crate::toolkit::Toolkit;
-
 use super::result::{error_result, success_json};
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -40,7 +27,6 @@ pub struct ListSchedules {
 
 #[tool_router(router = list_schedules_router, vis = "pub(super)")]
 impl McpServer {
-
     /// List the schedules declared in the data directory.
     #[tool]
     async fn list_schedules(&self, Parameters(args): Parameters<ListSchedules>) -> CallToolResult {
@@ -51,56 +37,35 @@ impl McpServer {
     }
 }
 
-/// `list_schedules`'s own connection: a fresh `mem`, seeded the way `job list` seeds its
-/// own, so a file written after this process started is visible without a restart.
-async fn list_schedules_rows(
-    toolkit: &Toolkit,
-    args: ListSchedules,
-) -> anyhow::Result<Vec<Schedule>> {
+async fn list_schedules_rows(toolkit: &Toolkit, args: ListSchedules) -> anyhow::Result<Vec<Schedule>> {
     let toolkit = toolkit.with_fresh_mem();
     let _memory_conn = toolkit.get_memory_conn().await?;
     let mut conn = toolkit.get_conn().await?;
-
     let crud = CRUD::new(Arc::new(toolkit));
     crud.init(&mut conn).await?;
 
-    crud.select_schedules(&mut conn, &SelectSchedulesData {
-        filter: SelectSchedulesDataFilter {
-            name_like: args.name_like,
-            ..Default::default()
-        },
-        sort: None,
-        limit: None,
-        offset: None,
-    }).await
+    crud.select_schedules(&mut conn, &SelectSchedulesData { /* filter from args, sort, limit, offset */ }).await
 }
 ```
 
-2. Register it in [src/mcp/tools/mod.rs](../../../src/mcp/tools/mod.rs) — a `mod` line, and a term in `tools_router`:
+2. In [src/mcp/tools/mod.rs](../../../src/mcp/tools/mod.rs) add `mod list_schedules;` and `+ Self::list_schedules_router()` in `tools_router`. That is the whole registration; a tool missing there is missing from the tool list.
+3. Add an integration test to [tests/mcp_server.rs](../../../tests/mcp_server.rs), which drives the built binary as a real client.
 
-```rust
-mod list_schedules;
-...
-Self::list_jobs_router()
-    + Self::list_schedules_router()
-```
-
-That is the whole registration: a tool is added or removed by adding or removing a file and its two lines here.
-
-3. Add an integration test to [tests/mcp_server.rs](../../../tests/mcp_server.rs), which drives the built binary as a real client would.
-
-There is no `schedule` CLI command today, which is why the example above mirrors nothing. Where a matching command does exist, mirror its `--json` branch field for field - see the first rule below.
+The example mirrors nothing because there is no `schedule` command; where one exists, mirror its `--json` field for field.
 
 ## Rules
 
-- **Nothing in `src/mcp/` may print to stdout.** stdout is the protocol stream, and one stray `println!` corrupts the JSON-RPC framing into a parse error that names nothing. Anything to say goes to stderr.
-- **One tool per file**, each with its own `#[tool_router(router = <name>_router, vis = "pub(super)")]` block over `impl McpServer`. `mod.rs`'s own block keeps `allow_empty` because it declares no tool of its own; `tools_router` adds the per-tool routers together.
-- **A tool that matches a CLI command prints that command's `--json` shape,** through a type or a function in `src/shared/` rather than one of its own - `JobRunDetail`, `TaskRunAttemptLog`, `serve_status::status_json` and `LimitRow` are all there for this. What stays behind in the frontend is the wording: `status_line`'s "serving on http://..." and `limits_table` are sentences for a terminal, and the two surfaces agree on the fields rather than the whitespace - `flowlite limits --json` prints one compact line, `list_limits` pretty-prints the same rows. A tool with no matching command is fine; inventing a second shape for rows the CLI already prints is not.
-- **The `///` on the `#[tool]` fn is the tool's description, and the model pays for it on every turn.** Keep it to what a caller must know to choose the tool and read its result. Rationale for how it is built belongs in a `//` comment above the `///`, which ships nowhere - see [stop_job_run.rs](../../../src/mcp/tools/stop_job_run.rs).
-- **Arguments are a `#[derive(Debug, Deserialize, JsonSchema)]` struct with `#[serde(deny_unknown_fields)]`,** taken as `Parameters(args)`. A key the struct does not declare is a typo or a guess, and serde would otherwise ignore it silently; rmcp adds nothing of its own to the map, so every key one sees is the caller's. Each field's `///` is its schema description. A tool with nothing to ask for still declares an empty struct (`init_data_dir`, `get_serve_status`, `list_limits`) - that is where the rule earns most: a caller naming a data directory of its own is refused rather than quietly served the one `-D` named, which would read as success.
-- **A call that opens a connection opens its own, through `toolkit.with_fresh_mem()`,** never `self.toolkit`'s own `mem`. `McpServer` holds an `Arc<Toolkit>` and nothing mutable, so rmcp runs calls concurrently. A fresh name is what lets a job file written after startup reach `list_jobs`, and what lets `submit_job` seed the same inline id twice in one session. How far a tool goes past that is the matching CLI command's business, not a rule of its own (see the `cli` skill): a tool that reads config also holds a `toolkit.get_memory_conn()` binding for the call and runs `crud.init` (`list_jobs`, `submit_job`); one that reads only run history or the disk tables does neither (`get_job_run`, `list_limits`); and one that reads no database at all opens nothing (`init_data_dir` and `get_serve_status` read the data directory itself, so they answer for a directory that has no database yet).
-- **A failure is a tool result, not a protocol error:** `error_result(&err)` carries the anyhow chain verbatim via `{:#}`, which is the text the model needs to fix its own input. A protocol error would hide it.
-- **Results go through [tools/result.rs](../../../src/mcp/tools/result.rs)** - `success_json` for a value, `job_run_result` for a run that may carry the unserved-directory warning. The JSON is the same text `--json` prints, plus the identical value as `structured_content`; serialize the struct directly rather than detouring through `serde_json::Value`, whose `BTreeMap` would alphabetize the fields and stop matching the CLI. Handing `success_json` a `Value` is right only where the CLI prints that same `Value`: `get_serve_status` passes `status_json`'s, which `flowlite status --json` also prints, so both alphabetize identically and the two still agree.
-- **A wait is bounded by [src/mcp/wait.rs](../../../src/mcp/wait.rs),** not by a loop of the tool's own: `clamp_wait_seconds` (absent or `0` returns at once, above 300 clamps to 300) and `wait_for_settled_job_run`, which returns the run unfinished rather than erroring when the bound elapses - "still running, here is the id" is an answer. Before any wait longer than 0, call `ensure_data_dir_is_served`, or the tool hangs on a row with no writer.
-- **Never import from `src/cli/` or `src/router/`.** Anything a tool and a command both need lives in `src/shared/` - `JobRunDetail`, `parse_job_run_status`, `stop_job_run`, `delete_job_run` and the rest are there for exactly this. See the `frontends` skill; `tests/frontend_boundaries.rs` enforces it.
+- **Nothing in `src/mcp/` prints to stdout.** It is the protocol stream: one stray `println!` becomes a client parse error that names nothing. Use stderr.
+- **One tool per file**, each with its own `#[tool_router(router = <name>_router, vis = "pub(super)")]` over `impl McpServer`, summed in `tools_router`. `mod.rs`'s own block keeps `allow_empty`, as it declares no tool.
+- **A tool matching a CLI command returns its `--json` shape** via `src/shared/` (`JobRunDetail`, `TaskRunAttemptLog`, `serve_status::status_json`, `LimitRow`), never a shape of its own. Wording (`status_line`, `limits_table`) stays in the CLI. Fields must agree, not whitespace: `limits --json` is one compact line, `list_limits` pretty-prints.
+- **The `#[tool]` fn's `///` is the tool description, paid for on every model turn.** Only what a caller needs to choose the tool and read its result; rationale goes in a `//` above it, which ships nowhere (see [stop_job_run.rs](../../../src/mcp/tools/stop_job_run.rs)).
+- **Arguments: a `#[derive(Debug, Deserialize, JsonSchema)]` struct with `#[serde(deny_unknown_fields)]`,** taken as `Parameters(args)`; each field's `///` is its schema description. An undeclared key is a typo or guess serde would silently ignore (rmcp adds none of its own). A tool with no arguments still declares an empty struct (`init_data_dir`, `get_serve_status`, `list_limits`), so a caller naming its own data directory is refused instead of quietly served the one `-D` named.
+- **A call opens its own connection via `toolkit.with_fresh_mem()`,** never `self.toolkit`'s `mem`: rmcp runs calls concurrently, and a fresh `mem` lets `list_jobs` see a job file written after startup and `submit_job` seed the same inline id twice in a session. Otherwise follow the matching CLI command (`cli` skill):
+  - reads config: hold `toolkit.get_memory_conn()` and run `crud.init` (`list_jobs`, `submit_job`);
+  - reads only run history or disk tables: neither (`get_job_run`, `list_limits`);
+  - reads no database: opens nothing (`init_data_dir`, `get_serve_status`), so it works before a database exists.
+- **A failure is a tool result, not a protocol error:** `error_result(&err)` carries the anyhow chain verbatim (`{:#}`) so the model can fix its input.
+- **Results go through [tools/result.rs](../../../src/mcp/tools/result.rs):** `success_json` (text as `--json` prints it, plus the same value as `structured_content`), or `job_run_result` for a run that may carry the unserved-directory warning (a warned result drops `structured_content`). Serialize the struct, not a `serde_json::Value`, whose `BTreeMap` alphabetizes fields away from the CLI's order - unless the CLI prints that same `Value` (`status_json`).
+- **Waits are bounded by [src/mcp/wait.rs](../../../src/mcp/wait.rs):** `clamp_wait_seconds` (absent or `0` returns at once, above 300 clamps to 300) and `wait_for_settled_job_run`, which returns the unfinished run when the bound elapses - "still running, here is the id" is an answer, not an error. Before any wait over 0, call `ensure_data_dir_is_served`, or the tool hangs on a row nothing writes.
+- **Never import from `src/cli/` or `src/router/`;** shared needs (`JobRunDetail`, `parse_job_run_status`, `stop_job_run`, `delete_job_run`, ...) live in `src/shared/`. See the `frontends` skill; `tests/frontend_boundaries.rs` enforces it.
 - Design note: [docs/2026-09-11-mcp-server-design.md](../../../docs/2026-09-11-mcp-server-design.md).

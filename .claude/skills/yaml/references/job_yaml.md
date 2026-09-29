@@ -1,21 +1,18 @@
 # JobYaml
 
-[src/yaml_models/job_yaml.rs](../../../../src/yaml_models/job_yaml.rs) — one file per job under `<data_dir>/jobs/*.yml`, seeding `mem.job`, `mem.task` and `mem.task_dependent`.
+[src/yaml_models/job_yaml.rs](../../../../src/yaml_models/job_yaml.rs) — one file per job under `<data_dir>/jobs/*.yml`, seeding `mem.job`, `mem.task`, `mem.task_dependent`.
 
 ```yaml
 id: my-job
 name: My Job
-description: what it does
 tasks:
   - id: task-a
-    description: what this task does
     command: echo hello
   - id: task-b
     command: ./run.sh
     depends_on: [task-a]
     timeout: 600
     max_retries: 2
-    retry_delay: 30
 on_failure:
   email: [oncall@example.com]
   slack: ["#oncall"]
@@ -25,83 +22,89 @@ on_success:
 
 ## `JobYaml`
 
-A `[job_defaults]` default is the data dir's `config.toml` value, falling back to the number shown — the field is `Option` on the model and resolved by `CRUD::init`.
+"`[job_defaults]`, N": `Option` on the model, filled by `CRUD::init` from config.toml, else N.
 
-| Field | Required | Default | Notes |
-|---|---|---|---|
-| `id` | yes | — | Primary key of `mem.job`. The id CLI and API lookups filter on — **not** `name`. |
-| `name` | yes | — | Display label only, not unique. |
-| `description` | no | `""` | |
-| `max_parallel_runs` | no | `[job_defaults]`, `1` | How many runs of this job may be `Running` at once. **`0` means no limit.** Enforced only by `JobRunDispatcher::is_job_at_max_parallel_runs`, which holds the run `Queued`; submitting is never rejected for exceeding it. |
-| `keep_runs` | no | `[job_defaults]`, `100` | How many of this job's newest finished runs retention keeps. **`0` keeps every run of this job**, leaving `[retention] keep_runs_total` as the only bound. Carried onto `mem.job` and read there by `RetentionService` — see the [entities skill](../../entities/references/job.md). |
-| `parameters` | no | `{}` | Declared name to default value. A schedule's `jobs[].parameters` or `job submit --param` may override a declared name; naming one this job does not declare is a submit error, not a silent no-op. See the [entities skill](../../entities/references/job.md). |
-| `env` | no | `{}` | Environment variables for **every** task of this job. A task's own `env:` wins the names both of them set; the merge happens in `submit_job`, so `task_run.env` holds the merged result. |
-| `on_failure` | no | `{}` | Who to tell when a run of this job does not succeed. One key per channel — `email`, a list of addresses, and `slack`, a list of conversations (`#channel`, a channel id, or a user id) — told when a run is `Failed` or `TimedOut`, never when it is `Aborted`, which is somebody stopping it on purpose. A job may name both and gets **one notification per channel**; a channel it names nobody under produces none. **Naming a recipient of a channel `config.toml` does not configure fails startup**, in `CRUD::validate_job_notifications`, which checks each channel against its own section: a notification that silently never leaves is the one failure you cannot see from the run afterwards. One field per channel rather than a free map, for the reason `NotificationChannel` is an enum — see the [notifications skill](../../notifications/SKILL.md). A block rather than a bare `notify_email:` so the action to run on a failure can join it later. |
-| `on_success` | no | `{}` | The same block, `JobYamlNotify` again, for a run that ends `Succeeded`. Addressed independently of `on_failure` — a failure wakes whoever is on call, a success reassures whoever is waiting on the data — and validated by the same startup check, whose error names the block as well as the channel. A job naming both gets a notification row for each, and its one ending delivers exactly one of them. |
-| `limits` | no | `[]` | Named concurrency limits this job claims, resolved against `[concurrency_limits]` in config.toml. Claimed by every one of this job's tasks, on top of each task's own. Not validated here — a name config.toml has never heard of still parses and seeds. |
-| `tasks` | no | `[]` | A job with no tasks is legal; its job runs finish `Succeeded` immediately. |
+| Field | Default | Notes |
+|---|---|---|
+| `id` | required | `mem.job` primary key; what lookups filter on — **not** `name`. |
+| `name` | required | Display label, not unique. |
+| `description` | `""` | |
+| `max_parallel_runs` | `[job_defaults]`, `1` | **`0` = no limit.** Enforced only by `JobRunDispatcher::is_job_at_max_parallel_runs` holding the run `Queued`; submit never rejects. |
+| `keep_runs` | `[job_defaults]`, `100` | Newest finished runs retention keeps; **`0` keeps all** (only `[retention] keep_runs_total` bounds it). Read by `RetentionService` — [entities](../../entities/references/job.md). |
+| `parameters` | `{}` | Name → default. A schedule or `job submit --param` may override a declared name; an undeclared one is a submit error. [entities](../../entities/references/job.md). |
+| `env` | `{}` | For **every** task; see [which env wins](#which-env-wins). |
+| `secret_env` | `{}` | Variable name → `[secrets]` name. Only the name travels (row, dashboard, `--json`); the value is resolved at spawn. |
+| `on_failure` | `{}` | `JobYamlNotify`: `email` (addresses), `slack` (`#channel`, channel id or user id). Sent on `Failed`/`TimedOut`, never `Aborted`. One notification per channel with recipients. **A recipient on a channel config.toml doesn't configure fails startup** (`CRUD::validate_job_notifications`) — a notification that never leaves is invisible afterwards. Fields per channel, not a map, as `NotificationChannel` is an enum ([notifications skill](../../notifications/SKILL.md)). |
+| `on_success` | `{}` | Same shape and check, for `Succeeded`; addressed independently (failure wakes on-call, success tells whoever waits on the data). A run's ending delivers exactly one of the two. |
+| `limits` | `[]` | `[concurrency_limits]` names, claimed by every task on top of its own. Unknown name fails startup (`CRUD::validate_job_limits`). |
+| `tasks` | `[]` | No tasks is legal; the run finishes `Succeeded` at once. |
 
 ## `JobYamlTask`
 
-| Field | Required | Default | Notes |
-|---|---|---|---|
-| `id` | yes | — | Unique within the job — `mem.task`'s key is `(task_id, job_id)`. |
-| `description` | no | `""` | What the task does, in words. The job page's task table shows this rather than the command. |
-| `command` | yes | — | Run as `sh -c <command>`, so shell syntax works. |
-| `depends_on` | no | `[]` | Task ids **of the same job**. |
-| `limits` | no | `[]` | Named concurrency limits this task claims, on top of whatever its job claims. Same validation story as the job's own `limits:` — none, yet. |
-| `timeout` | no | `[job_defaults]`, `3600` | Seconds. Applies per *attempt*, not to the task run as a whole. |
-| `max_retries` | no | `[job_defaults]`, `0` | Total executions are `1 + max_retries`; only a `Failed` attempt is retried. |
-| `retry_delay` | no | `[job_defaults]`, `60` | Seconds to wait after a failed attempt before the next one starts. Enforced by `TaskRunAttemptDispatcher::should_stay_queued`, measured from the retry row's `created_at`. |
-| `env` | no | `{}` | Environment variables for this task, layered over the job's `env:` and then over whatever flowlite itself inherited. A name set here beats the same name on the job. Shown on the task page, `/jobs/{job_id}/tasks/{task_id}` — the job's own `env:` is not shown anywhere in the UI. |
-| `working_dir` | no | `""` | The command's working directory. Empty means inherit the server's own. |
+| Field | Default | Notes |
+|---|---|---|
+| `id` | required | Unique within the job (`mem.task` key `(task_id, job_id)`); ASCII letters, digits, `-`, `_`. |
+| `description` | `""` | Shown in the job page's task table instead of the command. |
+| `command` | required | Run as `sh -c <command>`. |
+| `stdin` | `""` | Fed to stdin verbatim, no shell expansion; empty means null stdin. |
+| `depends_on` | `[]` | Task ids **of the same job**. |
+| `limits` | `[]` | On top of the job's; same check. |
+| `timeout` | `[job_defaults]`, `3600` | Seconds, per *attempt*. |
+| `max_retries` | `[job_defaults]`, `0` | `1 + max_retries` executions; only `Failed` retries. |
+| `retry_delay` | `[job_defaults]`, `60` | Seconds, enforced by `TaskRunAttemptDispatcher::should_stay_queued` from the retry row's `created_at`. |
+| `env`, `secret_env` | `{}` | Over the job's. Task `env` is shown on `/jobs/{job_id}/tasks/{task_id}`; the job's `env` nowhere in the UI. |
+| `working_dir` | `""` | Empty inherits the server's. |
 
-## Which `env:` wins
-
-Both blocks use the same syntax and the same coercion. They are layered, most general
-first, so the more specific declaration wins:
+## Which env wins
 
 ```
-the environment flowlite itself was started with
-  ← the job's env:
-  ← the task's env:
-  ← FLOWLITE_PARAM_* from the run's resolved parameters
-  ← the injected FLOWLITE_* run metadata
+flowlite's own environment (FLOWLITE_* stripped)
+  ← env:        (job's, overridden by task's)
+  ← secret_env: resolved values (job's, overridden by task's)
+  ← FLOWLITE_PARAM_* from resolved parameters
+  ← injected FLOWLITE_* run metadata
 ```
 
-The first two are merged once, at submit, and snapshotted onto `task_run.env` — so a task
-run records the environment it will actually run with, and a rerun replays it. The last two
-are composed at spawn by `build_task_run_attempt_env`. A task cannot opt out of the job's
-block; declaring the same name with a different value is how you override it.
+Job and task maps merge at submit into `task_run.env` / `task_run.secret_env`, so a rerun replays them; a task's name wins across blocks too (task `env: X` drops the job's `secret_env: X`, and vice versa). `build_task_run_attempt_env` applies the rest at spawn — secrets after `env:` so a plain value can't shadow a credential, metadata last so a command can't be misled about its run. Redeclaring a name is the only way to override the job's.
 
-## `parameters` and `env`: what a scalar becomes
+## What a scalar becomes
 
-Both fields, and `ScheduleYamlJob.parameters` in the [schedule YAML](schedule_yaml.md), share one deserializer, `deserialize_string_map` ([src/yaml_models/string_map.rs](../../../../src/yaml_models/string_map.rs)), because every one of them has to end up as a string an environment variable can carry:
+`env`, `secret_env`, `parameters` and `ScheduleYamlJob.parameters` share `deserialize_string_map` ([src/yaml_models/string_map.rs](../../../../src/yaml_models/string_map.rs)):
 
 | YAML value | Result |
 |---|---|
-| A string | Kept as written. |
-| A number or boolean | Coerced to its string form — `retries: 3` becomes `"3"`. This is YAML 1.2 numeric parsing, not a copy of the text: `version: 1.10` becomes `"1.1"`, `1e3` becomes `"1000.0"` and `0x1F` becomes `"31"` — while `yes` and `007` are not numbers under YAML 1.2 and are kept as written. Quote a value you want preserved literally. |
-| A nested map or list | Rejected, naming the key: `'<key>' is a map, but only a string, a number or a boolean can reach a command`. |
-| A bare `key:` (YAML null) | Rejected: `'<key>' has no value - write "" for an empty one`. A forgotten value and a deliberate empty one are not the same mistake, so the error says how to write the one that's legal. |
+| String | As written. |
+| Number / bool | YAML 1.2 form, not source text: `1.10` → `"1.1"`, `1e3` → `"1000.0"`, `0x1F` → `"31"`; `yes`, `007` stay as written. Quote to keep literal. |
+| Map / list | `'<key>' is a map, but only a string, a number or a boolean can reach a command` |
+| Bare `key:` | `'<key>' has no value - write "" for an empty one` |
 
 ## What one task becomes
 
-`CRUD::init` writes each task's `depends_on` to **two** places from the same list: `task.depends_on` as a JSON array on the task row, and one normalized `task_dependent` row per edge. `task.depends_on` is the list a run's dependency graph is built *from*, not the one the runtime resolves — `CRUD::submit_job` copies it onto the run's own rows, and `TaskRunDispatcher::get_dependent_task_runs` resolves that copy (`task_run.depends_on`). `task_dependent` is read by nothing. See [task](../../entities/references/task.md) and [task_dependent](../../entities/references/task_dependent.md) in the entities skill.
+`CRUD::init` writes `depends_on` both as JSON on `task.depends_on` and as `task_dependent` rows. `submit_job` copies `task.depends_on` onto the run, and `TaskRunDispatcher::get_dependent_task_runs` resolves `task_run.depends_on`; **`task_dependent` is read by nothing** ([task](../../entities/references/task.md), [task_dependent](../../entities/references/task_dependent.md)).
 
-Submitting the job then creates one `task_run` per task, all `Queued`, each carrying a snapshot of its task's `command`, `depends_on`, `timeout`, retry settings, `env` and `working_dir` — so the run executes the definition it was submitted with, whatever the YAML says later. `job.parameters` goes through the same resolution the `job_run` above it does, not a per-task copy: there is one resolved set per run, not one per task. Dependency order is enforced at dispatch time, not at submission. See the [orchestrator skill](../../orchestrator/references/task_run.md).
+Submit creates one `Queued` `task_run` per task, snapshotting `command`, `stdin`, `depends_on`, `timeout`, retry settings, `env`, `secret_env`, `working_dir` — later YAML edits don't affect it. Parameters resolve once per job run. Dependency order is enforced at dispatch ([orchestrator skill](../../orchestrator/references/task_run.md)).
 
 ## Validation
 
-`CRUD::validate_job_tasks` runs right after `from_yaml`, before any insert, and rejects the whole startup on:
+At parse, in `from_yaml_str` (file-only fields, so checked once here rather than on every read):
 
-| | Message |
+| Rule | Why |
 |---|---|
-| A task id declared twice | `Task 'a' is declared more than once` |
-| A task depending on itself | `Task 'a' depends on itself` |
-| A `depends_on` id that is not a task of this job | `Task 'a' depends on 'nope', which is not a task of this job` |
-| A cycle | `Tasks depend on each other in a cycle: a -> c -> b -> a` |
+| Task id: ASCII letters, digits, `-`, `_` | Path component (`.output/<id>.<attempt>`) and part of `FLOWLITE_INPUT_<ID>`. |
+| No two ids map to one `FLOWLITE_INPUT_*` (`load-raw`/`load_raw`) | A dependent would get one path for two results. |
+| `secret_env` variable: valid env name, not `FLOWLITE_*` | Metadata is applied last and would overwrite it. |
+| Secret name: lowercase, digits, `_`, no `__` | `FLOWLITE_SECRETS__*` can't carry others; `__` splits into nested keys. |
+| A name not in both `env` and `secret_env` at one level | Per level, so a task may still override a job's name across blocks. |
 
-It lives in `CRUD::init` rather than on the model because each rule needs the whole task list, and it exists because `TaskRunDispatcher` waits for every dependency to succeed — any of the four would leave the task runs `Queued` and their job run `Running` forever.
+In `CRUD::seed_job`, before any insert, `validate_job_tasks` fails startup on:
 
-Note what is *not* checked: a duplicate `id` across two job files is caught only by the `mem.job` primary key, as a `UNIQUE constraint failed` wrapped in the file name.
+| Case | Message |
+|---|---|
+| Duplicate task id | `Task 'a' is declared more than once` |
+| Self-dependency | `Task 'a' depends on itself` |
+| Unknown dependency | `Task 'a' depends on 'nope', which is not a task of this job` |
+| Cycle | `Tasks depend on each other in a cycle: a -> c -> b -> a` |
+
+Each would leave task runs `Queued` and the job run `Running` forever, since `TaskRunDispatcher` waits for every dependency to succeed.
+
+Not checked: the same job `id` in two files fails only on the `mem.job` primary key (`UNIQUE constraint failed`, wrapped with the file name).

@@ -5,47 +5,37 @@
 ```yaml
 id: nightly
 name: Nightly
-description: runs the pipeline every night
 cron: "0 0 3 * * *"
 timezone: Europe/Vienna
 start_date: 2026-01-01
 end_date: 2026-12-31
-disabled: false
 submit_ahead: 1
 jobs:
   - id: my-job
 ```
 
-## `ScheduleYaml`
+## Fields
 
-| Field | Required | Default | Notes |
-|---|---|---|---|
-| `id` | yes | — | Primary key of `mem.schedule`. |
-| `name` | yes | — | Display label only. |
-| `description` | no | `""` | |
-| `cron` | yes | — | Parsed into a `cron::Schedule` at load, so an invalid expression fails startup naming the file. |
-| `timezone` | no | `[schedule_defaults]`, `UTC` | A `chrono_tz::Tz` name, e.g. `Europe/Vienna`. The cron expression is evaluated in it. `Option` on the model: `CRUD::init` resolves a `None` against config.toml. |
-| `start_date` | no | `None` | Date only. Occurrences before it are pulled forward to it. |
-| `end_date` | no | `None` | Date only, inclusive to `23:59:59`. Past it the schedule stops firing for good. |
-| `disabled` | no | `false` | A disabled schedule desires zero occurrences, so the reconcile takes back whatever it had outstanding rather than submitting more. |
-| `submit_ahead` | no | `1` | How many occurrences to keep submitted ahead of their time. Refused at `0` — that state already has a clearer spelling, `disabled: true`. |
-| `jobs` | no | `[]` | The jobs submitted on each occurrence. |
-
-`start_date` and `end_date` are `Option`, so omitting them is fine even without `#[serde(default)]`.
-
-## `ScheduleYamlJob`
-
-| Field | Required | Default | Notes |
-|---|---|---|---|
-| `id` | yes | — | A job id. A foreign key on `mem.schedule_job` checks it exists — see below. |
-| `parameters` | no | `{}` | Overrides of the job's declared `parameters`, by name, through the same scalar-coercion rule as [`JobYamlTask.env`](job_yaml.md#parameters-and-env-what-a-scalar-becomes). |
+| Field | Default | Notes |
+|---|---|---|
+| `id` | required | `mem.schedule` primary key. |
+| `name` | required | Display label. |
+| `description` | `""` | |
+| `cron` | required | Parsed to `cron::Schedule` at load; invalid fails startup naming the file. |
+| `timezone` | `[schedule_defaults]`, `UTC` | `chrono_tz::Tz` name the cron is evaluated in; `Option`, filled by `CRUD::init`. |
+| `start_date` | none | Date; earlier occurrences are pulled forward to it. |
+| `end_date` | none | Date, inclusive to `23:59:59`; past it the schedule never fires. |
+| `disabled` | `false` | Desires zero occurrences. |
+| `submit_ahead` | `1` | Occurrences kept submitted ahead. `0` refused (`#[validate(range(min = 1))]`) — use `disabled: true`. Default on the model, not config: it is per schedule. |
+| `jobs[].id` | required | Job id; a `mem.schedule_job` foreign key checks it. **Once per schedule** (`no_duplicate_job_ids`) — a second entry would submit a duplicate run every occurrence. |
+| `jobs[].parameters` | `{}` | Overrides of the job's declared `parameters`, coerced as in [job_yaml.md](job_yaml.md#what-a-scalar-becomes). |
 
 ## Gotchas
 
-- **`cron` takes six fields, seconds first** (`sec min hour dom month dow`), the `cron` crate's dialect. A five-field crontab expression means something else here — `"*/15 * * * * *"` is every 15 *seconds*.
-- **`parameters` is no longer inert, but an unknown name is caught at submit time, not at startup like the job-id foreign key below.** `Scheduler::submit_missing_runs` passes it straight to `CRUD::submit_job`, which raises if a name here isn't declared on the job; the scheduler `eprintln!`s the error and moves on to the schedule's next job rather than crashing, so a typo here fails that job on every occurrence of the schedule until the file is fixed, rather than stopping the server from starting. `.config/schedules/example_schedule.yml` uses a `variables:` key that isn't even a field — unknown keys are dropped silently.
-- **An unknown job id stops the server from starting.** `mem.schedule_job.job_id` is a foreign key to `mem.job` and `PRAGMA foreign_keys` is on (sqlx enables it by default), so `CRUD::init` — which inserts every job before any `schedule_job` — aborts the config transaction with `(code: 787) FOREIGN KEY constraint failed` and the process exits. There is no half-loaded config and no stuck job run: a typo in one schedule file stops `serve`, `job list` and `job submit` until it is fixed.
+- **`cron` has six fields, seconds first** (`sec min hour dom month dow`). `"*/15 * * * * *"` is every 15 *seconds*.
+- **An undeclared parameter name fails at submit, not startup.** `Scheduler::submit_if_missing` calls `CRUD::submit_job`, which raises; the scheduler `eprintln!`s and moves on, so that job fails every occurrence until fixed. An unknown *key* is silently dropped.
+- **An unknown job id stops startup.** `CRUD::init` inserts jobs first, then `schedule_job` hits `(code: 787) FOREIGN KEY constraint failed` (`PRAGMA foreign_keys` is on by sqlx default); the transaction aborts, so `serve`, `job list` and `job submit` all fail until fixed.
 
 ## What the scheduler does with it
 
-`CRUD::init` inserts the row and nothing more; a schedule's next run is not stored anywhere, the dashboard derives it per request. `Scheduler` reconciles every row on every pass, `disabled` or not: it computes this schedule's next `submit_ahead` occurrences and submits a job run for whichever of them has none yet. **It only ever adds.** Past `end_date` or while `disabled`, `CronTrigger::get_next_runs` yields no occurrence at all, so the pass writes nothing — but it takes nothing back either: a run already written stays `Scheduled`, and is released and executed at its instant like any other. Disabling a schedule tonight does not call off the run it wrote this morning; `flowlite job-run delete <id>` or `job-run stop <id>` is what does, and while the schedule still wants that occurrence the next pass writes it again. The reconcile never decides a run is *due* — [`JobRunReleaser`](../../orchestrator/SKILL.md) does that, once a `Scheduled` run's `scheduled_at` arrives. See the [scheduler skill](../../scheduler/SKILL.md).
+The next run isn't stored (the dashboard derives it). Each pass, `Scheduler` takes every schedule, `disabled` or not, computes its next `submit_ahead` occurrences and submits a run for any that has none. **It only adds.** Disabled or past `end_date`, `CronTrigger::get_next_runs` yields nothing — and a run already written stays `Scheduled` and runs. To call it off: `flowlite job-run stop <id>` (the row keeps the occurrence, so it isn't rewritten) or `job-run delete <id>` (frees it, so a schedule still wanting it writes it again). Deciding a run is *due* belongs to [`JobRunReleaser`](../../orchestrator/SKILL.md). See the [scheduler skill](../../scheduler/SKILL.md).

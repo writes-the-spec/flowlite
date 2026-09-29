@@ -1,25 +1,21 @@
 # `task_run_attempt_output` (disk)
 
-The output of one [`task_run_attempt`](task_run_attempt.md), in chunks. **Append-only** — there is no update method, and no chunk is ever rewritten or deleted.
+stdout/stderr of one [`task_run_attempt`](task_run_attempt.md), in chunks. **Append-only**: no update method, no chunk rewritten.
 
 | Column | Meaning |
 |---|---|
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`. **Also the ordering** — see below. |
 | `task_run_attempt_id` | Foreign key to [`task_run_attempt`](task_run_attempt.md). |
-| `task_run_id` | Foreign key to [`task_run`](task_run.md). What the task-run page filters on. |
-| `job_run_id` | Foreign key to [`job_run`](job_run.md). What `job-run logs` filters on. |
-| `job_id`, `task_id` | Denormalized text, like [`task_run_attempt`](task_run_attempt.md) carries them. `job_run_id` + `task_id` is `job-run logs --task`. |
-| `stream` | `TaskRunAttemptOutputStream` — `stdout` or `stderr`. The streams stay apart because a task that failed usually explains itself on stderr while stdout still holds whatever it managed to produce. |
+| `task_run_id` | Foreign key to [`task_run`](task_run.md). |
+| `job_run_id` | Foreign key to [`job_run`](job_run.md). |
+| `job_id`, `task_id` | Denormalized text, as on [`task_run_attempt`](task_run_attempt.md). |
+| `stream` | `TaskRunAttemptOutputStream` — `stdout` or `stderr`, kept apart since a failing task explains itself on stderr. |
 | `created_at` | Bound from `Toolkit`. |
 | `content` | `TEXT NOT NULL`, already-validated UTF-8. Never empty: a stream with nothing new writes no row. |
 
-## Why `id` is the ordering and there is no `seq`
+**`id` is the ordering; no `seq`.** One writer inserts in write order, so `ORDER BY id` is write order — a contract `group_task_run_attempt_output` relies on from `select_task_run_attempt_outputs`.
 
-Every chunk of one stream is inserted by one writer in write order, so `ORDER BY id` *is* write order. A `seq` column would be a second source of truth for the same fact, and `group_task_run_attempt_output` depends on the order rather than re-deriving it — which is why the sort is a contract with `select_task_run_attempt_outputs`, not an incidental choice.
-
-## Why every parent id is carried
-
-The same reason [`task_run_attempt`](task_run_attempt.md) carries its own: **a log view should not join through `task_run` to find the rows it wants.** Each reader filters by the parent it is already about, exactly, in one query:
+**Every parent id is carried** so each view is one indexed query, not N+1 or an `IN (...)` list (and `IN ()` is a syntax error):
 
 | Reader | Filter | Reads |
 |---|---|---|
@@ -27,30 +23,22 @@ The same reason [`task_run_attempt`](task_run_attempt.md) carries its own: **a l
 | `job-run logs` | `job_run_id` | every attempt of that job run |
 | `job-run logs --task X` | `job_run_id` + `task_id` | only that task's attempts |
 
-Each of those is one indexed query for a whole view. Without the columns it is one query per attempt — the N+1 these exist to avoid — or an `IN (...)` list of ids the caller has to collect first, which also has to special-case the empty list, since `IN ()` is a syntax error.
+Retention's delete is then one `DELETE ... WHERE job_run_id = ?`.
 
-They also make the pruning `RetentionService` needs a single statement (`DELETE ... WHERE job_run_id = ?`) rather than a correlated subquery.
+**One row per stream per pass**: `TaskRunAttemptMonitor` coalesces a pass's chunks, so bytes written equal bytes produced (not the square, as rewriting a whole column each pass would be).
 
-## One row per stream per pass
-
-`TaskRunAttemptMonitor` coalesces everything its reader tasks delivered on a pass into a single `content` per stream, so writes are at most two inserts per attempt per second and **total bytes written equal total bytes the task produced.** The `stdout`/`stderr` columns this replaced were rewritten whole on every pass, which cost the square of the output size — that is the defect this table exists to fix.
-
-Output is capped at `MAX_STREAM_BYTES` (1 MiB) per stream, enforced in the reader, which bounds both this table and the memory in flight. Past the cap the reader keeps reading and stops recording, and appends one marker chunk saying so. **A cap that stopped reading would block the child on a full 64 KiB pipe and turn a noisy task into a hung one.**
-
-The cap bounds one attempt; pruning over time is `RetentionService`'s job, not this table's own — see **Deleted by** below.
+**Capped per stream by `[orchestrator] max_stream_bytes`** (default 1 MiB) in the reader, bounding the table and memory in flight: past it, a head and tail are kept, the middle dropped, with marker chunks saying so. **The reader keeps reading after the cap** — stopping would block the child on a full 64 KiB pipe and hang a noisy task.
 
 ## Written by
 
-`TaskRunAttemptMonitor` alone ([src/orchestrator/task_run_attempt_monitor.rs](../../../../src/orchestrator/task_run_attempt_monitor.rs)), from the chunks the two reader tasks per attempt deliver — see [src/orchestrator/task_run_attempt_reader.rs](../../../../src/orchestrator/task_run_attempt_reader.rs). Inserted on every pass while the process is alive, and once more after a final drain when it ends.
-
-That final insert happens **before** the terminal status is written, so an attempt that reads as terminal has complete output. The per-pass insert is a data-only write and deliberately publishes no wake-up.
+`TaskRunAttemptMonitor` alone ([src/orchestrator/task_run_attempt_monitor.rs](../../../../src/orchestrator/task_run_attempt_monitor.rs)), from its two reader tasks per attempt ([src/orchestrator/task_run_attempt_reader.rs](../../../../src/orchestrator/task_run_attempt_reader.rs)): each pass while the process lives (no wake-up published), then after a final drain **before** the terminal status — so a terminal attempt has complete output.
 
 ## Deleted by
 
-`RetentionService`, along with the [`job_run`](job_run.md) each row belongs to — see [job_run.md](job_run.md#deleted-by) for the policy.
+`RetentionService`, with its [`job_run`](job_run.md) — see [job_run.md](job_run.md#deleted-by).
 
 ## Read by
 
-The task-run web route ([src/router/app/routes/task_runs/task_run_id/route.rs](../../../../src/router/app/routes/task_runs/task_run_id/route.rs)) and `job-run logs` ([src/cli/commands/job_run.rs](../../../../src/cli/commands/job_run.rs)). Both group with `group_task_run_attempt_output`, and both resolve a missing attempt to `TaskRunAttemptOutputStreams::default()` — an attempt with no rows printed nothing, which is empty output rather than unknown output. That `unwrap_or_default` is what keeps output a `String` instead of an `Option<String>` now that the `NOT NULL` columns are gone.
+The task-run web route ([src/router/app/routes/task_runs/task_run_id/route.rs](../../../../src/router/app/routes/task_runs/task_run_id/route.rs)), and `job-run logs` ([src/cli/commands/job_run.rs](../../../../src/cli/commands/job_run.rs)) and the MCP `get_job_run_logs` tool through `CRUD::select_task_run_attempt_logs`; also `NotificationService`, for the output a message quotes. They group with `group_task_run_attempt_output`; an attempt with no rows is `TaskRunAttemptOutputStreams::default()` — empty, not unknown, so output is a `String`, not `Option<String>`.
 
-No orchestrator service reads it. Output is not a channel between services; only statuses are.
+No orchestrator service reads it: only statuses pass between services.
