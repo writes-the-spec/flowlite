@@ -37,13 +37,8 @@ impl CRUD {
     /// Answers the ids of every run it deleted, descendants included.
     ///
     /// The filter is resolved to ids *inside* that transaction, so the guard a caller
-    /// expresses in the filter and the delete it authorises are one atomic step. The
-    /// Scheduler's reconcile is the caller that needs it: it deletes only runs that are
-    /// still `Scheduled` and still in the future, and `JobRunReleaser` may promote such a
-    /// row at any moment. Resolving the ids on the plain connection first would leave a
-    /// window in which the releaser promotes a run between the check and the delete, and
-    /// the reconcile would then cancel a run at the exact instant it came due, along with
-    /// its task runs.
+    /// expresses in the filter and the delete it authorises are one atomic step: a status
+    /// in the filter cannot change between the check and the delete.
     ///
     /// `status`, `job_id`, `id` and `schedule_id` are `AND` clauses the database applies;
     /// `scheduled_at_gt` is applied in Rust over the rows that select returned, since

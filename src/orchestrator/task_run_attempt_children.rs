@@ -91,9 +91,8 @@ impl TaskRunAttemptChildren {
     /// Kills every process still running, for shutdown. Takes them out of the map as it
     /// goes, so nothing polling afterwards finds a process that is already dead.
     ///
-    /// The attempt rows are left Running, and the next start cannot settle them either:
-    /// its monitor raises on an attempt with no process, so the row stays Running and is
-    /// logged once a second.
+    /// The attempt rows are left Running on purpose: writing statuses here would race the
+    /// pollers. `Orchestrator::recover` settles them on the next start.
     pub async fn kill_all(self: &Self) {
 
         let mut children = self.children.lock().await;
@@ -115,7 +114,7 @@ mod tests {
     use crate::test_support::reading_the_environment;
 
     /// Shutting down has to reach the command's whole process tree, the same as a timeout
-    /// or a stop: leaving it running is what makes the next start's Aborted a lie.
+    /// or a stop: leaving it running is what makes the next start's Invalid a lie.
     #[tokio::test]
     async fn kill_all_kills_the_process_group_of_every_attempt() {
 

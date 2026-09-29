@@ -403,7 +403,7 @@ impl TaskRunAttemptMonitor {
         }
 
         // No publish: this runs on every pass for every running attempt and changes no
-        // status, so waking all six pollers here would put the bus back into a loop.
+        // status, so waking all seven pollers here would put the bus back into a loop.
         Ok(())
     }
 

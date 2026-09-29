@@ -22,7 +22,7 @@ pub struct McpServer {
 }
 
 /// This block keeps `allow_empty` because it still declares no `#[tool]` fn of its own -
-/// the six tools live one to a file under `tools/`, each with its own `#[tool_router]`
+/// the tools live one to a file under `tools/`, each with its own `#[tool_router]`
 /// block, which `tools/mod.rs`'s `tools_router` adds together for the composition below.
 /// The attribute is a compile error on an empty block without it.
 #[tool_router(allow_empty)]
