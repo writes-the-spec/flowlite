@@ -77,10 +77,10 @@ fn own_task_run_attempt_id() -> Option<i64> {
 /// With a `bound`, the run is returned unfinished once it elapses - never as an error, so
 /// the caller keeps the id to ask again.
 ///
-/// Inside a task, the task's own attempt is marked as waiting for the length of the poll,
-/// so it holds no concurrency slot while it sleeps. The bound is applied between the mark
-/// and the clear rather than around this call, so that elapsing still clears the mark. A
-/// cancelled wait does leave it behind, which stops mattering once the attempt settles.
+/// Inside a task, the task's own attempt is marked as waiting on every pass of the poll,
+/// so it holds no concurrency slot while it sleeps. The bound is applied inside the poll
+/// rather than around this call, so that elapsing still clears the mark. A cancelled wait
+/// does leave it behind, which stops mattering once the attempt settles.
 pub(crate) async fn wait_for_job_run(
     crud: &CRUD,
     conn: &mut sqlx::SqliteConnection,
@@ -101,18 +101,14 @@ async fn wait_as_attempt(
     task_run_attempt_id: Option<i64>,
 ) -> anyhow::Result<JobRun> {
 
-    if let Some(task_run_attempt_id) = task_run_attempt_id {
-        set_waiting_since(crud, conn, task_run_attempt_id, Some(Utc::now())).await;
-    }
-
     let polled = match bound {
 
-        None => poll_until_settled(crud, conn, job_run_id, poll_interval).await,
+        None => poll_until_settled(crud, conn, job_run_id, poll_interval, task_run_attempt_id).await,
 
         Some(bound) => {
             let bounded = tokio::time::timeout(
                 bound,
-                poll_until_settled(crud, conn, job_run_id, poll_interval),
+                poll_until_settled(crud, conn, job_run_id, poll_interval, task_run_attempt_id),
             ).await;
 
             match bounded {
@@ -168,13 +164,22 @@ async fn poll_until_settled(
     conn: &mut sqlx::SqliteConnection,
     job_run_id: i64,
     poll_interval: std::time::Duration,
+    task_run_attempt_id: Option<i64>,
 ) -> anyhow::Result<JobRun> {
+
+    let waiting_since = Utc::now();
 
     loop {
         let job_run = select_job_run(crud, &mut *conn, job_run_id).await?;
 
         if job_run.status.is_finished() {
             return Ok(job_run);
+        }
+
+        // Stamped on every pass rather than once: two waits in one task share the mark,
+        // and the first to return clears it while the other is still asleep.
+        if let Some(task_run_attempt_id) = task_run_attempt_id {
+            set_waiting_since(crud, conn, task_run_attempt_id, Some(waiting_since)).await;
         }
 
         tokio::time::sleep(poll_interval).await;
@@ -292,6 +297,35 @@ mod tests {
         assert!(error.contains("404"), "{error}");
     }
 
+    /// An unbounded wait on `job_run_id` from inside `task_run_attempt_id`, polling every 5ms.
+    fn spawn_wait(
+        db: &TestDb,
+        job_run_id: i64,
+        task_run_attempt_id: i64,
+    ) -> tokio::task::JoinHandle<anyhow::Result<JobRun>> {
+
+        let crud = db.crud.clone();
+        let conn_pool = db.conn_pool.clone();
+
+        tokio::spawn(async move {
+            let mut conn = conn_pool.acquire().await.unwrap();
+            let poll_interval = Duration::from_millis(5);
+
+            wait_as_attempt(&crud, &mut conn, job_run_id, poll_interval, None, Some(task_run_attempt_id)).await
+        })
+    }
+
+    async fn succeed_job_run(db: &TestDb, job_run_id: i64) {
+        db.crud.update_job_runs(&*db.conn_pool, &UpdateJobRunsData {
+            input: UpdateJobRunsDataInput {
+                status: Some(JobRunStatus::Succeeded),
+                started_at: None,
+                finished_at: None,
+            },
+            filter: UpdateJobRunsDataFilter { id: Some(job_run_id) },
+        }).await.unwrap();
+    }
+
     /// The mark is live only for the length of the wait: set while polling, gone once the
     /// run settled and the call returned.
     #[tokio::test]
@@ -303,31 +337,42 @@ mod tests {
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
         let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
 
-        let crud = db.crud.clone();
-        let conn_pool = db.conn_pool.clone();
-        let job_run_id = job_run.id;
-        let attempt_id = attempt.id;
-
-        let wait = tokio::spawn(async move {
-            let mut conn = conn_pool.acquire().await.unwrap();
-            let poll_interval = Duration::from_millis(5);
-
-            wait_as_attempt(&crud, &mut conn, job_run_id, poll_interval, None, Some(attempt_id)).await
-        });
+        let wait = spawn_wait(&db, job_run.id, attempt.id);
 
         tokio::time::sleep(Duration::from_millis(30)).await;
         assert!(db.task_run_attempt(attempt.id).await.waiting_since.is_some());
 
-        db.crud.update_job_runs(&*db.conn_pool, &UpdateJobRunsData {
-            input: UpdateJobRunsDataInput {
-                status: Some(JobRunStatus::Succeeded),
-                started_at: None,
-                finished_at: None,
-            },
-            filter: UpdateJobRunsDataFilter { id: Some(job_run.id) },
-        }).await.unwrap();
+        succeed_job_run(&db, job_run.id).await;
 
         wait.await.unwrap().unwrap();
+
+        assert_eq!(db.task_run_attempt(attempt.id).await.waiting_since, None);
+    }
+
+    /// The first of two waits in one task to return clears the shared mark; the other puts
+    /// it back on its next pass rather than leaving the attempt counted while it sleeps.
+    #[tokio::test]
+    async fn a_second_wait_in_the_same_task_restores_the_mark_the_first_cleared() {
+
+        let db = TestDb::new().await;
+
+        let first_run = db.insert_job_run(JobRunStatus::Running).await;
+        let second_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(first_run.id, TaskRunStatus::Running).await;
+        let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
+
+        let first_wait = spawn_wait(&db, first_run.id, attempt.id);
+        let second_wait = spawn_wait(&db, second_run.id, attempt.id);
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        succeed_job_run(&db, first_run.id).await;
+        first_wait.await.unwrap().unwrap();
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(db.task_run_attempt(attempt.id).await.waiting_since.is_some());
+
+        succeed_job_run(&db, second_run.id).await;
+        second_wait.await.unwrap().unwrap();
 
         assert_eq!(db.task_run_attempt(attempt.id).await.waiting_since, None);
     }
