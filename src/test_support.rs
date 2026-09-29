@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGua
 use axum::Json;
 use axum::extract::State;
 use axum::routing::post;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use crate::app_config::{AppConfig, AppConfigOrchestrator, AppConfigSlack};
 use crate::crud::CRUD;
 use crate::crud::job::{InsertJobData, InsertJobDataInput, Job, SelectJobsData, SelectJobsDataFilter};
@@ -700,6 +700,7 @@ impl TestDb {
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
                     status: TaskRunStatus::Running,
+                    idle_timeout: 0,
                 },
             },
         ).await.unwrap();
@@ -734,6 +735,7 @@ impl TestDb {
                     secret_env: BTreeMap::new(),
                     working_dir: working_dir.to_string(),
                     status: TaskRunStatus::Running,
+                    idle_timeout: 0,
                 },
             },
         ).await.unwrap();
@@ -767,6 +769,7 @@ impl TestDb {
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
                     status: TaskRunStatus::Running,
+                    idle_timeout: 0,
                 },
             },
         ).await.unwrap();
@@ -802,6 +805,7 @@ impl TestDb {
                     secret_env,
                     working_dir: String::new(),
                     status: TaskRunStatus::Running,
+                    idle_timeout: 0,
                 },
             },
         ).await.unwrap();
@@ -831,6 +835,7 @@ impl TestDb {
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
                     status: TaskRunStatus::Waiting,
+                    idle_timeout: 0,
                 },
             },
         ).await.unwrap();
@@ -865,6 +870,7 @@ impl TestDb {
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
                     status: TaskRunStatus::Running,
+                    idle_timeout: 0,
                 },
             },
         ).await.unwrap();
@@ -894,6 +900,7 @@ impl TestDb {
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
                     status: TaskRunStatus::Running,
+                    idle_timeout: 0,
                 },
             },
         ).await.unwrap();
@@ -922,6 +929,7 @@ impl TestDb {
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
                     status,
+                    idle_timeout: 0,
                 },
             },
         ).await.unwrap();
@@ -955,6 +963,7 @@ impl TestDb {
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
                     status,
+                    idle_timeout: 0,
                 },
             },
         ).await.unwrap();
@@ -1217,7 +1226,7 @@ impl TestDb {
             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
         }
 
-        self.hand_over(task_run_attempt, child, times_out_at).await;
+        self.hand_over(task_run_attempt, child, times_out_at, None).await;
     }
 
     /// Hands the monitor a process that is still running, with the deadline it is judged
@@ -1230,7 +1239,19 @@ impl TestDb {
     ) {
         let child = Self::spawn(command);
 
-        self.hand_over(task_run_attempt, child, times_out_at).await;
+        self.hand_over(task_run_attempt, child, times_out_at, None).await;
+    }
+
+    /// The same, judged against an idle timeout as well.
+    pub async fn spawn_running_child_with_idle_timeout(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        command: &str,
+        idle_timeout: TimeDelta,
+    ) {
+        let child = Self::spawn(command);
+
+        self.hand_over(task_run_attempt, child, Utc::now() + TimeDelta::hours(1), Some(idle_timeout)).await;
     }
 
     fn spawn(command: &str) -> tokio::process::Child {
@@ -1255,8 +1276,10 @@ impl TestDb {
         task_run_attempt: &TaskRunAttempt,
         mut child: tokio::process::Child,
         times_out_at: DateTime<Utc>,
+        idle_timeout: Option<TimeDelta>,
     ) {
         let stdout = child.stdout.take().unwrap();
+        let last_output_at = Arc::new(std::sync::atomic::AtomicI64::new(Utc::now().timestamp_millis()));
         let stderr = child.stderr.take().unwrap();
 
         let (chunks_sender, chunks) = tokio::sync::mpsc::unbounded_channel();
@@ -1266,12 +1289,14 @@ impl TestDb {
                 stdout,
                 TaskRunAttemptOutputStream::Stdout,
                 chunks_sender.clone(),
+                last_output_at.clone(),
                 self.app_config(),
             )),
             tokio::spawn(read_task_run_attempt_stream(
                 stderr,
                 TaskRunAttemptOutputStream::Stderr,
                 chunks_sender,
+                last_output_at.clone(),
                 self.app_config(),
             )),
         ];
@@ -1284,6 +1309,8 @@ impl TestDb {
                 chunks,
                 readers,
                 times_out_at,
+                idle_timeout,
+                last_output_at,
                 terminating: None,
             },
         ).await;

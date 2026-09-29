@@ -606,6 +606,7 @@ mod tests {
             started_at: Some(Utc::now()),
             finished_at: Some(Utc::now()),
             status,
+            idle_timeout: 0,
         }
     }
 

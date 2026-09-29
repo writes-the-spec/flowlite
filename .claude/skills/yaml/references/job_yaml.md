@@ -50,6 +50,7 @@ on_success:
 | `depends_on` | `[]` | Task ids **of the same job**. |
 | `limits` | `[]` | On top of the job's; same check. |
 | `timeout` | `[job_defaults]`, `3600` | Seconds, per *attempt*. |
+| `idle_timeout` | `[job_defaults]`, `0` (off) | Seconds an attempt may write nothing to stdout or stderr before it is `TimedOut`. |
 | `max_retries` | `[job_defaults]`, `0` | `1 + max_retries` executions; only `Failed` retries. |
 | `retry_delay` | `[job_defaults]`, `60` | Seconds, enforced by `TaskRunAttemptDispatcher::should_stay_queued` from the retry row's `created_at`. |
 | `env`, `secret_env` | `{}` | Over the job's. Task `env` is shown on `/jobs/{job_id}/tasks/{task_id}`; the job's `env` nowhere in the UI. |
@@ -82,7 +83,7 @@ Job and task maps merge at submit into `task_run.env` / `task_run.secret_env`, s
 
 `CRUD::init` writes `depends_on` both as JSON on `task.depends_on` and as `task_dependent` rows. `submit_job` copies `task.depends_on` onto the run, and `TaskRunDispatcher::get_dependent_task_runs` resolves `task_run.depends_on`; **`task_dependent` is read by nothing** ([task](../../entities/references/task.md), [task_dependent](../../entities/references/task_dependent.md)).
 
-Submit creates one `Queued` `task_run` per task, snapshotting `command`, `stdin`, `depends_on`, `timeout`, retry settings, `env`, `secret_env`, `working_dir` — later YAML edits don't affect it. Parameters resolve once per job run. Dependency order is enforced at dispatch ([orchestrator skill](../../orchestrator/references/task_run.md)).
+Submit creates one `Queued` `task_run` per task, snapshotting `command`, `stdin`, `depends_on`, `timeout`, `idle_timeout`, retry settings, `env`, `secret_env`, `working_dir` — later YAML edits don't affect it. Parameters resolve once per job run. Dependency order is enforced at dispatch ([orchestrator skill](../../orchestrator/references/task_run.md)).
 
 ## Validation
 

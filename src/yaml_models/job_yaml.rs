@@ -26,6 +26,11 @@ pub struct JobYamlTask {
     /// resolves against `[job_defaults]` in config.toml rather than a number written here.
     #[serde(default)]
     pub timeout: Option<u32>,
+    /// Seconds an attempt may go without writing to stdout or stderr before it is timed
+    /// out, which ends a hung command long before `timeout` would. `None` resolves against
+    /// `[job_defaults]`; 0 is no limit.
+    #[serde(default)]
+    pub idle_timeout: Option<u32>,
     #[serde(default)]
     pub max_retries: Option<u32>,
     /// Seconds to wait after a failed attempt before the next one starts.

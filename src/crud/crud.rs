@@ -233,6 +233,8 @@ impl CRUD {
                     env: task_yaml.env.clone(),
                     secret_env: task_yaml.secret_env.clone(),
                     working_dir: task_yaml.working_dir.clone(),
+                    idle_timeout: task_yaml.idle_timeout
+                        .unwrap_or(job_defaults.idle_timeout_seconds),
                 }
             })
                 .await

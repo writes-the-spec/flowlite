@@ -231,6 +231,7 @@ mod tests {
             started_at: None,
             finished_at: None,
             status: TaskRunStatus::Running,
+            idle_timeout: 0,
         }
     }
 

@@ -94,6 +94,8 @@ pub struct InsertTaskRunDataInput {
     pub depends_on: Vec<String>,
     pub limits: Vec<String>,
     pub timeout: u32,
+    /// Seconds an attempt may go without output before it is timed out, 0 for no limit.
+    pub idle_timeout: u32,
     pub max_retries: u32,
     pub retry_delay: u32,
     pub env: BTreeMap<String, String>,
@@ -174,6 +176,8 @@ pub struct TaskRun {
     pub stdin: String,
     pub depends_on: sqlx::types::Json<Vec<String>>,
     pub timeout: u32,
+    /// Seconds an attempt may go without output before it is timed out, 0 for no limit.
+    pub idle_timeout: u32,
     pub max_retries: u32,
     pub retry_delay: u32,
     pub env: sqlx::types::Json<BTreeMap<String, String>>,
@@ -196,7 +200,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO task_run (job_run_id, job_id, task_id, command, stdin, depends_on, limits, timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO task_run (job_run_id, job_id, task_id, command, stdin, depends_on, limits, timeout, idle_timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(data.input.job_run_id)
             .bind(&data.input.job_id)
@@ -206,6 +210,7 @@ impl CRUD {
             .bind(sqlx::types::Json(&data.input.depends_on))
             .bind(sqlx::types::Json(&data.input.limits))
             .bind(data.input.timeout)
+            .bind(data.input.idle_timeout)
             .bind(data.input.max_retries)
             .bind(data.input.retry_delay)
             .bind(sqlx::types::Json(&data.input.env))
@@ -232,7 +237,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, job_run_id, job_id, task_id, command, stdin, depends_on, limits, timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, started_at, finished_at, status FROM task_run WHERE 1=1"
+            "SELECT id, job_run_id, job_id, task_id, command, stdin, depends_on, limits, timeout, idle_timeout, max_retries, retry_delay, env, secret_env, working_dir, created_at, started_at, finished_at, status FROM task_run WHERE 1=1"
         );
 
         if let Some(id) = data.filter.id {
@@ -412,6 +417,7 @@ mod tests {
             started_at: None,
             finished_at: None,
             status: TaskRunStatus::Waiting,
+            idle_timeout: 0,
         };
 
         let value = serde_json::to_value(&task_run).unwrap();
@@ -447,6 +453,7 @@ mod tests {
                     secret_env: BTreeMap::new(),
                     working_dir: String::new(),
                     status: TaskRunStatus::Waiting,
+                    idle_timeout: 0,
                 },
             },
         ).await.unwrap();

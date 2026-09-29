@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
 use crate::crud::CRUD;
 use crate::crud::job_run::{JobRun, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
@@ -447,6 +448,11 @@ impl TaskRunAttemptDispatcher {
 
         let times_out_at = started_at + TimeDelta::seconds(task_run.timeout as i64);
 
+        let idle_timeout = (task_run.idle_timeout > 0)
+            .then(|| TimeDelta::seconds(task_run.idle_timeout as i64));
+
+        let last_output_at = Arc::new(AtomicI64::new(started_at.timestamp_millis()));
+
         let (chunks_sender, chunks) = tokio::sync::mpsc::unbounded_channel();
 
         let readers = [
@@ -454,6 +460,7 @@ impl TaskRunAttemptDispatcher {
                 stdout,
                 TaskRunAttemptOutputStream::Stdout,
                 chunks_sender.clone(),
+                last_output_at.clone(),
                 self.app_config.clone(),
             )),
             // The original sender moves in here rather than being kept: the channel closes
@@ -464,6 +471,7 @@ impl TaskRunAttemptDispatcher {
                 stderr,
                 TaskRunAttemptOutputStream::Stderr,
                 chunks_sender,
+                last_output_at.clone(),
                 self.app_config.clone(),
             )),
         ];
@@ -478,6 +486,8 @@ impl TaskRunAttemptDispatcher {
             chunks,
             readers,
             times_out_at,
+            idle_timeout,
+            last_output_at,
             terminating: None,
         };
 

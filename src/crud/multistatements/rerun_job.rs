@@ -113,6 +113,7 @@ impl CRUD {
                     secret_env: task_run.secret_env.0.clone(),
                     stdin: task_run.stdin.clone(),
                     working_dir: task_run.working_dir.clone(),
+                    idle_timeout: task_run.idle_timeout,
                 })
                 .collect(),
             notifications: notifications

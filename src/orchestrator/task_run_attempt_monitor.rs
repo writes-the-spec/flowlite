@@ -8,7 +8,7 @@ use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRu
 use crate::poller::Service;
 use crate::run_dir::{job_run_dir, task_output_path};
 use crate::signals::Signals;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 
 /// Waits on the child process TaskRunAttemptDispatcher spawned for every running task
@@ -106,6 +106,12 @@ impl TaskRunAttemptMonitor {
         }
 
         if Utc::now() > task_run_attempt_child.times_out_at {
+            return Ok(TaskRunAttemptStatus::TimedOut);
+        }
+
+        // The same outcome for a command that has gone quiet - a hung agent, a read that
+        // never returns - long before its wall-clock timeout would end it.
+        if task_run_attempt_child.is_idle(Utc::now()) {
             return Ok(TaskRunAttemptStatus::TimedOut);
         }
 
@@ -284,6 +290,13 @@ impl TaskRunAttemptMonitor {
         mut task_run_attempt_child: TaskRunAttemptChild,
         status: TaskRunAttemptStatus,
     ) -> anyhow::Result<()> {
+
+        // Onto the attempt's stderr, the way a rejected result is: a wall-clock timeout
+        // and an idle one both settle TimedOut, and this is where a reader tells them apart.
+        if status == TaskRunAttemptStatus::TimedOut {
+            let note = timeout_note(&task_run_attempt_child, Utc::now());
+            self.insert_output(task_run_attempt, String::new(), note).await?;
+        }
 
         let grace = self.app_config.orchestrator.kill_grace();
 
@@ -548,6 +561,19 @@ impl Service for TaskRunAttemptMonitor {
 
     async fn handle(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
         self.handle_running_task_run_attempt(task_run_attempt).await
+    }
+}
+
+
+/// flowlite's one line on which limit ended an attempt.
+fn timeout_note(task_run_attempt_child: &TaskRunAttemptChild, now: DateTime<Utc>) -> String {
+
+    match task_run_attempt_child.idle_timeout {
+        Some(idle_timeout) if now <= task_run_attempt_child.times_out_at => format!(
+            "flowlite: no output for {}s, the task's idle_timeout; ending the attempt\n",
+            idle_timeout.num_seconds(),
+        ),
+        _ => "flowlite: past the task's timeout; ending the attempt\n".to_string(),
     }
 }
 
@@ -992,6 +1018,50 @@ mod tests {
 
         let settled = until_settled(&db, &monitor, &task_run_attempt, Duration::from_secs(5)).await;
         assert_eq!(settled, TaskRunAttemptStatus::TimedOut);
+    }
+
+    /// A command that has gone quiet ends at its idle timeout rather than its wall-clock
+    /// one, and says so on its stderr.
+    #[tokio::test]
+    async fn a_command_that_goes_quiet_is_timed_out_by_its_idle_timeout() {
+        let _environment = reading_the_environment();
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_running_child_with_idle_timeout(&task_run_attempt, "sleep 30", TimeDelta::seconds(1)).await;
+
+        let monitor = db.task_run_attempt_monitor();
+
+        monitor.handle(&task_run_attempt).await.unwrap();
+        assert_eq!(db.task_run_attempt(task_run_attempt.id).await.status, TaskRunAttemptStatus::Running);
+
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        monitor.handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(db.task_run_attempt(task_run_attempt.id).await.status, TaskRunAttemptStatus::TimedOut);
+
+        let stderr = db.task_run_attempt_output(task_run_attempt.id).await.stderr;
+        assert!(stderr.contains("idle_timeout"), "{stderr}");
+    }
+
+    #[tokio::test]
+    async fn a_command_that_keeps_writing_is_not_idle() {
+        let _environment = reading_the_environment();
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_running_child_with_idle_timeout(
+            &task_run_attempt,
+            "while true; do echo tick; sleep 0.2; done",
+            TimeDelta::seconds(1),
+        ).await;
+
+        let monitor = db.task_run_attempt_monitor();
+
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        monitor.handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(db.task_run_attempt(task_run_attempt.id).await.status, TaskRunAttemptStatus::Running);
     }
 
     #[tokio::test]

@@ -50,6 +50,7 @@ pub(super) struct JobRunTaskDefinition {
     pub(super) depends_on: Vec<String>,
     pub(super) limits: Vec<String>,
     pub(super) timeout: u32,
+    pub(super) idle_timeout: u32,
     pub(super) max_retries: u32,
     pub(super) retry_delay: u32,
     pub(super) env: BTreeMap<String, String>,
@@ -145,6 +146,7 @@ pub(super) fn job_run_task_definition(
         env,
         secret_env,
         working_dir: task.working_dir.clone(),
+        idle_timeout: task.idle_timeout,
     }
 }
 
@@ -289,6 +291,7 @@ impl CRUD {
                         // JobRunDispatcher starts the job run it belongs to, which is what
                         // keeps a run due tonight from executing on the next poll pass.
                         status: TaskRunStatus::Planned,
+                        idle_timeout: task.idle_timeout,
                     }
                 }
             ).await?;
@@ -468,6 +471,7 @@ mod tests {
             secret_env: sqlx::types::Json(secret_env),
             stdin: String::new(),
             working_dir: String::new(),
+            idle_timeout: 0,
         }
     }
 

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use crate::crud::task_run_attempt::TaskRunAttemptStatus;
 use crate::orchestrator::task_run_attempt_reader::TaskRunAttemptOutputChunk;
 use tokio::process::Child;
@@ -24,6 +26,12 @@ pub struct TaskRunAttemptChild {
     pub chunks: UnboundedReceiver<TaskRunAttemptOutputChunk>,
     pub readers: [JoinHandle<()>; 2],
     pub times_out_at: DateTime<Utc>,
+    /// `task_run.idle_timeout`, `None` for no limit.
+    pub idle_timeout: Option<TimeDelta>,
+    /// When a reader last read anything, in Unix milliseconds. Written by the readers on
+    /// every read - including those past `max_stream_bytes`, which send nothing - so the
+    /// monitor cannot mistake a command whose output the cap is dropping for a silent one.
+    pub last_output_at: Arc<AtomicI64>,
     /// Set once the monitor has sent the group SIGTERM; see `Termination`.
     pub terminating: Option<Termination>,
 }
@@ -63,6 +71,18 @@ impl TaskRunAttemptChild {
         self.signal_process_group(libc::SIGKILL);
 
         let _ = self.child.kill().await;
+    }
+
+    /// Whether the command has gone its whole idle timeout without writing anything.
+    pub fn is_idle(&self, now: DateTime<Utc>) -> bool {
+
+        let Some(idle_timeout) = self.idle_timeout else {
+            return false;
+        };
+
+        let silent_for = now.timestamp_millis() - self.last_output_at.load(Ordering::Relaxed);
+
+        silent_for >= idle_timeout.num_milliseconds()
     }
 
     /// Asks the command's whole process group to exit, which most tools do cleanly: an

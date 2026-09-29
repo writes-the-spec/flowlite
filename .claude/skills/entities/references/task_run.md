@@ -7,7 +7,7 @@ One [`task`](task.md) within one [`job_run`](job_run.md), and **the config it wa
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`. |
 | `job_run_id` | Foreign key to [`job_run`](job_run.md). |
 | `job_id`, `task_id` | Which task. No foreign key — the task is in `mem`. |
-| `command`, `stdin`, `depends_on`, `timeout`, `max_retries`, `retry_delay`, `working_dir` | **The snapshot**, copied off `mem.task` by `submit_job`. `stdin` is snapshotted like `command`: a reworded prompt is not what this run asked. |
+| `command`, `stdin`, `depends_on`, `timeout`, `idle_timeout`, `max_retries`, `retry_delay`, `working_dir` | **The snapshot**, copied off `mem.task` by `submit_job`. `stdin` is snapshotted like `command`: a reworded prompt is not what this run asked. |
 | `env`, `secret_env` | From `job_run_task_definition`: the job's layered under the task's, task winning. `secret_env` maps variable → secret name, never a value. A task's name in one block evicts the job's from the *other*, so the two never share a name (the YAML layer only rejects both blocks at the same level). |
 | `limits` | From `job_run_task_definition`: job's and task's **unioned**, deduplicated, sorted — claims have no precedence. `'[]'` if none. |
 | `created_at` | Bound from `Toolkit`. |
@@ -37,5 +37,5 @@ The orchestrator reads config only here. **No orchestrator file imports `crate::
 ## Read by
 
 - `TaskRunDispatcher` (its own rows and its dependencies'), `TaskRunMonitor`, `JobRunMonitor` (all of a job run's, to settle it).
-- `TaskRunAttemptDispatcher` — `command`, `timeout`, `retry_delay`; `stdin` (written from its own task when non-empty, else `/dev/null`); `working_dir` as `current_dir`; `env`/`secret_env` for `build_task_run_attempt_env`; `limits` for the concurrency check.
+- `TaskRunAttemptDispatcher` — `command`, `timeout` and `idle_timeout` (onto the in-memory child), `retry_delay`; `stdin` (written from its own task when non-empty, else `/dev/null`); `working_dir` as `current_dir`; `env`/`secret_env` for `build_task_run_attempt_env`; `limits` for the concurrency check.
 - The job-run and task-run web routes. The task-run page shows `env` deliberately (already plaintext on disk; hiding it makes a wrong `env:` undebuggable) and `secret_env` too — only the reference, since the value is resolved at spawn into one `sh` environment and stored nowhere.

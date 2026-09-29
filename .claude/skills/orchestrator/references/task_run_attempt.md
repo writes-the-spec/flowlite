@@ -40,11 +40,12 @@ A separate enum from `TaskRunStatus` (which has `Planned`/`Waiting` where this h
 - **Child present** → `derive_next_status`, in order:
   1. **exited?** (`try_wait`) → zero: `set_to_succeeded`; non-zero: `Failed`.
   2. **past `times_out_at`?** (spawn time + `task_run.timeout`, so dispatch wait doesn't count) → `TimedOut`, ending the group (below).
-  3. **job run stopped?** → `Aborted`, killing the group.
-  4. otherwise `Running` → `record_output`, child put back.
+  3. **idle?** `TaskRunAttemptChild::is_idle` — `task_run.idle_timeout` (0 = off) since `last_output_at`, which the readers stamp on every read, sent or not, so output the `max_stream_bytes` cap drops still counts → `TimedOut` the same way. `begin_termination` writes one `flowlite:` line to the attempt's stderr naming which of the two limits it was.
+  4. **job run stopped?** → `Aborted`, ending the group (below).
+  5. otherwise `Running` → `record_output`, child put back.
   - any other status → `set_to_invalid`, killing the group, logged as a bug. A derive error puts the child back and returns `Err`.
 
-**Precedence** (same rule as [job_run.md](job_run.md)): a real outcome outranks a stop, so a process that already exited reports its exit and one past its timeout reports the timeout; a still-running one is asked to exit on the same pass. 1 and 2 carry nothing between them.
+**Precedence** (same rule as [job_run.md](job_run.md)): a real outcome outranks a stop, so a process that already exited reports its exit and one past either timeout reports the timeout; a still-running one is asked to exit on the same pass.
 
 `set_to_succeeded` reads the result the command wrote to `$FLOWLITE_TASK_OUTPUT`: over `[orchestrator] max_task_output_bytes` or not UTF-8 → the attempt is `Failed` (never truncated — half a document parses as a whole one), with the reason appended to its stderr.
 

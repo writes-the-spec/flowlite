@@ -408,6 +408,22 @@ the grounds that whatever a retry waits on rarely fixes itself within one second
 `retry_delay: 0` to retry as soon as possible. Every attempt keeps its own output — see
 [Task output](#task-output).
 
+`idle_timeout` ends an attempt that has written nothing to stdout or stderr for that many
+seconds — a hung agent, a read that never returns — long before `timeout` would:
+
+```yaml
+tasks:
+  - id: agent
+    command: ./run-agent.sh
+    timeout: 3600
+    idle_timeout: 300
+```
+
+It is off unless set, here or as `[job_defaults] idle_timeout_seconds`. Output counts
+whether or not it is recorded, so a command writing past `max_stream_bytes` is never taken
+for a quiet one. An idle attempt ends as `timedout` like any other, and a line on its stderr
+says which of the two limits it reached.
+
 A retry is told why the attempt before it failed, so an agent's second attempt need not be
 the first one again. `$FLOWLITE_PREVIOUS_ATTEMPT_LOG` names a file holding that attempt's
 stdout and stderr, in the order they were written — including flowlite's own reason when it
@@ -1147,6 +1163,7 @@ theme = "auto"                  # auto follows the viewer's OS, or dark, or ligh
 
 [job_defaults]
 timeout_seconds = 3600          # what a task with no timeout: gets
+idle_timeout_seconds = 0        # what a task with no idle_timeout: gets, 0 for none
 max_retries = 0
 retry_delay_seconds = 60
 max_parallel_runs = 1           # what a job with no max_parallel_runs: gets

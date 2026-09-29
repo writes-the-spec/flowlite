@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use crate::app_config::AppConfig;
 use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStream;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -29,6 +31,8 @@ pub struct TaskRunAttemptOutputChunk {
 /// A reader whose EOF never comes — a grandchild that escaped the process group still
 /// holds the pipe — is aborted by `TaskRunAttemptChild::abort_readers`, since it will not
 /// return on its own.
+/// `last_output_at` is stamped on every read, sent or not - what the idle timeout reads.
+///
 /// `[orchestrator]`'s `max_stream_bytes` is the most output one stream of one attempt
 /// records, kept as a head and a tail — see `StreamCapture`. That bounds the table, and the
 /// memory in flight with it: the channel is unbounded, so what this reader declines to send
@@ -37,6 +41,7 @@ pub async fn read_task_run_attempt_stream<R>(
     mut reader: R,
     stream: TaskRunAttemptOutputStream,
     chunks: UnboundedSender<TaskRunAttemptOutputChunk>,
+    last_output_at: Arc<AtomicI64>,
     app_config: AppConfig,
 )
 where
@@ -51,6 +56,9 @@ where
             Ok(0) | Err(_) => break,
             Ok(read) => read,
         };
+
+        // Before anything decides whether to send it: output the cap drops is still output.
+        last_output_at.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
 
         carry.extend_from_slice(&buf[..read]);
 
@@ -304,6 +312,7 @@ mod tests {
             std::io::Cursor::new(bytes),
             TaskRunAttemptOutputStream::Stdout,
             chunks,
+            Arc::new(AtomicI64::new(0)),
             AppConfig::default(),
         ).await;
 
@@ -447,5 +456,32 @@ mod tests {
         let head = content.lines().next().unwrap();
         assert!(head.len() <= max_stream_bytes() / 2);
         assert!(head.len() > max_stream_bytes() / 2 - 3);
+    }
+
+    /// Stamped by the read itself, not by what is sent: past `max_stream_bytes` nothing is
+    /// sent, and the idle timeout must still see a command that is writing.
+    #[tokio::test]
+    async fn every_read_stamps_the_output_time() {
+
+        let (chunks, _received) = tokio::sync::mpsc::unbounded_channel();
+        let last_output_at = Arc::new(AtomicI64::new(0));
+
+        let app_config = AppConfig {
+            orchestrator: crate::app_config::AppConfigOrchestrator {
+                max_stream_bytes: 4,
+                ..AppConfig::default().orchestrator
+            },
+            ..AppConfig::default()
+        };
+
+        read_task_run_attempt_stream(
+            std::io::Cursor::new(vec![b'x'; 64]),
+            TaskRunAttemptOutputStream::Stdout,
+            chunks,
+            last_output_at.clone(),
+            app_config,
+        ).await;
+
+        assert!(last_output_at.load(Ordering::Relaxed) > 0);
     }
 }

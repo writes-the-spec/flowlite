@@ -29,6 +29,13 @@
         <div class="meta__value">{{ task.timeout }}s per attempt</div>
     </div>
 
+    {% if task.idle_timeout > 0 %}
+    <div class="meta__item">
+        <div class="meta__label">Idle timeout</div>
+        <div class="meta__value">{{ task.idle_timeout }}s without output</div>
+    </div>
+    {% endif %}
+
     <div class="meta__item">
         <div class="meta__label">Retries</div>
         <div class="meta__value">

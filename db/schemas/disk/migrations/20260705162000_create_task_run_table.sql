@@ -7,6 +7,8 @@ CREATE TABLE task_run (
     stdin TEXT NOT NULL,
     depends_on TEXT NOT NULL,
     timeout INTEGER NOT NULL,
+    -- Seconds an attempt may go without writing to stdout or stderr, 0 for no limit.
+    idle_timeout INTEGER NOT NULL,
     max_retries INTEGER NOT NULL,
     retry_delay INTEGER NOT NULL,
     env TEXT NOT NULL,

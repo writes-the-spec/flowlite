@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub struct AppConfigJobDefaults {
     /// Seconds one attempt may run for.
     pub timeout_seconds: u32,
+    /// Seconds one attempt may go without output before it is timed out, 0 for no limit.
+    pub idle_timeout_seconds: u32,
     /// Retries *after* the first attempt, so executions total `1 + max_retries`.
     pub max_retries: u32,
     /// Seconds to wait after a failed attempt before the next one starts.
@@ -21,6 +23,7 @@ impl Default for AppConfigJobDefaults {
     fn default() -> Self {
         Self {
             timeout_seconds: 3600,
+            idle_timeout_seconds: 0,
             max_retries: 0,
             retry_delay_seconds: 60,
             max_parallel_runs: 1,
