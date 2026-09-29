@@ -976,6 +976,17 @@ impl TestDb {
             .unwrap();
     }
 
+    /// Stamps an attempt as asleep in flowlite's own wait, the way `wait_for_job_run` does
+    /// from inside a task.
+    pub async fn mark_task_run_attempt_waiting(&self, task_run_attempt_id: i64) {
+        sqlx::query("UPDATE task_run_attempt SET waiting_since = ? WHERE id = ?")
+            .bind(Utc::now())
+            .bind(task_run_attempt_id)
+            .execute(&*self.conn_pool)
+            .await
+            .unwrap();
+    }
+
     /// Marks a queued attempt as one a spawn was begun for, which is what a crash between
     /// the spawn and the Running write leaves behind. No CRUD update writes `started_at`
     /// without a status, so this reaches past CRUD for a state only a crash produces.

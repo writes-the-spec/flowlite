@@ -58,15 +58,8 @@ pub fn is_full(row: &LimitRow) -> bool {
 }
 
 
-/// The line printed beside the limit table, or `None` when there is nothing to explain.
-///
-/// Every surface that renders `limit_rows` renders this too, worded once here rather than
-/// three times differently. Without it a machine running thirty task commands can show
-/// `global 0/32`, which reads as idle and is the first thing an operator would disbelieve.
-///
-/// A count rather than a row: a waiting attempt holds no named limit either, so a `waiting`
-/// column would be zero everywhere except `global` and invite the reading that some limit
-/// has waiters of its own.
+/// The line every surface prints beside the limit table, so `global 0/32` on a machine
+/// running thirty waiting tasks does not read as idle. `None` when nothing is waiting.
 pub fn waiting_note(waiting_attempts: u32) -> Option<String> {
 
     if waiting_attempts == 0 {

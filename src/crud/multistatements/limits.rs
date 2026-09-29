@@ -15,11 +15,8 @@ use crate::crud::task_run_attempt::{
 
 impl CRUD {
 
-    /// Every attempt whose row says Running: the one set the three attempt tallies below
-    /// all start from, before each diverges on its own one-line predicate. They must agree
-    /// on it - a limit counted against a different set than the cap is a gate that lets
-    /// through what it says it is holding - and that is easier to keep true as one name
-    /// than as the same filter literal written out three times.
+    /// The one set the attempt tallies below all start from, so the global cap and the
+    /// named limits can never count against different attempts.
     async fn select_running_attempts(
         &self,
         conn: &mut SqliteConnection,
@@ -89,9 +86,8 @@ impl CRUD {
 
         let running_attempts = self.select_running_attempts(&mut *conn).await?;
 
-        // A Running attempt with waiting_since set is asleep in one of flowlite's own wait
-        // loops, holding a slot it is not using - see src/crud/multistatements/waiting.rs.
-        // Bounding those is what deadlocks a pipeline that composes with `--wait`.
+        // An attempt asleep in flowlite's own wait holds no slot - counting it is what
+        // deadlocked a task that composes with `--wait`. See `wait_for_job_run`.
         let working = running_attempts
             .iter()
             .filter(|attempt| attempt.waiting_since.is_none())
@@ -133,10 +129,8 @@ impl CRUD {
         Ok(claimed_limit_slots)
     }
 
-    /// How many attempts are Running but asleep in one of flowlite's own waits. Holds no
-    /// slot and appears in no limit, so it is invisible to every gate - which is exactly
-    /// why the three surfaces that print the gates print this beside them, or a reader
-    /// sees an idle-looking machine with thirty processes on it.
+    /// How many Running attempts are asleep in flowlite's own wait, and so in neither count
+    /// above.
     pub async fn count_waiting_attempts(&self, conn: &mut SqliteConnection) -> anyhow::Result<u32> {
 
         let running_attempts = self.select_running_attempts(&mut *conn).await?;
@@ -173,27 +167,9 @@ mod tests {
 
         assert_eq!(db.crud.count_running_attempts(&mut conn).await.unwrap(), 1);
 
-        db.crud.mark_attempt_waiting(&mut conn, attempt.id).await.unwrap();
+        db.mark_task_run_attempt_waiting(attempt.id).await;
 
         assert_eq!(db.crud.count_running_attempts(&mut conn).await.unwrap(), 0);
-    }
-
-    /// Clearing puts it back: the wait returned, the command is working again, and it is once
-    /// more the thing the cap is about.
-    #[tokio::test]
-    async fn clearing_the_mark_counts_the_attempt_again() {
-
-        let db = TestDb::new().await;
-
-        let job_run = db.insert_job_run(JobRunStatus::Running).await;
-        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
-        let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
-
-        let mut conn = db.conn_pool.acquire().await.unwrap();
-        db.crud.mark_attempt_waiting(&mut conn, attempt.id).await.unwrap();
-        db.crud.clear_attempt_waiting(&mut conn, attempt.id).await.unwrap();
-
-        assert_eq!(db.crud.count_running_attempts(&mut conn).await.unwrap(), 1);
     }
 
     /// The named limits go the same way, and for the same reason: a provider quota is about
@@ -211,7 +187,7 @@ mod tests {
 
         assert_eq!(db.crud.claimed_limit_slots(&mut conn).await.unwrap().get("openai_api"), Some(&1));
 
-        db.crud.mark_attempt_waiting(&mut conn, attempt.id).await.unwrap();
+        db.mark_task_run_attempt_waiting(attempt.id).await;
 
         assert_eq!(db.crud.claimed_limit_slots(&mut conn).await.unwrap().get("openai_api"), None);
     }
@@ -234,7 +210,7 @@ mod tests {
 
         assert_eq!(db.crud.count_waiting_attempts(&mut conn).await.unwrap(), 0);
 
-        db.crud.mark_attempt_waiting(&mut conn, waiting.id).await.unwrap();
+        db.mark_task_run_attempt_waiting(waiting.id).await;
 
         assert_eq!(db.crud.count_waiting_attempts(&mut conn).await.unwrap(), 1);
         assert_eq!(db.crud.count_running_attempts(&mut conn).await.unwrap(), 1);
@@ -251,8 +227,9 @@ mod tests {
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
         let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
 
+        db.mark_task_run_attempt_waiting(attempt.id).await;
+
         let mut conn = db.conn_pool.acquire().await.unwrap();
-        db.crud.mark_attempt_waiting(&mut conn, attempt.id).await.unwrap();
 
         db.settle_task_run_attempt(attempt.id, TaskRunAttemptStatus::Succeeded).await;
 

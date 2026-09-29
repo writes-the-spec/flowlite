@@ -1,16 +1,8 @@
 //! The bounded wait shared by `submit_job`, `get_job_run` and `stop_job_run`.
 //!
-//! `wait_for_job_run` (`src/shared/wait.rs`) already polls a run at the orchestrator's own
-//! interval until it finishes, and takes the deadline as an argument rather than being
-//! wrapped in one here. On elapse it reads the run once more and returns it unfinished,
-//! never as an error: "still running, here is the id" is an answer, and a timeout error
-//! would throw away the id the agent needs to ask again.
-//!
-//! The deadline belongs down there because that function also marks the waiting attempt as
-//! holding no slot, and clears the mark on its way out. A `tokio::time::timeout` around it
-//! from here would drop that future when the bound elapsed, skipping the clear - and this
-//! bound elapses on the ordinary path, not an exceptional one. So all this module does now
-//! is turn `wait_seconds` into that argument.
+//! `wait_for_job_run` (`src/shared/wait.rs`) does the polling and takes the deadline as an
+//! argument - see there for why it is not a `tokio::time::timeout` around the call. All this
+//! module adds is turning `wait_seconds` into that deadline.
 //!
 //! No transaction wraps the poll, on purpose: `src/toolkit.rs`'s `MIGRATION_LOCK` is held
 //! only while a connection's own schema migration runs, never across a sleep, so a

@@ -56,6 +56,7 @@ pub async fn recover_orphaned_task_run_attempts(
                 filter: UpdateTaskRunAttemptsDataFilter {
                     id: Some(task_run_attempt.id),
                     task_run_id: None,
+                    status: None,
                 },
                 input: UpdateTaskRunAttemptsDataInput {
                     status: Some(TaskRunAttemptStatus::Invalid),

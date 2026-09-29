@@ -134,6 +134,7 @@ pub struct UpdateTaskRunAttemptsDataInput {
 pub struct UpdateTaskRunAttemptsDataFilter {
     pub id: Option<i64>,
     pub task_run_id: Option<i64>,
+    pub status: Option<TaskRunAttemptStatus>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -330,6 +331,11 @@ impl CRUD {
             query_builder.push_bind(task_run_id);
         }
 
+        if let Some(status) = &data.filter.status {
+            query_builder.push(" AND status = ");
+            query_builder.push_bind(status);
+        }
+
         let query = query_builder.build();
         query.execute(executor).await?;
 
@@ -370,6 +376,7 @@ mod tests {
                 filter: UpdateTaskRunAttemptsDataFilter {
                     id: Some(task_run_attempt.id),
                     task_run_id: None,
+                    status: None,
                 },
                 input: UpdateTaskRunAttemptsDataInput {
                     status: None,
@@ -441,59 +448,35 @@ mod tests {
         assert!(select(&db, empty_filter()).await.is_empty());
     }
 
-    /// The column the concurrency tallies read. A fresh attempt is working, not waiting, so
-    /// it starts null - the same shape `process_group_id` uses for "no process yet".
     #[tokio::test]
-    async fn a_new_attempt_is_not_waiting() {
+    async fn an_update_filtered_on_status_leaves_other_statuses_alone() {
 
         let db = crate::test_support::TestDb::new().await;
 
         let job_run = db.insert_job_run(crate::crud::job_run::JobRunStatus::Running).await;
         let task_run = db.insert_task_run(job_run.id, crate::crud::task_run::TaskRunStatus::Running).await;
-        let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
+        let running = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
+        let settled = db.insert_task_run_attempt(&task_run, 2, TaskRunAttemptStatus::Succeeded).await;
 
-        assert_eq!(attempt.waiting_since, None);
-    }
+        for attempt in [&running, &settled] {
+            db.crud.update_task_run_attempts(&*db.conn_pool, &UpdateTaskRunAttemptsData {
+                input: UpdateTaskRunAttemptsDataInput {
+                    status: None,
+                    started_at: None,
+                    finished_at: None,
+                    process_group_id: None,
+                    output: None,
+                    waiting_since: Some(Some(chrono::Utc::now())),
+                },
+                filter: UpdateTaskRunAttemptsDataFilter {
+                    id: Some(attempt.id),
+                    task_run_id: None,
+                    status: Some(TaskRunAttemptStatus::Running),
+                },
+            }).await.unwrap();
+        }
 
-    /// Written as an Option<Option<_>> like started_at and finished_at, so a caller can set it
-    /// and clear it through the same field.
-    #[tokio::test]
-    async fn waiting_since_can_be_written_and_cleared() {
-
-        let db = crate::test_support::TestDb::new().await;
-
-        let job_run = db.insert_job_run(crate::crud::job_run::JobRunStatus::Running).await;
-        let task_run = db.insert_task_run(job_run.id, crate::crud::task_run::TaskRunStatus::Running).await;
-        let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
-
-        let marked_at = chrono::Utc::now();
-
-        db.crud.update_task_run_attempts(&*db.conn_pool, &UpdateTaskRunAttemptsData {
-            input: UpdateTaskRunAttemptsDataInput {
-                status: None,
-                started_at: None,
-                finished_at: None,
-                process_group_id: None,
-                output: None,
-                waiting_since: Some(Some(marked_at)),
-            },
-            filter: UpdateTaskRunAttemptsDataFilter { id: Some(attempt.id), task_run_id: None },
-        }).await.unwrap();
-
-        assert!(db.task_run_attempt(attempt.id).await.waiting_since.is_some());
-
-        db.crud.update_task_run_attempts(&*db.conn_pool, &UpdateTaskRunAttemptsData {
-            input: UpdateTaskRunAttemptsDataInput {
-                status: None,
-                started_at: None,
-                finished_at: None,
-                process_group_id: None,
-                output: None,
-                waiting_since: Some(None),
-            },
-            filter: UpdateTaskRunAttemptsDataFilter { id: Some(attempt.id), task_run_id: None },
-        }).await.unwrap();
-
-        assert_eq!(db.task_run_attempt(attempt.id).await.waiting_since, None);
+        assert!(db.task_run_attempt(running.id).await.waiting_since.is_some());
+        assert_eq!(db.task_run_attempt(settled.id).await.waiting_since, None);
     }
 }

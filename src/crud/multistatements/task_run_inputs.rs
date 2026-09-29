@@ -94,6 +94,7 @@ mod tests {
                 filter: UpdateTaskRunAttemptsDataFilter {
                     id: Some(task_run_attempt.id),
                     task_run_id: None,
+                    status: None,
                 },
                 input: UpdateTaskRunAttemptsDataInput {
                     status: None,

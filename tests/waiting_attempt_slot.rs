@@ -1,4 +1,4 @@
-//! The deadlock item 7 exists to remove.
+//! A task waiting on another run must not hold the concurrency slot that run needs.
 //!
 //! A task that waits on another run held a concurrency slot for the length of the wait, so
 //! with the global cap at 1 the child could never be dispatched and the parent waited until
