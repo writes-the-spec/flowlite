@@ -12,7 +12,9 @@ use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput}
 use crate::crud::task_run::{TaskRun, SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRunStatus};
 use crate::router::app::app_state::AppState;
 use crate::shared::format;
-use crate::shared::job_run::{deleted_occurrence, DeletedOccurrence};
+use crate::shared::job_run::{
+    deleted_occurrence, select_child_job_run_ids, select_job_run_parent, DeletedOccurrence, JobRunParent,
+};
 
 pub struct JobRunDisplay {
     pub id: i64,
@@ -28,6 +30,9 @@ pub struct JobRunDisplay {
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub duration: Option<String>,
+    /// The task that submitted this run, if one did.
+    pub parent: Option<JobRunParent>,
+    pub child_job_run_ids: Vec<i64>,
 }
 
 /// One task's bar on the run timeline, placed as a percentage of the run's own window so
@@ -150,6 +155,7 @@ pub async fn job_run_id_route(
             statuses: None,
             schedule_id: None,
             scheduled_at: None,
+            parent_job_run_id: None,
         },
         sort: None,
         limit: Some(1),
@@ -210,6 +216,10 @@ pub async fn job_run_id_route(
         offset: None,
     }).await.unwrap_or_default();
 
+    // Read defensively like the job above: a lookup that fails loses the link, not the page.
+    let parent = select_job_run_parent(&crud, conn, &job_run).await.unwrap_or(None);
+    let child_job_run_ids = select_child_job_run_ids(&crud, conn, job_run.id).await.unwrap_or_default();
+
     let controls = job_run_controls(job_run.status);
     let delete_note = delete_note(deleted_occurrence(&job_run, now));
 
@@ -230,6 +240,8 @@ pub async fn job_run_id_route(
             started_at: job_run.started_at.map(format::timestamp),
             finished_at: job_run.finished_at.map(format::timestamp),
             duration,
+            parent,
+            child_job_run_ids,
         },
         lanes,
         ticks: build_ticks(window_seconds),
@@ -281,7 +293,7 @@ pub async fn rerun_job_run_route(
         }
     }
 
-    let result = crud.rerun_job(&mut conn, job_run_id).await;
+    let result = crud.rerun_job(&mut conn, job_run_id, None).await;
 
     match result {
         Ok(new_job_run_id) => {
@@ -337,6 +349,7 @@ pub async fn stop_job_run_route(
             statuses: None,
             schedule_id: None,
             scheduled_at: None,
+            parent_job_run_id: None,
         },
         sort: None,
         limit: Some(1),

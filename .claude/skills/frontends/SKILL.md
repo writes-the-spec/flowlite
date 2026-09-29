@@ -30,6 +30,7 @@ Both are listed by path and by line in `CARVE_OUTS` in [tests/frontend_boundarie
 | [limits.rs](../../../src/shared/limits.rs) | `LimitRow`, `limit_rows`, `is_full` - the concurrency answer the `limits` command and the dashboard panel both render |
 | [job.rs](../../../src/shared/job.rs) | `installed_job_id` |
 | [job_run.rs](../../../src/shared/job_run.rs) | `select_job_run`, `stop_job_run`, `parse_job_run_status`, and the `JobRunDetail` / `TaskRunAttemptLog` serialize shapes |
+| [task_run_attempt.rs](../../../src/shared/task_run_attempt.rs) | `own_task_run_attempt_id` - the attempt a command running inside a task belongs to, read from its environment |
 | [wait.rs](../../../src/shared/wait.rs) | `wait_for_job_run`, `ensure_data_dir_is_served`, `DataDirNotServed` |
 
 File names mirror `src/crud/` and the `entities` skill, so a job-run thing is in `job_run.rs` where a reader already looks. `src/shared/` is not a layer every call passes through - a frontend still talks to `CRUD` directly, and most of each frontend imports nothing from here.

@@ -20,11 +20,19 @@ impl CRUD {
     /// says now - so a rerun of an old run is a rerun of the old config. Nothing here
     /// reads the config at all, which is why a run whose job YAML has since been deleted
     /// is still rerunnable.
+    ///
+    /// The parent is not copied either: `parent_task_run_attempt_id` is whoever asks for
+    /// the rerun, the same as for `submit_job`.
     pub async fn rerun_job(
         &self,
         conn: &mut SqliteConnection,
         job_run_id: i64,
+        parent_task_run_attempt_id: Option<i64>,
     ) -> anyhow::Result<i64> {
+
+        let parent_task_run_attempt_id = self
+            .resolve_parent_task_run_attempt(&mut *conn, parent_task_run_attempt_id)
+            .await?;
 
         let job_run = self.select_job_run(
             &mut *conn,
@@ -36,6 +44,7 @@ impl CRUD {
                     statuses: None,
                     schedule_id: None,
                     scheduled_at: None,
+                    parent_job_run_id: None,
                 },
                 sort: None,
                 limit: Some(1),
@@ -89,6 +98,7 @@ impl CRUD {
             // keyed on (schedule, job, instant), and the rerun carries the original's
             // instant - so the occurrence itself would never be submitted.
             schedule_id: None,
+            parent_task_run_attempt_id,
             tasks: task_runs
                 .into_iter()
                 .map(|task_run| JobRunTaskDefinition {
@@ -123,9 +133,33 @@ impl CRUD {
 mod tests {
     use crate::crud::job_run::JobRunStatus;
     use crate::crud::task_run::TaskRunStatus;
+    use crate::crud::task_run_attempt::TaskRunAttemptStatus;
     use crate::crud::job_run_notification::{JobRunNotificationStatus, NotificationChannel, NotifyOn};
     use crate::test_support::{map, TestDb};
 
+
+    /// The parent is whoever asks for the rerun, not whoever asked for the original: a task
+    /// rerunning a run it did not start has still started the rerun.
+    #[tokio::test]
+    async fn a_rerun_is_linked_to_the_task_that_asked_for_it() {
+
+        let db = TestDb::new().await;
+
+        let first_parent = db.insert_job_run(JobRunStatus::Succeeded).await;
+        let first_task_run = db.insert_task_run(first_parent.id, TaskRunStatus::Succeeded).await;
+        let first_attempt = db.insert_task_run_attempt(&first_task_run, 1, TaskRunAttemptStatus::Succeeded).await;
+
+        let second_parent = db.insert_job_run(JobRunStatus::Running).await;
+        let second_task_run = db.insert_task_run(second_parent.id, TaskRunStatus::Running).await;
+        let second_attempt = db.insert_task_run_attempt(&second_task_run, 1, TaskRunAttemptStatus::Running).await;
+
+        let original = db.insert_child_job_run(&first_attempt, JobRunStatus::Failed).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let rerun_id = db.crud.rerun_job(&mut conn, original.id, Some(second_attempt.id)).await.unwrap();
+
+        assert_eq!(db.job_run(rerun_id).await.parent_task_run_attempt_id, Some(second_attempt.id));
+    }
 
     /// A tombstone keeps every row a rerun reads, and this submits from whatever run it is
     /// handed - the status gate lives in the frontends, on `JobRunStatus::is_rerunnable`,
@@ -142,7 +176,7 @@ mod tests {
         let mut conn = db.conn_pool.acquire().await.unwrap();
         assert!(db.crud.delete_job_run(&mut conn, job_run.id).await.unwrap());
 
-        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id).await.unwrap();
+        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id, None).await.unwrap();
 
         assert_eq!(db.job_run(rerun_id).await.status, JobRunStatus::Scheduled);
     }
@@ -171,7 +205,7 @@ mod tests {
         ).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
-        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id).await.unwrap();
+        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id, None).await.unwrap();
 
         let rerun = db.job_run(rerun_id).await;
 
@@ -223,7 +257,7 @@ mod tests {
         ).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
-        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id).await.unwrap();
+        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id, None).await.unwrap();
 
         let task_runs = db.crud.select_task_runs(
             &*db.conn_pool,
@@ -270,7 +304,7 @@ mod tests {
         ).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
-        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id).await.unwrap();
+        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id, None).await.unwrap();
 
         let notifications = db.job_run_notifications(rerun_id).await;
 
@@ -304,7 +338,7 @@ mod tests {
         ).await;
 
         let mut conn = db.conn_pool.acquire().await.unwrap();
-        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id).await.unwrap();
+        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id, None).await.unwrap();
 
         let task_runs = db.crud.select_task_runs(
             &*db.conn_pool,

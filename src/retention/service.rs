@@ -273,6 +273,7 @@ mod tests {
                     scheduled_at: Utc::now(),
                     schedule_id: None,
                     status,
+                    parent_task_run_attempt_id: None,
                 },
             },
         ).await.unwrap();
@@ -414,7 +415,7 @@ mod tests {
         let deleted_job_run = db.crud.select_job_run(
             &*db.conn_pool,
             &crate::crud::job_run::SelectJobRunsData {
-                filter: crate::crud::job_run::SelectJobRunsDataFilter { id: Some(deleted.id), job_id: None, status: None, statuses: None, schedule_id: None, scheduled_at: None },
+                filter: crate::crud::job_run::SelectJobRunsDataFilter { id: Some(deleted.id), job_id: None, status: None, statuses: None, schedule_id: None, scheduled_at: None, parent_job_run_id: None },
                 sort: None,
                 limit: Some(1),
                 offset: None,
@@ -434,7 +435,7 @@ mod tests {
         let deleted_attempts = db.crud.select_task_run_attempts(
             &*db.conn_pool,
             &crate::crud::task_run_attempt::SelectTaskRunAttemptsData {
-                filter: crate::crud::task_run_attempt::SelectTaskRunAttemptsDataFilter { task_run_id: None, job_run_id: Some(deleted.id), task_id: None, status: None },
+                filter: crate::crud::task_run_attempt::SelectTaskRunAttemptsDataFilter { id: None, task_run_id: None, job_run_id: Some(deleted.id), task_id: None, status: None },
                 sort: None,
             },
         ).await.unwrap();
@@ -466,7 +467,7 @@ mod tests {
         let kept_job_run = db.crud.select_job_run(
             &*db.conn_pool,
             &crate::crud::job_run::SelectJobRunsData {
-                filter: crate::crud::job_run::SelectJobRunsDataFilter { id: Some(kept.id), job_id: None, status: None, statuses: None, schedule_id: None, scheduled_at: None },
+                filter: crate::crud::job_run::SelectJobRunsDataFilter { id: Some(kept.id), job_id: None, status: None, statuses: None, schedule_id: None, scheduled_at: None, parent_job_run_id: None },
                 sort: None,
                 limit: Some(1),
                 offset: None,

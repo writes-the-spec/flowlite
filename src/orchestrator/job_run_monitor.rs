@@ -134,6 +134,7 @@ impl JobRunMonitor {
                     statuses: None,
                     schedule_id: None,
                     scheduled_at: None,
+                    parent_job_run_id: None,
                 },
                 sort: None,
                 limit: None,

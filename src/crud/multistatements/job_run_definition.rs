@@ -13,9 +13,11 @@ use sqlx::SqliteConnection;
 use crate::crud::CRUD;
 use crate::crud::job::Job;
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRunStatus};
+use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotificationStatus, NotificationChannel, NotifyOn};
 use crate::crud::task::Task;
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, TaskRunStatus};
+use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter};
 
 /// A job's definition, as one job run will execute it. `submit_job` builds it from the
 /// config the YAML declares now and `rerun_job` from an earlier run's snapshot, and the
@@ -27,6 +29,7 @@ pub(super) struct JobRunDefinition {
     pub(super) parameters: BTreeMap<String, String>,
     pub(super) scheduled_at: DateTime<Utc>,
     pub(super) schedule_id: Option<String>,
+    pub(super) parent_task_run_attempt_id: Option<i64>,
     pub(super) tasks: Vec<JobRunTaskDefinition>,
     pub(super) notifications: Vec<JobRunNotificationDefinition>,
 }
@@ -177,6 +180,56 @@ pub(super) fn job_run_notification_definitions(
 
 impl CRUD {
 
+    /// The parent a run submitted from inside a task is linked to, checked before the run
+    /// is written. An attempt whose row is gone links nothing - retention deleted its run
+    /// under a process that outlived it - since there is no parent left to show. A parent
+    /// run that is being stopped refuses the submission, or a task being stopped could
+    /// start new work on its way out.
+    pub(super) async fn resolve_parent_task_run_attempt(
+        &self,
+        conn: &mut SqliteConnection,
+        task_run_attempt_id: Option<i64>,
+    ) -> anyhow::Result<Option<i64>> {
+
+        let Some(task_run_attempt_id) = task_run_attempt_id else {
+            return Ok(None);
+        };
+
+        let attempts = self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
+            filter: SelectTaskRunAttemptsDataFilter {
+                id: Some(task_run_attempt_id),
+                task_run_id: None,
+                job_run_id: None,
+                task_id: None,
+                status: None,
+            },
+            sort: None,
+        }).await?;
+
+        let Some(attempt) = attempts.into_iter().next() else {
+            return Ok(None);
+        };
+
+        let stop = self.select_job_run_stop(&mut *conn, &SelectJobRunStopsData {
+            filter: SelectJobRunStopsDataFilter {
+                id: None,
+                job_run_id: Some(attempt.job_run_id),
+            },
+            sort: None,
+            limit: Some(1),
+            offset: None,
+        }).await?;
+
+        if stop.is_some() {
+            anyhow::bail!(
+                "Job run {} is being stopped, so its tasks cannot submit new runs",
+                attempt.job_run_id,
+            );
+        }
+
+        Ok(Some(task_run_attempt_id))
+    }
+
     /// Inserts a scheduled job run, one planned task run per task, and one open notification
     /// per channel each of the job's notify blocks named. This is the only place a run's
     /// config is written.
@@ -200,6 +253,7 @@ impl CRUD {
                     // time has come, and it is the only thing that writes Queued. A run
                     // due now spends one poll pass here and no longer.
                     status: JobRunStatus::Scheduled,
+                    parent_task_run_attempt_id: definition.parent_task_run_attempt_id,
                 }
             }
         ).await?;
@@ -582,6 +636,7 @@ mod tests {
             parameters: BTreeMap::new(),
             scheduled_at: Utc::now(),
             schedule_id: None,
+            parent_task_run_attempt_id: None,
             tasks: vec![task_definition],
             notifications: Vec::new(),
         };
@@ -623,6 +678,7 @@ mod tests {
             parameters: BTreeMap::new(),
             scheduled_at: Utc::now(),
             schedule_id: None,
+            parent_task_run_attempt_id: None,
             tasks: vec![task_definition],
             notifications: Vec::new(),
         };

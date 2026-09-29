@@ -14,14 +14,20 @@ CREATE TABLE job_run (
     -- and job_run already denormalises the mem-side job through job_id and job_name
     -- rather than pointing at it.
     schedule_id TEXT,
+    -- The task attempt whose command submitted this run, or NULL for a run no task
+    -- submitted: one typed at a terminal, clicked on the dashboard or due on a schedule.
+    -- The parent job run is that attempt's job_run_id.
+    parent_task_run_attempt_id INTEGER,
     started_at DATETIME,
     finished_at DATETIME,
-    status TEXT NOT NULL
+    status TEXT NOT NULL,
+    FOREIGN KEY (parent_task_run_attempt_id) REFERENCES task_run_attempt (id)
 );
 
 CREATE INDEX idx_job_run_job_id ON job_run (job_id);
 CREATE INDEX idx_job_run_created_at ON job_run (created_at);
 CREATE INDEX idx_job_run_status ON job_run (status);
+CREATE INDEX idx_job_run_parent_task_run_attempt_id ON job_run (parent_task_run_attempt_id);
 -- The Scheduler's reconcile asks this on every pass: what has this schedule already got
 -- outstanding, and when is each one due?
 CREATE INDEX idx_job_run_schedule_id ON job_run (schedule_id, scheduled_at);

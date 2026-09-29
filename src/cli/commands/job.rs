@@ -10,6 +10,7 @@ use crate::shared::format;
 use crate::shared::job::installed_job_id;
 use crate::shared::job_run::select_job_run;
 use crate::shared::schedule_at::refuse_waiting_for_a_future_run;
+use crate::shared::task_run_attempt::own_task_run_attempt_id;
 use crate::shared::wait::{ensure_data_dir_is_served, wait_for_job_run, DataDirNotServed};
 use crate::yaml_models::job_yaml::JobYaml;
 
@@ -158,6 +159,7 @@ impl JobSubmitCmd {
             &overrides,
             scheduled_at,
             None,
+            own_task_run_attempt_id(),
         ).await?;
 
         // The run is read back even without --wait, so that --json prints one shape either

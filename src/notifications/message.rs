@@ -582,6 +582,7 @@ mod tests {
             started_at: Some(Utc::now()),
             finished_at: Some(Utc::now()),
             status,
+            parent_task_run_attempt_id: None,
         }
     }
 

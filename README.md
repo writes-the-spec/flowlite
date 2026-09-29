@@ -801,6 +801,17 @@ run must keep goes somewhere the task names itself. A task id may contain only A
 letters, digits, hyphens and underscores, since it names both a file in that directory and
 a `FLOWLITE_INPUT_` variable.
 
+### Runs a task submits
+
+A task's command can submit another job's run itself — `flowlite job submit child`, a
+`job-run rerun`, or an agent calling the MCP `submit_job` tool — and that run is recorded as
+the task's child. `job-run get` names the task that submitted a run and the runs a run's
+tasks submitted, the `get_job_run` tool and `--json` carry the same as `parent` and
+`child_job_run_ids`, and the run page links both ways.
+
+A task of a run that is being stopped cannot submit: the submission is refused rather than
+started by a run on its way out.
+
 ## Reruns
 
 A run can be run again, with the **Rerun** button on its page or from the command line:

@@ -126,6 +126,7 @@ pub async fn task_run_id_route(
 
     let task_run_attempts = crud.select_task_run_attempts(conn, &SelectTaskRunAttemptsData {
         filter: SelectTaskRunAttemptsDataFilter {
+            id: None,
             task_run_id: Some(task_run.id),
             job_run_id: None,
             task_id: None,

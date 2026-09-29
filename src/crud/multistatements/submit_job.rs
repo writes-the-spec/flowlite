@@ -106,7 +106,8 @@ impl CRUD {
     /// `overrides` are the caller's parameter values, checked against what the job
     /// declares. `scheduled_at` is the instant this run is due — now, for a submission
     /// that named no time — and `schedule_id` names the schedule that asked for it, or
-    /// None for a submission nobody scheduled.
+    /// None for a submission nobody scheduled. `parent_task_run_attempt_id` is the attempt
+    /// whose command is submitting this run, if a task's command is.
     ///
     /// A job with no config is an error rather than an empty run: the caller asked for a
     /// job that isn't there.
@@ -117,7 +118,12 @@ impl CRUD {
         overrides: &BTreeMap<String, String>,
         scheduled_at: DateTime<Utc>,
         schedule_id: Option<&str>,
+        parent_task_run_attempt_id: Option<i64>,
     ) -> anyhow::Result<i64> {
+
+        let parent_task_run_attempt_id = self
+            .resolve_parent_task_run_attempt(&mut *conn, parent_task_run_attempt_id)
+            .await?;
 
         let job = self.select_job(&mut *conn, &SelectJobsData {
             filter: SelectJobsDataFilter {
@@ -154,6 +160,7 @@ impl CRUD {
             parameters,
             scheduled_at,
             schedule_id: schedule_id.map(str::to_string),
+            parent_task_run_attempt_id,
             tasks: tasks
                 .iter()
                 .map(|task| job_run_task_definition(task, &job))
@@ -171,6 +178,9 @@ impl CRUD {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crud::job_run::JobRunStatus;
+    use crate::crud::task_run::TaskRunStatus;
+    use crate::crud::task_run_attempt::TaskRunAttemptStatus;
     use crate::test_support::{map, TestDb};
 
 
@@ -196,13 +206,71 @@ mod tests {
             &map(&[]),
             due,
             None,
+            None,
         ).await.unwrap();
 
         let job_run = db.job_run(job_run_id).await;
 
-        assert_eq!(job_run.status, crate::crud::job_run::JobRunStatus::Scheduled);
+        assert_eq!(job_run.status, JobRunStatus::Scheduled);
         assert_eq!(job_run.scheduled_at.timestamp(), due.timestamp());
         assert_eq!(job_run.schedule_id, None);
+    }
+
+    /// `new_with_migrated_mem` for the reason the test above gives.
+    async fn submit_from(db: &TestDb, parent_task_run_attempt_id: Option<i64>) -> anyhow::Result<i64> {
+
+        db.insert_job("hello", 0).await;
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+
+        db.crud.submit_job(
+            &mut conn,
+            "hello",
+            &map(&[]),
+            chrono::Utc::now(),
+            None,
+            parent_task_run_attempt_id,
+        ).await
+    }
+
+    #[tokio::test]
+    async fn a_run_submitted_from_a_task_is_linked_to_its_attempt() {
+
+        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+
+        let parent = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(parent.id, TaskRunStatus::Running).await;
+        let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
+
+        let child_id = submit_from(&db, Some(attempt.id)).await.unwrap();
+
+        assert_eq!(db.job_run(child_id).await.parent_task_run_attempt_id, Some(attempt.id));
+    }
+
+    /// A process can outlive its run - a backgrounded command still going after retention
+    /// deleted the run - and its submission is still a submission, just an unlinked one.
+    #[tokio::test]
+    async fn a_run_submitted_by_an_attempt_that_is_gone_is_not_linked() {
+
+        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+
+        let child_id = submit_from(&db, Some(404)).await.unwrap();
+
+        assert_eq!(db.job_run(child_id).await.parent_task_run_attempt_id, None);
+    }
+
+    #[tokio::test]
+    async fn a_task_of_a_run_being_stopped_cannot_submit() {
+
+        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+
+        let parent = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(parent.id, TaskRunStatus::Running).await;
+        let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
+        db.insert_job_run_stop(parent.id).await;
+
+        let error = submit_from(&db, Some(attempt.id)).await.unwrap_err().to_string();
+
+        assert!(error.contains("being stopped"), "{error}");
     }
 
     #[test]

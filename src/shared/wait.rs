@@ -16,6 +16,7 @@ use crate::crud::task_run_attempt::{
 use crate::crud::CRUD;
 use crate::serve_state::{status, ServeStatus};
 use super::job_run::select_job_run;
+use super::task_run_attempt::own_task_run_attempt_id;
 
 /// Refuses a wait that nothing would ever end.
 ///
@@ -58,13 +59,6 @@ impl std::fmt::Display for DataDirNotServed {
 }
 
 impl std::error::Error for DataDirNotServed {}
-
-/// The attempt this process runs inside, if any. The dispatcher sets this variable on every
-/// task command after stripping every inherited `FLOWLITE_` variable, so a task's own `env:`
-/// cannot forge it.
-fn own_task_run_attempt_id() -> Option<i64> {
-    std::env::var("FLOWLITE_TASK_RUN_ATTEMPT_ID").ok()?.parse().ok()
-}
 
 /// Blocks until the run has settled, and reports it as it settled.
 ///

@@ -22,7 +22,7 @@ impl CRUD {
     ) -> anyhow::Result<(JobRun, Vec<TaskRun>)> {
 
         let job_run = self.select_job_run(&mut *conn, &SelectJobRunsData {
-            filter: SelectJobRunsDataFilter { id: Some(job_run_id), job_id: None, status: None, statuses: None, schedule_id: None, scheduled_at: None },
+            filter: SelectJobRunsDataFilter { id: Some(job_run_id), job_id: None, status: None, statuses: None, schedule_id: None, scheduled_at: None, parent_job_run_id: None },
             sort: None,
             limit: Some(1),
             offset: None,
@@ -60,7 +60,7 @@ impl CRUD {
     ) -> anyhow::Result<(Vec<TaskRunAttempt>, HashMap<i64, TaskRunAttemptOutputStreams>)> {
 
         let job_run = self.select_job_run(&mut *conn, &SelectJobRunsData {
-            filter: SelectJobRunsDataFilter { id: Some(job_run_id), job_id: None, status: None, statuses: None, schedule_id: None, scheduled_at: None },
+            filter: SelectJobRunsDataFilter { id: Some(job_run_id), job_id: None, status: None, statuses: None, schedule_id: None, scheduled_at: None, parent_job_run_id: None },
             sort: None,
             limit: Some(1),
             offset: None,
@@ -72,6 +72,7 @@ impl CRUD {
 
         let task_run_attempts = self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
             filter: SelectTaskRunAttemptsDataFilter {
+                id: None,
                 task_run_id: None,
                 job_run_id: Some(job_run_id),
                 task_id: task_id.map(str::to_string),

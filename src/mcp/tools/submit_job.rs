@@ -20,6 +20,7 @@ use crate::mcp::wait::{clamp_wait_seconds, wait_for_settled_job_run};
 use crate::mcp::McpServer;
 use crate::shared::job::installed_job_id;
 use crate::shared::schedule_at::{parse_schedule_at, refuse_waiting_for_a_future_run};
+use crate::shared::task_run_attempt::own_task_run_attempt_id;
 use crate::shared::wait::ensure_data_dir_is_served;
 use crate::toolkit::Toolkit;
 use crate::yaml_models::job_yaml::JobYaml;
@@ -183,7 +184,14 @@ async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(J
         }
     };
 
-    let job_run_id = crud.submit_job(&mut conn, &job_id, &overrides, scheduled_at, None).await?;
+    let job_run_id = crud.submit_job(
+        &mut conn,
+        &job_id,
+        &overrides,
+        scheduled_at,
+        None,
+        own_task_run_attempt_id(),
+    ).await?;
     let job_run = wait_for_settled_job_run(&crud, &mut conn, job_run_id, wait_seconds).await?;
 
     // A lookup failure here is not a failure to submit - the run is already written by

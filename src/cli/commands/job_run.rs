@@ -8,6 +8,7 @@ use crate::crud::task_run_attempt::TaskRunAttempt;
 use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStreams;
 use crate::shared::format;
 use crate::shared::job_run::{build_job_run_detail, JobRunDetail, delete_job_run, deleted_occurrence, parse_job_run_status, select_job_run, stop_job_run, DeletedOccurrence, TaskRunAttemptLog};
+use crate::shared::task_run_attempt::own_task_run_attempt_id;
 use crate::shared::wait::{ensure_data_dir_is_served, wait_for_job_run};
 use super::job::describe_unserved_data_dir;
 
@@ -114,6 +115,7 @@ impl JobRunListCmd {
                 statuses: None,
                 schedule_id: None,
                 scheduled_at: None,
+                parent_job_run_id: None,
             },
             sort: Some(SelectJobRunsDataSort::IdDesc),
             limit: Some(self.limit),
@@ -358,7 +360,7 @@ async fn rerun_job_run(
         );
     }
 
-    crud.rerun_job(&mut *conn, job_run_id).await
+    crud.rerun_job(&mut *conn, job_run_id, own_task_run_attempt_id()).await
 }
 
 impl JobRunRerunCmd {
@@ -438,6 +440,19 @@ fn print_job_run(detail: &JobRunDetail) {
     println!("{:<10} {}", "finished", optional_timestamp(job_run.finished_at));
 
     println!("{:<10} {}", "duration", run_duration(job_run));
+
+    if let Some(parent) = &detail.parent {
+        println!("{:<10} task {} of job run {}", "parent", parent.task_id, parent.job_run_id);
+    }
+
+    if !detail.child_job_run_ids.is_empty() {
+        let child_job_run_ids: Vec<String> = detail.child_job_run_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+
+        println!("{:<10} {}", "children", child_job_run_ids.join(", "));
+    }
 
     if !job_run.parameters.0.is_empty() {
         println!();

@@ -592,6 +592,31 @@ impl TestDb {
                     scheduled_at,
                     schedule_id: schedule_id.map(str::to_string),
                     status,
+                    parent_task_run_attempt_id: None,
+                },
+            },
+        ).await.unwrap();
+
+        self.create_job_run_dir(id);
+
+        self.job_run(id).await
+    }
+
+    /// A job run a task submitted: the child of whichever run `parent` belongs to.
+    pub async fn insert_child_job_run(&self, parent: &TaskRunAttempt, status: JobRunStatus) -> JobRun {
+
+        let id = self.crud.insert_job_run(
+            &*self.conn_pool,
+            &InsertJobRunData {
+                input: InsertJobRunDataInput {
+                    job_id: "child".to_string(),
+                    job_name: "Child".to_string(),
+                    job_description: String::new(),
+                    parameters: BTreeMap::new(),
+                    scheduled_at: Utc::now(),
+                    schedule_id: None,
+                    status,
+                    parent_task_run_attempt_id: Some(parent.id),
                 },
             },
         ).await.unwrap();
@@ -620,6 +645,7 @@ impl TestDb {
                     scheduled_at,
                     schedule_id: None,
                     status,
+                    parent_task_run_attempt_id: None,
                 },
             },
         ).await.unwrap();
@@ -1075,6 +1101,7 @@ impl TestDb {
                     statuses: None,
                     schedule_id: None,
                     scheduled_at: None,
+                    parent_job_run_id: None,
                 },
                 sort: None,
                 limit: Some(1),
@@ -1106,6 +1133,7 @@ impl TestDb {
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
+                    id: None,
                     task_run_id: Some(task_run_id),
                     job_run_id: None,
                     task_id: None,
@@ -1126,6 +1154,7 @@ impl TestDb {
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
+                    id: None,
                     task_run_id: None,
                     job_run_id: None,
                     task_id: None,

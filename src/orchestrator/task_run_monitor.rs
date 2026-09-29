@@ -201,6 +201,7 @@ impl TaskRunMonitor {
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
+                    id: None,
                     task_run_id: Some(task_run.id),
                     job_run_id: None,
                     task_id: None,

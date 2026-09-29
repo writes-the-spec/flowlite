@@ -104,6 +104,7 @@ impl Scheduler {
                 statuses: Some(occupying_statuses()),
                 schedule_id: Some(schedule.schedule_id.clone()),
                 scheduled_at: Some(occurrence),
+                parent_job_run_id: None,
             },
             sort: None,
             limit: Some(1),
@@ -123,6 +124,7 @@ impl Scheduler {
             &schedule_job.parameters.0,
             occurrence,
             Some(&schedule.schedule_id),
+            None,
         ).await {
             eprintln!(
                 "Scheduler could not submit job {} of schedule {} for {}: {e:?}",
@@ -215,6 +217,7 @@ mod tests {
                 statuses: None,
                 schedule_id: Some(schedule_id.to_string()),
                 scheduled_at: None,
+                parent_job_run_id: None,
             },
             sort: Some(SelectJobRunsDataSort::Id),
             limit: None,
@@ -234,6 +237,7 @@ mod tests {
                 statuses: None,
                 schedule_id: Some(schedule_id.to_string()),
                 scheduled_at: None,
+                parent_job_run_id: None,
             },
             sort: Some(SelectJobRunsDataSort::Id),
             limit: None,

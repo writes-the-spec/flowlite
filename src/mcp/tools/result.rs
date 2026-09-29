@@ -206,6 +206,7 @@ mod tests {
             started_at: None,
             finished_at: None,
             status: JobRunStatus::Queued,
+            parent_task_run_attempt_id: None,
         }
     }
 }

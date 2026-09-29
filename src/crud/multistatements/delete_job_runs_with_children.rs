@@ -72,6 +72,7 @@ impl CRUD {
                 statuses: None,
                 schedule_id: data.filter.schedule_id.clone(),
                 scheduled_at: None,
+                parent_job_run_id: None,
             },
             sort: None,
             limit: None,
@@ -282,6 +283,7 @@ mod tests {
     async fn task_run_attempt_count(db: &TestDb, job_run_id: i64) -> usize {
         db.crud.select_task_run_attempts(&*db.conn_pool, &SelectTaskRunAttemptsData {
             filter: SelectTaskRunAttemptsDataFilter {
+                id: None,
                 task_run_id: None,
                 job_run_id: Some(job_run_id),
                 task_id: None,
@@ -327,6 +329,7 @@ mod tests {
                 statuses: None,
                 schedule_id: None,
                 scheduled_at: None,
+                parent_job_run_id: None,
             },
             sort: None,
             limit: Some(1),

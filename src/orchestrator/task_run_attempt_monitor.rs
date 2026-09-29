@@ -413,6 +413,7 @@ impl TaskRunAttemptMonitor {
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
+                    id: None,
                     task_run_id: None,
                     job_run_id: None,
                     task_id: None,
@@ -975,6 +976,7 @@ mod tests {
             &*db.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
+                    id: None,
                     task_run_id: None,
                     job_run_id: None,
                     task_id: None,

@@ -21,6 +21,7 @@ pub async fn recover_orphaned_task_run_attempts(
         &**conn_pool,
         &SelectTaskRunAttemptsData {
             filter: SelectTaskRunAttemptsDataFilter {
+                id: None,
                 task_run_id: None,
                 job_run_id: None,
                 task_id: None,

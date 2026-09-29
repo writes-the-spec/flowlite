@@ -86,7 +86,7 @@ async fn list_job_runs_rows(
     let crud = CRUD::new(Arc::new(toolkit));
 
     crud.select_job_runs(&mut conn, &SelectJobRunsData {
-        filter: SelectJobRunsDataFilter { id: None, job_id: job, status, statuses: None, schedule_id: None, scheduled_at: None },
+        filter: SelectJobRunsDataFilter { id: None, job_id: job, status, statuses: None, schedule_id: None, scheduled_at: None, parent_job_run_id: None },
         sort: Some(SelectJobRunsDataSort::IdDesc),
         limit: Some(limit),
         offset: None,

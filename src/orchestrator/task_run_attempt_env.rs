@@ -169,6 +169,7 @@ mod tests {
             started_at: None,
             finished_at: None,
             status: JobRunStatus::Running,
+            parent_task_run_attempt_id: None,
         }
     }
 

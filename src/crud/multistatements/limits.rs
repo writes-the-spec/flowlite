@@ -24,6 +24,7 @@ impl CRUD {
 
         self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
             filter: SelectTaskRunAttemptsDataFilter {
+                id: None,
                 task_run_id: None,
                 job_run_id: None,
                 task_id: None,
@@ -68,6 +69,7 @@ impl CRUD {
                 statuses: None,
                 schedule_id: None,
                 scheduled_at: None,
+                parent_job_run_id: None,
             },
             sort: None,
             limit: None,

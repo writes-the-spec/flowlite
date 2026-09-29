@@ -89,6 +89,7 @@ pub struct InsertTaskRunAttemptData {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SelectTaskRunAttemptsDataFilter {
+    pub id: Option<i64>,
     pub task_run_id: Option<i64>,
     pub job_run_id: Option<i64>,
     pub task_id: Option<String>,
@@ -195,6 +196,11 @@ impl CRUD {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
             "SELECT id, task_run_id, job_run_id, job_id, task_id, created_at, started_at, finished_at, attempt, status, process_group_id, output, waiting_since FROM task_run_attempt WHERE 1=1"
         );
+
+        if let Some(id) = data.filter.id {
+            query_builder.push(" AND id = ");
+            query_builder.push_bind(id);
+        }
 
         if let Some(task_run_id) = data.filter.task_run_id {
             query_builder.push(" AND task_run_id = ");
@@ -397,7 +403,7 @@ mod tests {
     }
 
     fn empty_filter() -> SelectTaskRunAttemptsDataFilter {
-        SelectTaskRunAttemptsDataFilter { task_run_id: None, job_run_id: None, task_id: None, status: None }
+        SelectTaskRunAttemptsDataFilter { id: None, task_run_id: None, job_run_id: None, task_id: None, status: None }
     }
 
     /// `job_run_id` really filters: deleting by one job run's id only removes its attempt,

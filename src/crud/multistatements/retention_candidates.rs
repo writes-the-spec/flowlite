@@ -200,6 +200,7 @@ fn finished_job_runs_filter(job_id: Option<String>) -> SelectJobRunsDataFilter {
         statuses: Some(finished),
         schedule_id: None,
         scheduled_at: None,
+        parent_job_run_id: None,
     }
 }
 
@@ -233,6 +234,7 @@ mod tests {
                     scheduled_at: Utc::now(),
                     schedule_id: None,
                     status,
+                    parent_task_run_attempt_id: None,
                 },
             },
         ).await.unwrap();

@@ -120,6 +120,7 @@ pub struct InsertJobRunDataInput {
     pub parameters: BTreeMap<String, String>,
     pub scheduled_at: DateTime<Utc>,
     pub schedule_id: Option<String>,
+    pub parent_task_run_attempt_id: Option<i64>,
     pub status: JobRunStatus,
 }
 
@@ -152,6 +153,8 @@ pub struct SelectJobRunsDataFilter {
     /// caller has to pass the same instant it would insert - which is what the Scheduler
     /// does, asking after one cron occurrence at a time.
     pub scheduled_at: Option<DateTime<Utc>>,
+    /// Submitted by a task of this job run, through any of its attempts.
+    pub parent_job_run_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -223,6 +226,8 @@ pub struct JobRun {
     pub created_at: DateTime<Utc>,
     pub scheduled_at: DateTime<Utc>,
     pub schedule_id: Option<String>,
+    /// The task attempt that submitted this run, `None` for a run no task submitted.
+    pub parent_task_run_attempt_id: Option<i64>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub status: JobRunStatus,
@@ -234,7 +239,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let res = sqlx::query(
-            "INSERT INTO job_run (job_id, job_name, job_description, parameters, created_at, scheduled_at, schedule_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO job_run (job_id, job_name, job_description, parameters, created_at, scheduled_at, schedule_id, parent_task_run_attempt_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(&data.input.job_id)
             .bind(&data.input.job_name)
@@ -243,6 +248,7 @@ impl CRUD {
             .bind(self.toolkit.get_current_ts())
             .bind(&data.input.scheduled_at)
             .bind(&data.input.schedule_id)
+            .bind(data.input.parent_task_run_attempt_id)
             .bind(&data.input.status)
             .execute(executor)
             .await?;
@@ -263,7 +269,7 @@ impl CRUD {
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
         let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-            "SELECT id, job_id, job_name, job_description, parameters, created_at, scheduled_at, schedule_id, started_at, finished_at, status FROM job_run WHERE 1=1"
+            "SELECT id, job_id, job_name, job_description, parameters, created_at, scheduled_at, schedule_id, parent_task_run_attempt_id, started_at, finished_at, status FROM job_run WHERE 1=1"
         );
 
         push_job_run_filter(&mut query_builder, &data.filter);
@@ -476,6 +482,14 @@ fn push_job_run_filter(query_builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, fil
         query_builder.push(" AND scheduled_at = ");
         query_builder.push_bind(scheduled_at);
     }
+
+    if let Some(parent_job_run_id) = filter.parent_job_run_id {
+        query_builder.push(
+            " AND parent_task_run_attempt_id IN (SELECT id FROM task_run_attempt WHERE job_run_id = ",
+        );
+        query_builder.push_bind(parent_job_run_id);
+        query_builder.push(")");
+    }
 }
 
 /// Pushes `AND status IN (?, ?, ...)`, one bind per status. It stays its own function
@@ -554,7 +568,7 @@ mod tests {
     }
 
     fn empty_filter() -> SelectJobRunsDataFilter {
-        SelectJobRunsDataFilter { id: None, job_id: None, status: None, statuses: None, schedule_id: None, scheduled_at: None }
+        SelectJobRunsDataFilter { id: None, job_id: None, status: None, statuses: None, schedule_id: None, scheduled_at: None, parent_job_run_id: None }
     }
 
     fn ids(runs: &[JobRun]) -> Vec<i64> {
@@ -593,6 +607,7 @@ mod tests {
                     scheduled_at: Utc::now(),
                     schedule_id: None,
                     status,
+                    parent_task_run_attempt_id: None,
                 },
             },
         ).await.unwrap();
@@ -608,6 +623,30 @@ mod tests {
             insert_run_for(db, "job-a", JobRunStatus::Failed).await,
             insert_run_for(db, "job-b", JobRunStatus::Aborted).await,
         )
+    }
+
+    /// A child is found through any attempt of its parent run, a retried one included, and
+    /// a run no task submitted is nobody's child.
+    #[tokio::test]
+    async fn select_job_runs_filters_by_parent_job_run_id() {
+
+        let db = crate::test_support::TestDb::new().await;
+
+        let parent = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(parent.id, crate::crud::task_run::TaskRunStatus::Running).await;
+        let first_attempt = db.insert_task_run_attempt(&task_run, 1, crate::crud::task_run_attempt::TaskRunAttemptStatus::Failed).await;
+        let second_attempt = db.insert_task_run_attempt(&task_run, 2, crate::crud::task_run_attempt::TaskRunAttemptStatus::Running).await;
+
+        let first_child = db.insert_child_job_run(&first_attempt, JobRunStatus::Running).await;
+        let second_child = db.insert_child_job_run(&second_attempt, JobRunStatus::Running).await;
+        insert_run_for(&db, "unrelated", JobRunStatus::Running).await;
+
+        let children = select(&db, SelectJobRunsDataFilter { parent_job_run_id: Some(parent.id), ..empty_filter() }).await;
+
+        let mut child_ids = ids(&children);
+        child_ids.sort();
+
+        assert_eq!(child_ids, vec![first_child.id, second_child.id]);
     }
 
     /// An empty filter counts the whole table — the count's half of the parity the delete
@@ -834,6 +873,7 @@ mod tests {
                 statuses: None,
                 schedule_id: Some("nightly".to_string()),
                 scheduled_at: None,
+                parent_job_run_id: None,
             },
             sort: None,
             limit: None,
@@ -874,6 +914,7 @@ mod tests {
                 statuses: None,
                 schedule_id: None,
                 scheduled_at: None,
+                parent_job_run_id: None,
             },
             sort: None,
             limit: Some(1),

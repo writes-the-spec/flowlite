@@ -506,6 +506,7 @@ impl TaskRunAttemptDispatcher {
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
+                    id: None,
                     task_run_id: None,
                     job_run_id: None,
                     task_id: None,
@@ -589,6 +590,7 @@ impl TaskRunAttemptDispatcher {
                     statuses: None,
                     schedule_id: None,
                     scheduled_at: None,
+                    parent_job_run_id: None,
                 },
                 sort: None,
                 limit: Some(1),

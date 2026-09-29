@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
+use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
 use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
 use crate::crud::task_run::TaskRun;
-use crate::crud::task_run_attempt::TaskRunAttempt;
+use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, TaskRunAttempt};
 use crate::crud::CRUD;
 use super::format;
 
@@ -14,7 +14,16 @@ use super::format;
 pub(crate) struct JobRunDetail {
     #[serde(flatten)]
     pub(crate) job_run: JobRun,
+    pub(crate) parent: Option<JobRunParent>,
+    pub(crate) child_job_run_ids: Vec<i64>,
     pub(crate) task_runs: Vec<TaskRunDetail>,
+}
+
+/// The task whose command submitted a run.
+#[derive(Serialize)]
+pub(crate) struct JobRunParent {
+    pub(crate) job_run_id: i64,
+    pub(crate) task_id: String,
 }
 
 /// One task run and what it produced, flattened the same way.
@@ -31,7 +40,8 @@ pub(crate) struct TaskRunDetail {
 }
 
 /// Joins each task run to the result of the attempt that succeeded, in one extra query for
-/// the whole run.
+/// the whole run, and the run to the task that submitted it and the runs its own tasks
+/// submitted.
 pub(crate) async fn build_job_run_detail(
     crud: &CRUD,
     conn: &mut sqlx::SqliteConnection,
@@ -53,7 +63,72 @@ pub(crate) async fn build_job_run_detail(
         })
         .collect();
 
-    Ok(JobRunDetail { job_run, task_runs })
+    let parent = select_job_run_parent(crud, &mut *conn, &job_run).await?;
+    let child_job_run_ids = select_child_job_run_ids(crud, &mut *conn, job_run.id).await?;
+
+    Ok(JobRunDetail { job_run, parent, child_job_run_ids, task_runs })
+}
+
+/// `None` for a run no task submitted, and for one whose parent retention has since
+/// deleted.
+pub(crate) async fn select_job_run_parent<'e, E>(
+    crud: &CRUD,
+    executor: E,
+    job_run: &JobRun,
+) -> anyhow::Result<Option<JobRunParent>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+
+    let Some(parent_task_run_attempt_id) = job_run.parent_task_run_attempt_id else {
+        return Ok(None);
+    };
+
+    let attempts = crud.select_task_run_attempts(executor, &SelectTaskRunAttemptsData {
+        filter: SelectTaskRunAttemptsDataFilter {
+            id: Some(parent_task_run_attempt_id),
+            task_run_id: None,
+            job_run_id: None,
+            task_id: None,
+            status: None,
+        },
+        sort: None,
+    }).await?;
+
+    let parent = attempts.into_iter().next().map(|attempt| JobRunParent {
+        job_run_id: attempt.job_run_id,
+        task_id: attempt.task_id,
+    });
+
+    Ok(parent)
+}
+
+/// The runs this run's tasks submitted, oldest first.
+pub(crate) async fn select_child_job_run_ids<'e, E>(
+    crud: &CRUD,
+    executor: E,
+    job_run_id: i64,
+) -> anyhow::Result<Vec<i64>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+
+    let children = crud.select_job_runs(executor, &SelectJobRunsData {
+        filter: SelectJobRunsDataFilter {
+            id: None,
+            job_id: None,
+            status: None,
+            statuses: None,
+            schedule_id: None,
+            scheduled_at: None,
+            parent_job_run_id: Some(job_run_id),
+        },
+        sort: Some(SelectJobRunsDataSort::Id),
+        limit: None,
+        offset: None,
+    }).await?;
+
+    Ok(children.into_iter().map(|child| child.id).collect())
 }
 
 /// One attempt with what it wrote. The MCP `get_job_run_logs` tool fills the same shape
@@ -81,6 +156,7 @@ pub(crate) async fn select_job_run(
             statuses: None,
             schedule_id: None,
             scheduled_at: None,
+            parent_job_run_id: None,
         },
         sort: None,
         limit: Some(1),
@@ -113,6 +189,7 @@ pub(crate) async fn stop_job_run(
             statuses: None,
             schedule_id: None,
             scheduled_at: None,
+            parent_job_run_id: None,
         },
         sort: None,
         limit: Some(1),
@@ -237,8 +314,33 @@ mod tests {
     use crate::crud::job_run::{UpdateJobRunsData, UpdateJobRunsDataFilter, UpdateJobRunsDataInput};
     use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
     use crate::crud::task_run::TaskRunStatus;
+    use crate::crud::task_run_attempt::TaskRunAttemptStatus;
     use crate::shared::wait::wait_for_job_run;
     use crate::test_support::TestDb;
+
+    #[tokio::test]
+    async fn the_detail_names_the_task_that_submitted_the_run_and_the_runs_it_submitted() {
+
+        let db = TestDb::new().await;
+
+        let parent = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run(parent.id, TaskRunStatus::Running).await;
+        let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
+        let child = db.insert_child_job_run(&attempt, JobRunStatus::Running).await;
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+
+        let parent_detail = build_job_run_detail(&db.crud, &mut conn, parent, vec![]).await.unwrap();
+        let child_detail = build_job_run_detail(&db.crud, &mut conn, child.clone(), vec![]).await.unwrap();
+
+        assert!(parent_detail.parent.is_none());
+        assert_eq!(parent_detail.child_job_run_ids, vec![child.id]);
+
+        let child_parent = child_detail.parent.unwrap();
+        assert_eq!(child_parent.job_run_id, task_run.job_run_id);
+        assert_eq!(child_parent.task_id, task_run.task_id);
+        assert!(child_detail.child_job_run_ids.is_empty());
+    }
 
     #[test]
     fn a_status_word_parses_to_its_status() {

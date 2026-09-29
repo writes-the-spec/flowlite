@@ -57,6 +57,20 @@
             <div class="meta__value meta__value--mono">{% if job_exists %}<a href="/jobs/{{ job_run.job_id }}">{{ job_run.job_id }}</a>{% else %}{{ job_run.job_id }}{% endif %}</div>
         </div>
 
+        {% if let Some(parent) = job_run.parent %}
+        <div class="meta__item">
+            <div class="meta__label">Submitted by</div>
+            <div class="meta__value meta__value--mono"><a href="/job-runs/{{ parent.job_run_id }}">{{ parent.task_id }} · run {{ parent.job_run_id }}</a></div>
+        </div>
+        {% endif %}
+
+        {% if !job_run.child_job_run_ids.is_empty() %}
+        <div class="meta__item">
+            <div class="meta__label">Child runs</div>
+            <div class="meta__value meta__value--mono">{% for child_job_run_id in job_run.child_job_run_ids %}<a href="/job-runs/{{ child_job_run_id }}">{{ child_job_run_id }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</div>
+        </div>
+        {% endif %}
+
         <div class="meta__item">
             <div class="meta__label">Created</div>
             <div class="meta__value">{{ job_run.created_at }}</div>
