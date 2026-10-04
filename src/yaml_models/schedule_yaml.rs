@@ -124,7 +124,7 @@ mod tests {
         assert_eq!(schedule.timezone, Some(Tz::Europe__Vienna));
     }
 
-    /// The one gotcha the README calls out: the `cron` crate's dialect puts seconds first,
+    /// The one gotcha REFERENCE.md calls out: the `cron` crate's dialect puts seconds first,
     /// so a line pasted from crontab is five fields and means nothing here. It is refused at
     /// parse because the field is typed `cron::Schedule`, not `String` - and that refusal is
     /// what lets `CronTrigger::from_schedule` unwrap the stored expression later.

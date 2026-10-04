@@ -29,8 +29,8 @@ One execution of a [`job`](job.md), and its history until retention prunes it.
 
 Only `RetentionService` ([src/retention/service.rs](../../../../src/retention/service.rs)), through `CRUD::delete_job_runs_with_children` ([src/crud/multistatements/](../../../../src/crud/multistatements/delete_job_runs_with_children.rs)). Never a run `Scheduled`, `Queued` or `Running`, nor one owing a `pending` [`job_run_notification`](job_run_notification.md). One transaction deletes the run, every row in the other five tables with its `job_run_id`, and every run its tasks submitted (`CRUD::select_job_run_descendants`) — deepest first, since each child's `parent_task_run_attempt_id` references an attempt of the run above. A run with an unfinished descendant waits for a later pass.
 
-- `[job_defaults] keep_runs` (or [`mem.job`](job.md)'s `keep_runs`) keeps a job's newest finished runs; `[retention] keep_runs_total` then caps all jobs, oldest first. See [Retention](../../../../README.md#retention).
-- `job-run rerun` of a deleted run fails as for an unknown id — see [Reruns](../../../../README.md#reruns).
+- `[job_defaults] keep_runs` (or [`mem.job`](job.md)'s `keep_runs`) keeps a job's newest finished runs; `[retention] keep_runs_total` then caps all jobs, oldest first. See [Retention](../../../../REFERENCE.md#retention).
+- `job-run rerun` of a deleted run fails as for an unknown id — see [Reruns](../../../../REFERENCE.md#reruns).
 - **The [Scheduler](../../scheduler/SKILL.md) only adds.** A `Scheduled` run its schedule no longer wants (`submit_ahead` fell, cron changed, job left `jobs:`, schedule disabled or deleted) still runs. A stop (→ `Skipped`) calls it off for good; `job-run delete` (→ `Deleted`) frees the occurrence, which the Scheduler resubmits if it is still ahead.
 
 ## Read by

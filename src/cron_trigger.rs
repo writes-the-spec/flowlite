@@ -167,7 +167,7 @@ mod tests {
 
     /// The cron fields are read in the schedule's own zone, so it is the *local* time that
     /// stays put across a DST change and the UTC instant that moves. 03:30 in Vienna is
-    /// 02:30Z in winter and 01:30Z in summer - the property the README promises, and the
+    /// 02:30Z in winter and 01:30Z in summer - the property REFERENCE.md promises, and the
     /// reason the zone is stored on the row rather than assumed.
     #[test]
     fn the_cron_is_read_in_its_own_zone_so_the_utc_instant_moves_with_dst() {

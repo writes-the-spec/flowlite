@@ -317,7 +317,7 @@ impl TaskRunAttemptDispatcher {
 
         // The child's FLOWLITE_ namespace belongs to flowlite, and is stated rather than
         // inherited. `Command::envs` is an overlay - it cannot unset what this server was
-        // started with - so a credential passed the way the README says to pass one,
+        // started with - so a credential passed the way REFERENCE.md says to pass one,
         // FLOWLITE_SMTP__PASSWORD=... flowlite serve, would otherwise be readable by every
         // command flowlite spawns. Stripped before the overlay is applied, so the names
         // build_task_run_attempt_env means a command to have are put back by it.
@@ -1191,7 +1191,7 @@ mod tests {
 
     /// A spawn's child inherits flowlite's own environment, and `Command::envs` is an
     /// overlay that cannot unset what was inherited. So a credential passed to the server
-    /// the way the README says to pass it - `FLOWLITE_SMTP__PASSWORD=... flowlite serve` -
+    /// the way REFERENCE.md says to pass it - `FLOWLITE_SMTP__PASSWORD=... flowlite serve` -
     /// would otherwise be readable by every command flowlite spawns, whether or not that
     /// command has anything to do with mail.
     #[tokio::test]

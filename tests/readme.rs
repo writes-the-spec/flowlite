@@ -1,17 +1,17 @@
-//! The numbers the README prints are the ones the code actually defaults to.
+//! The numbers the README and REFERENCE.md print are the ones the code actually defaults to.
 //!
-//! Its Configuration section is a table of defaults a reader copies and edits, so a default
-//! changed in `AppConfig` and not here makes the README quietly wrong about what the program
-//! does — and unlike a broken link, nothing about reading it suggests checking.
+//! The reference's Configuration section is a table of defaults a reader copies and edits,
+//! so a default changed in `AppConfig` and not there makes it quietly wrong about what the
+//! program does — and unlike a broken link, nothing about reading it suggests checking.
 //!
-//! This compares values, not keys: a key added to a section is not caught, because a README
-//! is allowed to be shorter than the struct. What it catches is the drift that matters, a
-//! number that used to be true.
+//! This compares values, not keys: a key added to a section is not caught, because the
+//! reference is allowed to be shorter than the struct. What it catches is the drift that
+//! matters, a number that used to be true.
 
 use flowlite::app_config::AppConfig;
 
 #[test]
-fn the_readme_prints_the_real_defaults() {
+fn the_reference_prints_the_real_defaults() {
 
     let defaults = AppConfig::default();
     let orchestrator = &defaults.orchestrator;
@@ -50,7 +50,7 @@ fn the_readme_prints_the_real_defaults() {
         ("smtp", "max_output_bytes", smtp.max_output_bytes.to_string()),
     ];
 
-    let readme = std::fs::read_to_string("README.md").unwrap();
+    let reference = std::fs::read_to_string("REFERENCE.md").unwrap();
 
     let mut wrong = Vec::new();
 
@@ -58,7 +58,7 @@ fn the_readme_prints_the_real_defaults() {
         let mut current = "";
         let mut found = false;
 
-        for line in readme.lines() {
+        for line in reference.lines() {
             if let Some(name) = line.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
                 current = name;
             }
@@ -75,42 +75,44 @@ fn the_readme_prints_the_real_defaults() {
             let printed = printed.split_whitespace().next().unwrap_or("");
 
             if printed != value {
-                wrong.push(format!("[{section}] {key}: README says {printed}, the default is {value}"));
+                wrong.push(format!("[{section}] {key}: REFERENCE.md says {printed}, the default is {value}"));
             }
         }
 
         if !found {
-            wrong.push(format!("[{section}] {key}: not printed in the README"));
+            wrong.push(format!("[{section}] {key}: not printed in REFERENCE.md"));
         }
     }
 
     assert!(
         wrong.is_empty(),
-        "The README's defaults disagree with AppConfig:\n{}\n\nThe Configuration section is \
-         a table people copy. A number that used to be true is worse than one left out.",
+        "REFERENCE.md's defaults disagree with AppConfig:\n{}\n\nThe Configuration section \
+         is a table people copy. A number that used to be true is worse than one left out.",
         wrong.join("\n"),
     );
 }
 
-/// The README shows `flowlite status` output, which prints the version the binary was
-/// built with. A release that bumps the version leaves those two lines describing the one
-/// before it - a small lie, in the part of the README a reader is most likely to compare
-/// against what their own terminal just said.
+/// The docs show `flowlite status` output, which prints the version the binary was built
+/// with. A release that bumps the version leaves those lines describing the one before it -
+/// a small lie, in the part of the docs a reader is most likely to compare against what
+/// their own terminal just said.
 #[test]
-fn the_readme_prints_the_current_version() {
+fn the_docs_print_the_current_version() {
 
     let version = env!("CARGO_PKG_VERSION");
-    let readme = std::fs::read_to_string("README.md").unwrap();
+    let docs = ["README.md", "REFERENCE.md"]
+        .map(|path| std::fs::read_to_string(path).unwrap())
+        .join("\n");
 
     let stale: Vec<_> = ["flowlite ", "\"version\":\""]
         .into_iter()
-        .flat_map(|prefix| versions_after(&readme, prefix))
+        .flat_map(|prefix| versions_after(&docs, prefix))
         .filter(|found| found != version)
         .collect();
 
     assert!(
         stale.is_empty(),
-        "The README shows a version this crate is not: {stale:?}, but Cargo.toml says \
+        "The docs show a version this crate is not: {stale:?}, but Cargo.toml says \
          {version}. The status examples print what the binary reports, so they have to move \
          with it.",
     );
