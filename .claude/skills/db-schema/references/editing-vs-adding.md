@@ -28,9 +28,11 @@ Also check the default location, where a dev instance lands without `-D`:
 
 ## The call
 
+**A disk migration that shipped in a release tag is applied, always.** `v0.1.0` shipped every `create_*` file under `db/schemas/disk/migrations/`, and any install of a release has run them. Never edit one; a change to a disk table after that is a new migration. `git tag --contains $(git log -1 --format=%H -- <file>)` prints a tag if the file shipped.
+
 | State | Do | Why |
 |---|---|---|
-| **Nothing has applied it** — added minutes ago, pre-release, on a branch nobody ran | **Edit the original** | One migration describing the table beats a create plus an alter undoing half of it. |
+| **Nothing has applied it** — added since the last release tag, on no database yet | **Edit the original** | One migration describing the table beats a create plus an alter undoing half of it. |
 | **Something has applied it** — a dev database, a deployed instance, CI with a persisted volume | **Add a new migration.** Never edit | The checksum stops their process and they can't fix it without losing data. |
 | **Unsure** | **Add a new one** | An extra migration costs one file; a broken checksum costs a database. |
 | **A `mem` table** | **Edit the `CREATE TABLE`.** Never add a migration | Nothing but the running process has applied it. |
