@@ -3,6 +3,7 @@ use axum::response::{Html, IntoResponse};
 use askama::Template;
 use axum::Extension;
 
+use crate::router::app::middlewares::session::SignedIn;
 use crate::crud::CRUD;
 use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRunStatus};
@@ -67,6 +68,8 @@ fn stream_note(stream: &str) -> String {
 struct TaskRunIdRouteTemplate {
     current_route: &'static str,
     theme: &'static str,
+    /// Who is signed in, for the masthead; None when `[auth]` is not configured.
+    signed_in_as: Option<String>,
     task_run: TaskRunDisplay,
     attempts: Vec<AttemptDisplay>,
     attempt_note: String,
@@ -105,6 +108,7 @@ pub async fn task_run_id_route(
     State(state): State<AppState>,
     Extension(crud): Extension<CRUD>,
     Path(task_run_id): Path<i64>,
+    signed_in: Option<Extension<SignedIn>>,
 ) -> impl IntoResponse {
     let conn = &*state.conn_pool;
 
@@ -189,6 +193,7 @@ pub async fn task_run_id_route(
     let template = TaskRunIdRouteTemplate {
         current_route: "home",
         theme: state.toolkit.app_config.ui.theme.as_attribute(),
+        signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         job_exists: job.is_some(),
         task_run: TaskRunDisplay {
             id: task_run.id,

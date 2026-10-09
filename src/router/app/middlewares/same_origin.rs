@@ -7,14 +7,17 @@ use axum::{
 
 /// Refuses a state-changing request that a different site caused the browser to make.
 ///
-/// The dashboard has no auth and binds to localhost, which is the product's position, not
-/// an oversight. That is fine while every route is a read: a page on another origin can
-/// cause a request but cannot read the response. It stops being fine once a POST starts
-/// work - a form post is a *simple* request, so it is sent with no preflight, and any page
-/// the operator happens to be visiting could otherwise submit a job run on this machine
-/// with parameter values of its choosing.
+/// Without `[auth]` the dashboard has no login and binds to localhost, which is the
+/// product's position, not an oversight. That is fine while every route is a read: a page
+/// on another origin can cause a request but cannot read the response. It stops being fine
+/// once a POST starts work - a form post is a *simple* request, so it is sent with no
+/// preflight, and any page the operator happens to be visiting could otherwise submit a job
+/// run on this machine with parameter values of its choosing. With `[auth]` the session
+/// cookie is `SameSite=Lax` and so already stays behind on such a post, but `/login` takes
+/// no session at all, and this is what stops another site signing the browser in as an
+/// account of its own.
 ///
-/// The check is the cheap one that fits a server with no session to protect:
+/// The check is the cheap one that needs no session to work:
 ///
 /// - `Sec-Fetch-Site` decides it when present. Browsers set it on every request and script
 ///   cannot forge it. `same-origin` is the page's own form; `none` is a directly entered

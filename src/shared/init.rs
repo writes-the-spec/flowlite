@@ -133,6 +133,16 @@ const CONFIG_TOML: &str = r#"# flowlite configuration. Everything here has a def
 # [slack]
 # token = "xoxb-..."
 
+# A login for the dashboard, checked against an OAuth2 identity provider. No defaults: leave
+# the section out and the dashboard has no login, which suits 127.0.0.1. The provider must
+# allow the password grant for this client - Keycloak calls it "Direct access grants".
+# [auth]
+# flow = "password"               # required
+# token_url = "https://idp.example.com/realms/ops/protocol/openid-connect/token"   # required
+# client_id = "flowlite"          # required
+# client_secret = "..."           # leave out for a public client
+# cookie_secure = true            # false only to try it over plain HTTP
+
 # What a job's secret_env: resolves its values against, by name. A name is [a-z0-9_]+ with
 # no __ in it, so either spelling reaches the same name. The file suits a development box;
 # FLOWLITE_SECRETS__WAREHOUSE_PW=hunter2 suits a real one, since a value written here sits

@@ -3,3 +3,4 @@ pub mod routes;
 pub mod app_state;
 pub mod middlewares;
 pub mod assets;
+pub mod session_cookie;

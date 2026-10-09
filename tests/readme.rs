@@ -23,6 +23,10 @@ fn the_reference_prints_the_real_defaults() {
     let smtp: flowlite::app_config::AppConfigSmtp =
         serde_json::from_str(r#"{"host": "", "from": ""}"#).unwrap();
 
+    // `[auth]` has no Default either - there is no default identity provider.
+    let auth: flowlite::app_config::AppConfigAuth =
+        serde_json::from_str(r#"{"flow": "password", "token_url": "", "client_id": ""}"#).unwrap();
+
     // (section, key, the value the README should print) - keyed by section because
     // `timeout_seconds` is a [slack] key and a [job_defaults] one, with different defaults.
     let documented = [
@@ -48,6 +52,9 @@ fn the_reference_prints_the_real_defaults() {
         ("retention", "max_deletes_per_pass", defaults.retention.max_deletes_per_pass.to_string()),
         ("smtp", "port", smtp.port.to_string()),
         ("smtp", "max_output_bytes", smtp.max_output_bytes.to_string()),
+        ("auth", "scope", format!("\"{}\"", auth.scope)),
+        ("auth", "timeout_seconds", auth.timeout_seconds.to_string()),
+        ("auth", "cookie_secure", auth.cookie_secure.to_string()),
     ];
 
     let reference = std::fs::read_to_string("REFERENCE.md").unwrap();

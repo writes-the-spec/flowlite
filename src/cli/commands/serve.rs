@@ -142,15 +142,6 @@ impl ServeCmd {
             app_config.clone(),
         ).start();
 
-        let app_state = AppState::new(
-            toolkit.clone(),
-            conn_pool.clone(),
-            memory_conn.clone(),
-            signals.clone(),
-        );
-
-        let router = create_router(app_state);
-
         let addr: SocketAddr = format!("{}:{}", self.address, self.port).parse()?;
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -158,6 +149,18 @@ impl ServeCmd {
         // Off the listener rather than off the flags, so `--port 0` reports the port it
         // was actually given.
         let bound = listener.local_addr()?;
+
+        // After the bind, so the session cookie is named after the port `--port 0` was
+        // actually given.
+        let app_state = AppState::new(
+            toolkit.clone(),
+            conn_pool.clone(),
+            memory_conn.clone(),
+            signals.clone(),
+            bound.port(),
+        );
+
+        let router = create_router(app_state);
 
         // Written after the bind, so that a directory reported as served is one whose
         // port is accepting.

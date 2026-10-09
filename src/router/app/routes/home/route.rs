@@ -4,6 +4,7 @@ use axum::Extension;
 use axum::extract::{State, Query};
 use serde::Deserialize;
 
+use crate::router::app::middlewares::session::SignedIn;
 use crate::app_config::AppConfig;
 use crate::crud::CRUD;
 use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
@@ -90,6 +91,8 @@ pub struct StatusChip {
 struct HomeRouteTemplate {
     current_route: &'static str,
     theme: &'static str,
+    /// Who is signed in, for the masthead; None when `[auth]` is not configured.
+    signed_in_as: Option<String>,
     page_size: usize,
     refresh_seconds: u32,
     table_href: String,
@@ -103,6 +106,7 @@ pub async fn home_route(
     Extension(crud): Extension<CRUD>,
     State(state): State<AppState>,
     Query(query): Query<HomeQuery>,
+    signed_in: Option<Extension<SignedIn>>,
 ) -> impl IntoResponse {
     let app_config = &state.toolkit.app_config;
 
@@ -146,6 +150,7 @@ pub async fn home_route(
     let template = HomeRouteTemplate {
         current_route: "home",
         theme: app_config.ui.theme.as_attribute(),
+        signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         page_size,
         refresh_seconds: app_config.ui.refresh_interval_seconds,
         table_href,

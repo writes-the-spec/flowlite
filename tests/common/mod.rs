@@ -8,6 +8,8 @@
 //! blanket allow, rather than one per binary's unused subset.
 #![allow(dead_code)]
 
+pub mod fake_idp;
+
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Output};

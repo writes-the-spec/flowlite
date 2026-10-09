@@ -1001,6 +1001,38 @@ The submit dialog lists the job's declared parameters with their defaults filled
 value is editable for that run. The names are not: they come from the job's `parameters:`
 block, so the browser can change what a run is submitted with but not what the job accepts.
 
+### Logging in
+
+On `127.0.0.1` the dashboard has no login: anyone who can reach the port can already reach
+the data directory. To serve it to other people, add an `[auth]` section and it asks for a
+username and password, which it checks against an OAuth2 identity provider such as
+Keycloak, Auth0 or Entra. A successful login can do everything the dashboard does; who may
+log in is decided in the provider, by who is allowed to use the client.
+
+```toml
+[auth]
+flow = "password"
+token_url = "https://idp.example.com/realms/ops/protocol/openid-connect/token"
+client_id = "flowlite"
+client_secret = "..."           # leave out for a public client
+```
+
+`flow = "password"` is the OAuth2 password grant: flowlite's own form sends the username and
+password to `token_url`. Most providers ship it switched off for the client — Keycloak calls
+it *Direct access grants* — and it cannot do MFA or a login federated from another provider.
+
+A login lasts as long as the provider keeps renewing it. When the token it granted runs
+out, flowlite asks the provider again with the refresh token, so a user disabled or signed
+out at the provider is signed out of the dashboard at the next renewal. Sessions are held in
+memory, so restarting `flowlite serve` signs everyone out. While the provider cannot be
+reached, a page whose session needs renewing answers 503 rather than either letting the
+person in or signing them out.
+
+The session cookie is sent over HTTPS only unless `cookie_secure = false`, so put the
+dashboard behind a TLS-terminating proxy, and bind it to that proxy rather than to
+`0.0.0.0`. The CLI and `flowlite mcp` open the data directory directly and are not affected
+by `[auth]`.
+
 ## Driving flowlite from an agent
 
 `flowlite mcp` speaks the Model Context Protocol on stdin and stdout, so an agent drives
@@ -1170,6 +1202,17 @@ max_output_bytes = 4096         # per stream, per failed task, in the message
 [slack]
 timeout_seconds = 10            # how long one post may take
 max_output_bytes = 2048         # the most of one stream a post quotes
+```
+
+`[auth]` has no defaults for the provider either, and leaving it out leaves the dashboard
+without a login — see [Logging in](#logging-in). `flow`, `token_url` and `client_id` are
+required; a section missing one of them is a startup error rather than an open dashboard.
+
+```toml
+[auth]
+scope = "openid"                # what the password grant asks the provider for
+timeout_seconds = 10            # how long one call to token_url may take
+cookie_secure = true            # false only to try it over plain HTTP
 ```
 
 The password and the token belong in the environment rather than the file:

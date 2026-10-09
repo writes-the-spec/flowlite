@@ -56,10 +56,14 @@
                 <img class="brand-mark--light" src="/assets/brand/logo-light.png" alt="flowlite" width="1316" height="296">
             </a>
 
+            {# Empty on the login page, whose links would only lead back to it, but still
+               rendered: its margin is what pushes the clock to the right. #}
             <nav class="masthead__nav">
+                {% if current_route != "login" %}
                 <a href="/" class="masthead__link" {% if current_route == "home" %}aria-current="page"{% endif %}>Runs</a>
                 <a href="/jobs" class="masthead__link" {% if current_route == "jobs" %}aria-current="page"{% endif %}>Jobs</a>
                 <a href="/schedules" class="masthead__link" {% if current_route == "schedules" %}aria-current="page"{% endif %}>Schedules</a>
+                {% endif %}
             </nav>
 
             <div class="masthead__live" title="This machine's clock, for reading cron schedules against">
@@ -81,6 +85,13 @@
                 showTime();
                 setInterval(showTime, 1000);
             </script>
+
+            {% if let Some(subject) = signed_in_as %}
+            <form method="POST" action="/logout" class="masthead__user">
+                <span>{{ subject }}</span>
+                <button type="submit" class="btn btn--quiet">Log out</button>
+            </form>
+            {% endif %}
         </div>
     </header>
 

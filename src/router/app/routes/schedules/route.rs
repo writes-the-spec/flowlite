@@ -4,6 +4,7 @@ use askama::Template;
 use axum::Extension;
 use serde::Deserialize;
 
+use crate::router::app::middlewares::session::SignedIn;
 use crate::cron_trigger::CronTrigger;
 use crate::crud::CRUD;
 use crate::crud::schedule::{SelectSchedulesData, SelectSchedulesDataFilter, SelectSchedulesDataSort};
@@ -24,6 +25,8 @@ pub struct ScheduleEntry {
 struct SchedulesRouteTemplate {
     current_route: &'static str,
     theme: &'static str,
+    /// Who is signed in, for the masthead; None when `[auth]` is not configured.
+    signed_in_as: Option<String>,
     schedules: Vec<ScheduleEntry>,
     current_name: Option<String>,
     prev_href: Option<String>,
@@ -51,6 +54,7 @@ pub async fn schedules_route(
     State(state): State<AppState>,
     Extension(crud): Extension<CRUD>,
     Query(query): Query<SchedulesRouteQuery>,
+    signed_in: Option<Extension<SignedIn>>,
 ) -> impl IntoResponse {
     let conn = &*state.conn_pool;
 
@@ -109,6 +113,7 @@ pub async fn schedules_route(
     let template = SchedulesRouteTemplate {
         current_route: "schedules",
         theme: state.toolkit.app_config.ui.theme.as_attribute(),
+        signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         schedules: entries,
         current_name: name_like,
         prev_href,

@@ -3,6 +3,7 @@ use axum::response::{Html, IntoResponse};
 use askama::Template;
 use axum::Extension;
 
+use crate::router::app::middlewares::session::SignedIn;
 use crate::cron_trigger::CronTrigger;
 use crate::crud::CRUD;
 use crate::crud::schedule::{SelectSchedulesData, SelectSchedulesDataFilter, SelectSchedulesDataSort};
@@ -27,6 +28,8 @@ pub struct ScheduleDisplay {
 struct ScheduleIdRouteTemplate {
     current_route: &'static str,
     theme: &'static str,
+    /// Who is signed in, for the masthead; None when `[auth]` is not configured.
+    signed_in_as: Option<String>,
     schedule: ScheduleDisplay,
     schedule_jobs: Vec<ScheduleJob>,
     refresh_seconds: u32,
@@ -36,6 +39,7 @@ pub async fn schedule_id_route(
     State(state): State<AppState>,
     Extension(crud): Extension<CRUD>,
     Path(schedule_id): Path<String>,
+    signed_in: Option<Extension<SignedIn>>,
 ) -> impl IntoResponse {
     let conn = &*state.conn_pool;
 
@@ -72,6 +76,7 @@ pub async fn schedule_id_route(
     let template = ScheduleIdRouteTemplate {
         current_route: "schedules",
         theme: state.toolkit.app_config.ui.theme.as_attribute(),
+        signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         schedule: ScheduleDisplay {
             schedule_id: schedule.schedule_id,
             name: schedule.name,

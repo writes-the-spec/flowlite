@@ -1,0 +1,25 @@
+{% extends "routes/root.html" %}
+
+{% block title %}Log in · flowlite{% endblock %}
+
+{% block content %}
+
+<form method="POST" action="/login" class="login">
+    <h1 class="view-title">Log in</h1>
+
+    {% if let Some(error) = error %}
+    <p class="login__error" role="alert">{{ error }}</p>
+    {% endif %}
+
+    <input type="hidden" name="next" value="{{ next }}">
+
+    <label class="meta__label" for="username">Username</label>
+    <input class="field" type="text" id="username" name="username" value="{{ username }}" autocomplete="username" required autofocus>
+
+    <label class="meta__label" for="password">Password</label>
+    <input class="field" type="password" id="password" name="password" autocomplete="current-password" required>
+
+    <button type="submit" class="btn btn--primary">Log in</button>
+</form>
+
+{% endblock %}

@@ -4,6 +4,7 @@ use askama::Template;
 use axum::Extension;
 use serde::Deserialize;
 
+use crate::router::app::middlewares::session::SignedIn;
 use crate::crud::CRUD;
 use crate::crud::job::{SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
 use crate::crud::task::{SelectTasksData, SelectTasksDataFilter};
@@ -21,6 +22,8 @@ pub struct JobEntry {
 struct JobsRouteTemplate {
     current_route: &'static str,
     theme: &'static str,
+    /// Who is signed in, for the masthead; None when `[auth]` is not configured.
+    signed_in_as: Option<String>,
     jobs: Vec<JobEntry>,
     current_name: Option<String>,
     prev_href: Option<String>,
@@ -44,6 +47,7 @@ pub async fn jobs_route(
     State(state): State<AppState>,
     Extension(crud): Extension<CRUD>,
     Query(query): Query<JobsRouteQuery>,
+    signed_in: Option<Extension<SignedIn>>,
 ) -> impl IntoResponse {
     let conn = &*state.conn_pool;
 
@@ -104,6 +108,7 @@ pub async fn jobs_route(
     let template = JobsRouteTemplate {
         current_route: "jobs",
         theme: state.toolkit.app_config.ui.theme.as_attribute(),
+        signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         jobs: entries,
         current_name: name_like,
         prev_href,

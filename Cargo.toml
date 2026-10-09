@@ -51,8 +51,9 @@ cron = { version = "0.17.0", features = ["serde"] }
 libc = "0.2.186"
 lettre = { version = "0.11.23", default-features = false, features = ["smtp-transport", "builder", "tokio1-rustls-tls"] }
 # rustls-no-provider, plus ring below, so the tree keeps the one crypto provider lettre
-# already brings rather than also building aws-lc-rs and its C toolchain.
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json", "http2"] }
+# already brings rather than also building aws-lc-rs and its C toolchain. `form` is the
+# token request the dashboard login sends an identity provider.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json", "form", "http2"] }
 rustls = { version = "0.23.44", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 # default-features = false drops `base64`, which nothing here encodes: the stdio server
 # needs `server` (the tool system, which pulls schemars), `macros` (tool schemas derived

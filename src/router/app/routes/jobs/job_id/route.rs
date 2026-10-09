@@ -3,6 +3,7 @@ use axum::response::{Html, IntoResponse, Redirect};
 use askama::Template;
 use axum::{Extension, Form};
 
+use crate::router::app::middlewares::session::SignedIn;
 use crate::crud::CRUD;
 use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
 use crate::crud::task::{Task, SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort};
@@ -18,6 +19,8 @@ use std::collections::BTreeMap;
 struct JobMissingTemplate {
     current_route: &'static str,
     theme: &'static str,
+    /// Who is signed in, for the masthead; None when `[auth]` is not configured.
+    signed_in_as: Option<String>,
     job_id: String,
 }
 
@@ -26,6 +29,8 @@ struct JobMissingTemplate {
 struct JobIdRouteTemplate {
     current_route: &'static str,
     theme: &'static str,
+    /// Who is signed in, for the masthead; None when `[auth]` is not configured.
+    signed_in_as: Option<String>,
     job: Job,
     tasks: Vec<Task>,
     dag: Dag,
@@ -36,6 +41,7 @@ pub async fn job_id_route(
     State(state): State<AppState>,
     Extension(crud): Extension<CRUD>,
     Path(job_id): Path<String>,
+    signed_in: Option<Extension<SignedIn>>,
 ) -> impl IntoResponse {
     let conn = &*state.conn_pool;
 
@@ -55,6 +61,7 @@ pub async fn job_id_route(
             let template = JobMissingTemplate {
                 current_route: "jobs",
                 theme: state.toolkit.app_config.ui.theme.as_attribute(),
+                signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
                 job_id,
             };
 
@@ -83,6 +90,7 @@ pub async fn job_id_route(
     let template = JobIdRouteTemplate {
         current_route: "jobs",
         theme: state.toolkit.app_config.ui.theme.as_attribute(),
+        signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         job,
         tasks,
         // A graph of unconnected boxes says nothing the task table doesn't already say.

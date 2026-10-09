@@ -12,6 +12,7 @@
 #![allow(clippy::module_inception)]
 
 pub mod app_config;
+pub mod auth;
 pub mod cli;
 pub(crate) mod mcp;
 pub(crate) mod router;

@@ -3,6 +3,7 @@ use axum::response::{Html, IntoResponse};
 use askama::Template;
 use axum::Extension;
 
+use crate::router::app::middlewares::session::SignedIn;
 use crate::crud::CRUD;
 use crate::crud::job::{SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
 use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort};
@@ -31,6 +32,8 @@ pub struct TaskDisplay {
 struct TaskIdRouteTemplate {
     current_route: &'static str,
     theme: &'static str,
+    /// Who is signed in, for the masthead; None when `[auth]` is not configured.
+    signed_in_as: Option<String>,
     job_name: String,
     task: TaskDisplay,
 }
@@ -39,6 +42,7 @@ pub async fn task_id_route(
     State(state): State<AppState>,
     Extension(crud): Extension<CRUD>,
     Path((job_id, task_id)): Path<(String, String)>,
+    signed_in: Option<Extension<SignedIn>>,
 ) -> impl IntoResponse {
     let conn = &*state.conn_pool;
 
@@ -76,6 +80,7 @@ pub async fn task_id_route(
     let template = TaskIdRouteTemplate {
         current_route: "jobs",
         theme: state.toolkit.app_config.ui.theme.as_attribute(),
+        signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         job_name: job.name,
         task: TaskDisplay {
             task_id: task.task_id,

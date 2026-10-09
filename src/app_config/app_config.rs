@@ -5,6 +5,7 @@ use figment::Figment;
 use figment::providers::{Toml, Env, Format, Serialized};
 use serde::{Deserialize, Serialize};
 
+use crate::app_config::auth::AppConfigAuth;
 use crate::app_config::job_defaults::AppConfigJobDefaults;
 use crate::app_config::orchestrator::AppConfigOrchestrator;
 use crate::app_config::retention::AppConfigRetention;
@@ -37,6 +38,10 @@ pub struct AppConfig {
     /// None is "no `[slack]` section", skipped for the reason `smtp` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slack: Option<AppConfigSlack>,
+    /// None is "no `[auth]` section": the dashboard has no login. Skipped for the reason
+    /// `smtp` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AppConfigAuth>,
     /// Secret values a job's `secret_env:` names, by name. Figment's Toml-then-Env merge
     /// fills this from `[secrets]` in config.toml or from `FLOWLITE_SECRETS__*`, so a
     /// development box can use the file and a real one need not have the value on disk.
@@ -79,6 +84,7 @@ impl std::fmt::Debug for AppConfig {
             .field("retention", &self.retention)
             .field("smtp", &self.smtp)
             .field("slack", &self.slack)
+            .field("auth", &self.auth)
             .field("secrets", &RedactedSecrets(&self.secrets))
             .field("concurrency_limits", &self.concurrency_limits)
             .finish()
@@ -108,6 +114,7 @@ impl Default for AppConfig {
             retention: AppConfigRetention::default(),
             smtp: None,
             slack: None,
+            auth: None,
             secrets: BTreeMap::new(),
             concurrency_limits: BTreeMap::new(),
         }
@@ -157,6 +164,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::app_config::auth::AuthFlow;
     use crate::app_config::smtp::AppConfigSmtpEncryption;
     use crate::app_config::ui::AppConfigUiTheme;
 
@@ -344,6 +352,96 @@ mod tests {
         ).unwrap();
 
         assert!(AppConfig::load(Some(dir)).is_err());
+    }
+
+    #[test]
+    fn a_directory_with_no_config_file_leaves_the_dashboard_without_auth() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+
+        let config = AppConfig::load(Some(dir)).unwrap();
+
+        assert!(config.auth.is_none());
+    }
+
+    #[test]
+    fn an_auth_section_naming_only_what_it_must_takes_the_rest_by_default() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+        std::fs::write(
+            dir.join("config.toml"),
+            "[auth]\nflow = \"password\"\n\
+             token_url = \"https://idp.example.com/token\"\nclient_id = \"flowlite\"\n",
+        ).unwrap();
+
+        let auth = AppConfig::load(Some(dir)).unwrap().auth.unwrap();
+
+        assert_eq!(auth.flow, AuthFlow::Password);
+        assert_eq!(auth.token_url, "https://idp.example.com/token");
+        assert_eq!(auth.client_id, "flowlite");
+        assert_eq!(auth.client_secret, None);
+        assert_eq!(auth.scope, "openid");
+        assert_eq!(auth.timeout(), Duration::from_secs(10));
+        assert!(auth.cookie_secure);
+    }
+
+    #[test]
+    fn an_auth_section_missing_a_token_url_is_an_error_rather_than_an_open_dashboard() {
+        let _environment = reading_the_environment();
+
+        let dir = temp_dir();
+        std::fs::write(
+            dir.join("config.toml"),
+            "[auth]\nflow = \"password\"\nclient_id = \"flowlite\"\n",
+        ).unwrap();
+
+        assert!(AppConfig::load(Some(dir)).is_err());
+    }
+
+    /// Written out rather than defaulted, so a file keeps its meaning once a second flow
+    /// exists - and a misspelled one stops the server instead of picking either.
+    #[test]
+    fn an_auth_section_missing_a_flow_or_naming_an_unknown_one_is_an_error() {
+        let _environment = reading_the_environment();
+
+        let missing = temp_dir();
+        std::fs::write(
+            missing.join("config.toml"),
+            "[auth]\ntoken_url = \"https://idp.example.com/token\"\nclient_id = \"flowlite\"\n",
+        ).unwrap();
+
+        let unknown = temp_dir();
+        std::fs::write(
+            unknown.join("config.toml"),
+            "[auth]\nflow = \"magic_link\"\n\
+             token_url = \"https://idp.example.com/token\"\nclient_id = \"flowlite\"\n",
+        ).unwrap();
+
+        assert!(AppConfig::load(Some(missing)).is_err());
+        assert!(AppConfig::load(Some(unknown)).is_err());
+    }
+
+    #[test]
+    fn a_debug_print_never_shows_the_auth_client_secret() {
+        let config = AppConfig {
+            auth: Some(AppConfigAuth {
+                flow: AuthFlow::Password,
+                token_url: "https://idp.example.com/token".to_string(),
+                client_id: "flowlite".to_string(),
+                client_secret: Some("hunter2".to_string()),
+                scope: "openid".to_string(),
+                timeout_seconds: 10,
+                cookie_secure: true,
+            }),
+            ..AppConfig::default()
+        };
+
+        let printed = format!("{config:?}");
+
+        assert!(printed.contains("flowlite"), "{printed}");
+        assert!(!printed.contains("hunter2"), "{printed}");
     }
 
     #[test]

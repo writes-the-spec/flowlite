@@ -21,11 +21,24 @@ pub fn create_router(app_state: AppState) -> Router {
         .route("/job-runs/{job_run_id}/stop", post(app::routes::job_runs::job_run_id::route::stop_job_run_route))
         .route("/job-runs/{job_run_id}/rerun", post(app::routes::job_runs::job_run_id::route::rerun_job_run_route))
         .route("/job-runs/{job_run_id}/delete", post(app::routes::job_runs::job_run_id::route::delete_job_run_route))
-        .route("/task-runs/{task_run_id}", get(app::routes::task_runs::task_run_id::route::task_run_id_route));
+        .route("/task-runs/{task_run_id}", get(app::routes::task_runs::task_run_id::route::task_run_id_route))
+        // On these routes only: the assets and the login form are how someone without a
+        // session gets one. It lets everything through when there is no `[auth]`.
+        .route_layer(middleware::from_fn_with_state(app_state.clone(), app::middlewares::session::session_middleware));
 
-    Router::new()
+    let mut router = Router::new()
         .merge(main_routes)
-        .route("/assets/{*path}", get(static_handler))
+        .route("/assets/{*path}", get(static_handler));
+
+    // Without `[auth]` there is nothing to log in to, so /login is a 404 like any path
+    // this server does not have.
+    if app_state.auth.is_some() {
+        router = router
+            .route("/login", get(app::routes::login::route::login_page_route).post(app::routes::login::route::login_route))
+            .route("/logout", post(app::routes::logout::route::logout_route));
+    }
+
+    router
         .route_layer(middleware::from_fn_with_state(app_state.clone(), app::middlewares::crud::crud_middleware))
         // Outside crud_middleware: a refused request should not reach a handler or open a
         // connection, and this decides on headers alone.
