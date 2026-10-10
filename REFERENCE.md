@@ -1265,6 +1265,10 @@ From 0.1.0 on it changes only by new migration files, which a new binary applies
 first starts. Stop `serve`, replace the binary and start it again, and the history comes
 along.
 
+From 0.1.0 to 0.2.0, rename `config.toml` in the data directory to `flowlite.toml`. 0.2.0
+does not read the old name, so a directory that keeps it starts on the defaults: no
+`[secrets]`, no `[smtp]` or `[slack]`, and a job naming one of those is refused at startup.
+
 A database written by a build from before 0.1.0 may refuse to start instead:
 
 ```

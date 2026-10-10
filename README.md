@@ -206,7 +206,7 @@ authentication, and MCP is stdio with one process per client.
 
 ## Status
 
-0.1.0 is the first release. From here on, run history upgrades in place. The YAML format,
+0.2.0 is the current release. Since 0.1.0, run history upgrades in place. The YAML format,
 the CLI and the MCP tools may still change before 1.0.
 
 Not there yet: an approval gate before a run starts, recording what a run cost, a
