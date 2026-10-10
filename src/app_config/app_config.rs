@@ -15,7 +15,7 @@ use crate::app_config::smtp::AppConfigSmtp;
 use crate::app_config::ui::AppConfigUi;
 
 
-/// Everything `config.toml` can say, and the only thing that reads it. One field per
+/// Everything `flowlite.toml` can say, and the only thing that reads it. One field per
 /// section, each declared in a file of its own beside this one.
 #[derive(Deserialize, Serialize, Clone)]
 pub struct AppConfig {
@@ -43,7 +43,7 @@ pub struct AppConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AppConfigAuth>,
     /// Secret values a job's `secret_env:` names, by name. Figment's Toml-then-Env merge
-    /// fills this from `[secrets]` in config.toml or from `FLOWLITE_SECRETS__*`, so a
+    /// fills this from `[secrets]` in flowlite.toml or from `FLOWLITE_SECRETS__*`, so a
     /// development box can use the file and a real one need not have the value on disk.
     ///
     /// Deserialized but never serialized. Nothing serializes an `AppConfig` today except
@@ -55,7 +55,7 @@ pub struct AppConfig {
     #[serde(default, skip_serializing)]
     pub secrets: BTreeMap<String, String>,
     /// Named concurrency caps a job's `limits:` names, by name. Filled the same way
-    /// `secrets` is, from `[concurrency_limits]` in config.toml or from
+    /// `secrets` is, from `[concurrency_limits]` in flowlite.toml or from
     /// `FLOWLITE_CONCURRENCY_LIMITS__*`.
     ///
     /// Unlike `secrets` there is nothing to hide here, so it stays in `Debug` and
@@ -124,7 +124,7 @@ impl Default for AppConfig {
 
 impl AppConfig {
 
-    /// Every value has a default, so a data directory with no `config.toml` — or one
+    /// Every value has a default, so a data directory with no `flowlite.toml` — or one
     /// naming a single key — loads exactly as well as a complete file.
     pub fn load(data_dir: Option<PathBuf>) -> Result<AppConfig> {
 
@@ -133,7 +133,7 @@ impl AppConfig {
         let data_dir_fin = data_dir.unwrap_or_else(|| PathBuf::from("."));
 
         let app_config: AppConfig = Figment::from(Serialized::defaults(AppConfig::default()))
-            .merge(Toml::file(data_dir_fin.join("config.toml")))
+            .merge(Toml::file(data_dir_fin.join("flowlite.toml")))
             .merge(Env::prefixed("FLOWLITE_").split("__"))
             // Last, because the directory flowlite was pointed at is not up for debate by
             // a file inside it.
@@ -146,7 +146,7 @@ impl AppConfig {
         // and a job-named limit sharing it would make that row ambiguous.
         if app_config.concurrency_limits.contains_key("global") {
             anyhow::bail!(
-                "config.toml has a concurrency limit named 'global', which is reserved \
+                "flowlite.toml has a concurrency limit named 'global', which is reserved \
                  for the combined cap row 'flowlite limits' prints across every job. Name \
                  the limit something else."
             );
@@ -196,7 +196,7 @@ mod tests {
         let _environment = reading_the_environment();
 
         let dir = temp_dir();
-        std::fs::write(dir.join("config.toml"), "[ui]\npage_size = 10\n").unwrap();
+        std::fs::write(dir.join("flowlite.toml"), "[ui]\npage_size = 10\n").unwrap();
 
         let config = AppConfig::load(Some(dir)).unwrap();
 
@@ -214,7 +214,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[orchestrator]\npoll_interval_seconds = 5\nmax_stream_bytes = 2048\n\n\
              [job_defaults]\ntimeout_seconds = 60\nmax_parallel_runs = 0\n",
         ).unwrap();
@@ -235,7 +235,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[schedule_defaults]\ntimezone = \"Europe/Vienna\"\n",
         ).unwrap();
 
@@ -250,7 +250,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[schedule_defaults]\ntimezone = \"Mars/Olympus\"\n",
         ).unwrap();
 
@@ -275,7 +275,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[smtp]\nhost = \"smtp.example.com\"\nfrom = \"flowlite@example.com\"\n",
         ).unwrap();
 
@@ -295,7 +295,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[smtp]\nfrom = \"flowlite@example.com\"\n",
         ).unwrap();
 
@@ -308,7 +308,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[slack]\ntoken = \"xoxb-abc\"\n",
         ).unwrap();
 
@@ -347,7 +347,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[slack]\napi_url = \"https://slack.example.com/api/chat.postMessage\"\n",
         ).unwrap();
 
@@ -371,7 +371,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[auth]\nflow = \"password\"\n\
              token_url = \"https://idp.example.com/token\"\nclient_id = \"flowlite\"\n",
         ).unwrap();
@@ -393,7 +393,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[auth]\nflow = \"password\"\nclient_id = \"flowlite\"\n",
         ).unwrap();
 
@@ -408,13 +408,13 @@ mod tests {
 
         let missing = temp_dir();
         std::fs::write(
-            missing.join("config.toml"),
+            missing.join("flowlite.toml"),
             "[auth]\ntoken_url = \"https://idp.example.com/token\"\nclient_id = \"flowlite\"\n",
         ).unwrap();
 
         let unknown = temp_dir();
         std::fs::write(
-            unknown.join("config.toml"),
+            unknown.join("flowlite.toml"),
             "[auth]\nflow = \"magic_link\"\n\
              token_url = \"https://idp.example.com/token\"\nclient_id = \"flowlite\"\n",
         ).unwrap();
@@ -449,7 +449,7 @@ mod tests {
         let _environment = reading_the_environment();
 
         let dir = temp_dir();
-        std::fs::write(dir.join("config.toml"), "data_dir = \"/somewhere/else\"\n").unwrap();
+        std::fs::write(dir.join("flowlite.toml"), "data_dir = \"/somewhere/else\"\n").unwrap();
 
         let config = AppConfig::load(Some(dir.clone())).unwrap();
 
@@ -462,7 +462,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[secrets]\nwarehouse_pw = \"hunter2\"\n",
         ).unwrap();
 
@@ -497,7 +497,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[secrets]\nwarehouse_pw = \"file_value\"\n",
         ).unwrap();
 
@@ -532,7 +532,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[concurrency_limits]\nwarehouse = 3\n",
         ).unwrap();
 
@@ -547,7 +547,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[concurrency_limits]\nwarehouse = 3\n",
         ).unwrap();
 
@@ -584,7 +584,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[concurrency_limits]\nglobal = 3\n",
         ).unwrap();
 
@@ -648,7 +648,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[orchestrator]\nmax_running_attempts = 8\n",
         ).unwrap();
 
@@ -686,7 +686,7 @@ mod tests {
 
         let dir = temp_dir();
         std::fs::write(
-            dir.join("config.toml"),
+            dir.join("flowlite.toml"),
             "[retention]\nkeep_runs_total = 500\nmax_deletes_per_pass = 20\n",
         ).unwrap();
 
@@ -734,7 +734,7 @@ mod tests {
         let _environment = reading_the_environment();
 
         let dir = temp_dir();
-        std::fs::write(dir.join("config.toml"), "[ui]\ntheme = \"light\"\n").unwrap();
+        std::fs::write(dir.join("flowlite.toml"), "[ui]\ntheme = \"light\"\n").unwrap();
 
         let config = AppConfig::load(Some(dir)).unwrap();
 
@@ -748,7 +748,7 @@ mod tests {
         let _environment = reading_the_environment();
 
         let dir = temp_dir();
-        std::fs::write(dir.join("config.toml"), "[ui]\ntheme = \"auto\"\n").unwrap();
+        std::fs::write(dir.join("flowlite.toml"), "[ui]\ntheme = \"auto\"\n").unwrap();
 
         let config = AppConfig::load(Some(dir)).unwrap();
 
@@ -762,7 +762,7 @@ mod tests {
         let _environment = reading_the_environment();
 
         let dir = temp_dir();
-        std::fs::write(dir.join("config.toml"), "[ui]\ntheme = \"midnight\"\n").unwrap();
+        std::fs::write(dir.join("flowlite.toml"), "[ui]\ntheme = \"midnight\"\n").unwrap();
 
         assert!(AppConfig::load(Some(dir)).is_err());
     }

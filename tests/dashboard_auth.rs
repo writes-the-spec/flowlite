@@ -33,7 +33,7 @@ fn data_dir(label: &str) -> PathBuf {
 
 fn with_auth(dir: &Path, fake: &FakeIdp) {
     std::fs::write(
-        dir.join("config.toml"),
+        dir.join("flowlite.toml"),
         format!(
             "[auth]\nflow = \"password\"\ntoken_url = \"{}\"\n\
              client_id = \"{CLIENT_ID}\"\nclient_secret = \"{CLIENT_SECRET}\"\n\

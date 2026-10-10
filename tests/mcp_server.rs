@@ -1079,7 +1079,7 @@ fn init_data_dir_scaffolds_the_directory_and_then_lists_the_job_it_wrote() {
         .map(|file| file["path"].as_str().unwrap())
         .collect();
 
-    assert_eq!(paths, vec!["jobs/hello.yaml", "schedules/daily-hello.yaml", "config.toml"]);
+    assert_eq!(paths, vec!["jobs/hello.yaml", "schedules/daily-hello.yaml", "flowlite.toml"]);
     assert!(written["files"].as_array().unwrap().iter().all(|file| file["created"] == json!(true)), "{written}");
     assert_eq!(written["data_dir"], dir.display().to_string());
 
@@ -1177,7 +1177,7 @@ fn get_serve_status_reads_up_and_names_the_port_for_a_served_directory() {
 fn list_limits_returns_the_global_cap_as_a_row_of_its_own() {
     let dir = data_dir("limits");
     std::fs::write(
-        dir.join("config.toml"),
+        dir.join("flowlite.toml"),
         "[orchestrator]\nmax_running_attempts = 4\n\n[concurrency_limits]\nwarehouse = 2\n",
     ).unwrap();
 

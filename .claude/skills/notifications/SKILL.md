@@ -36,7 +36,7 @@ An ordinary [`Service`](../../../src/poller.rs):
 "Has it ended?" is `JobRunStatus::is_finished` ([src/crud/job_run.rs](../../../src/crud/job_run.rs)). "Is this ending mine?" is `NotifyOn::wants` ([src/crud/job_run_notification.rs](../../../src/crud/job_run_notification.rs)), a question for the row, never the service: a job that wants both endings gets **a row for each**, and one ending settles them differently. Both functions match exhaustively, so a new run status won't compile until it states its meaning for failure and for success.
 
 - **The wake-up is registered in `serve` before any `Poller` is spawned** (see the [poller skill](../poller/SKILL.md)).
-- **Started whatever config.toml says.** A row it cannot deliver is closed as `failed` with the reason on it, so the failure is visible rather than silent.
+- **Started whatever flowlite.toml says.** A row it cannot deliver is closed as `failed` with the reason on it, so the failure is visible rather than silent.
 - **One row per channel, one per ending**, each selected, delivered and recorded independently, so a Slack outage can't block the mail. Of a job's two ending rows, exactly one is ever delivered.
 
 ## Decoupling
@@ -47,14 +47,14 @@ An ordinary [`Service`](../../../src/poller.rs):
 
 ## Channels
 
-`NotificationChannels::from_config` builds every channel `config.toml` configures, once. `NotificationChannel` (the enum, in [src/crud/job_run_notification.rs](../../../src/crud/job_run_notification.rs)) is a column, so each row says how it is delivered. Each variant is spelled **exactly as the key a job uses** under `on_failure:` / `on_success:`, so an error can name the YAML to fix with no mapping table.
+`NotificationChannels::from_config` builds every channel `flowlite.toml` configures, once. `NotificationChannel` (the enum, in [src/crud/job_run_notification.rs](../../../src/crud/job_run_notification.rs)) is a column, so each row says how it is delivered. Each variant is spelled **exactly as the key a job uses** under `on_failure:` / `on_success:`, so an error can name the YAML to fix with no mapping table.
 
 | Channel | Config | Addresses | Delivers |
 |---|---|---|---|
 | `email` | `[smtp]` | addresses | one message to all of them |
 | `slack` | `[slack]` | conversations | one `chat.postMessage` each |
 
-- **Slack uses a bot token, not an incoming webhook.** A webhook URL is its destination, so each extra conversation would put another secret in job YAML, and keeping secrets out of the YAML is why config.toml is separate.
+- **Slack uses a bot token, not an incoming webhook.** A webhook URL is its destination, so each extra conversation would put another secret in job YAML, and keeping secrets out of the YAML is why flowlite.toml is separate.
 - **A Slack refusal comes back as `ok: false` in a 200**, so the status code tells you nothing.
 - **One conversation per call.** One refusal doesn't stop the rest, because an alert delivered somewhere beats one delivered nowhere.
 - **Delivery is a `match` on the enum, not a registry of trait objects.** The set is known at compile time, so a new channel means a variant plus the arms the compiler demands, with no boxed future per send. See the [code-style skill](../code-style/SKILL.md).

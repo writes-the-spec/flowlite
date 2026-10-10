@@ -296,7 +296,7 @@ fn truncate_at_char_boundary(content: &str, max: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    /// What a data directory with no config.toml reads with, so these tests follow the
+    /// What a data directory with no flowlite.toml reads with, so these tests follow the
     /// default rather than restating it.
     fn max_stream_bytes() -> usize {
         AppConfig::default().orchestrator.max_stream_bytes

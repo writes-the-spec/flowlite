@@ -38,7 +38,7 @@ pub struct InitResult {
 const SCAFFOLD: [(&str, &str); 3] = [
     ("jobs/hello.yaml", JOB_YAML),
     ("schedules/daily-hello.yaml", SCHEDULE_YAML),
-    ("config.toml", CONFIG_TOML),
+    ("flowlite.toml", FLOWLITE_TOML),
 ];
 
 
@@ -75,10 +75,10 @@ jobs:
 
 
 /// Every line is a comment, so a directory `init` made behaves exactly as one with no
-/// config.toml at all. It is a map of what can be set and what each key defaults to -
+/// flowlite.toml at all. It is a map of what can be set and what each key defaults to -
 /// uncommenting a line at its default would write that default down a second time, and the
 /// copy on disk is the one that goes stale when the code's default moves.
-const CONFIG_TOML: &str = r#"# flowlite configuration. Everything here has a default, so this file can stay commented
+const FLOWLITE_TOML: &str = r#"# flowlite configuration. Everything here has a default, so this file can stay commented
 # out entirely. Uncomment only what you want to change; a file naming a single key leaves
 # every other default alone. Each key can also be set as an environment variable:
 # FLOWLITE_UI__PAGE_SIZE=10, FLOWLITE_ORCHESTRATOR__POLL_INTERVAL_SECONDS=5.
@@ -209,7 +209,7 @@ mod tests {
 
         assert!(data_dir.join("jobs/hello.yaml").exists());
         assert!(data_dir.join("schedules/daily-hello.yaml").exists());
-        assert!(data_dir.join("config.toml").exists());
+        assert!(data_dir.join("flowlite.toml").exists());
     }
 
     /// A scaffold that does not parse would fail at the first `flowlite serve`, which is
@@ -270,11 +270,11 @@ mod tests {
 
         scaffold(&data_dir).unwrap();
 
-        let config = std::fs::read_to_string(data_dir.join("config.toml")).unwrap();
+        let config = std::fs::read_to_string(data_dir.join("flowlite.toml")).unwrap();
 
         for line in config.lines() {
             let line = line.trim();
-            assert!(line.is_empty() || line.starts_with('#'), "active line in config.toml: {line}");
+            assert!(line.is_empty() || line.starts_with('#'), "active line in flowlite.toml: {line}");
         }
     }
 

@@ -28,7 +28,7 @@ impl HomeQuery {
         self.page.unwrap_or(1).max(1)
     }
 
-    /// The query string's own value, defaulted and capped by `[ui]` in config.toml.
+    /// The query string's own value, defaulted and capped by `[ui]` in flowlite.toml.
     pub fn page_size(&self, app_config: &AppConfig) -> usize {
         self.page_size
             .unwrap_or(app_config.ui.page_size as usize)

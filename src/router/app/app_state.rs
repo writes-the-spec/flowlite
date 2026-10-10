@@ -12,7 +12,7 @@ pub struct AppState {
     pub toolkit: Arc<Toolkit>,
     pub conn_pool: Arc<SqlitePool>,
     pub signals: Arc<Signals>,
-    /// None when config.toml has no `[auth]`, and the dashboard has no login.
+    /// None when flowlite.toml has no `[auth]`, and the dashboard has no login.
     pub auth: Option<Arc<DashboardAuth>>,
     /// Never read, and held for exactly that reason: a `mode=memory` SQLite database
     /// exists only while something has it open, so dropping this would take `mem`'s schema

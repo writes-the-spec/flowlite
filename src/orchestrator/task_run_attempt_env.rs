@@ -79,7 +79,7 @@ pub fn build_task_run_attempt_env(
         // either way.
         let value = secrets.get(secret_name).ok_or_else(|| anyhow::anyhow!(
             "Job '{}' task '{}' needs secret '{}' for {}, but nothing defines it. Add it \
-             under [secrets] in config.toml, or set FLOWLITE_SECRETS__{}.",
+             under [secrets] in flowlite.toml, or set FLOWLITE_SECRETS__{}.",
             task_run.job_id,
             task_run.task_id,
             secret_name,
@@ -660,7 +660,7 @@ mod tests {
         assert!(error.contains("extract"), "{error}");
         assert!(error.contains("WAREHOUSE_PW"), "{error}");
         assert!(error.contains("warehouse_pw"), "{error}");
-        assert!(error.contains("[secrets] in config.toml"), "{error}");
+        assert!(error.contains("[secrets] in flowlite.toml"), "{error}");
         assert!(error.contains("FLOWLITE_SECRETS__WAREHOUSE_PW"), "{error}");
     }
 

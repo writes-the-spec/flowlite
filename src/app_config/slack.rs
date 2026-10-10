@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 /// It is a bot token and `chat.postMessage` rather than an incoming webhook on purpose.
 /// A webhook URL *is* its destination, so a job naming a second channel would have to
 /// carry a second secret URL in its YAML — which is the one thing the split between
-/// config.toml and the job files exists to prevent. A token here addresses any
+/// flowlite.toml and the job files exists to prevent. A token here addresses any
 /// conversation the bot is in, so the YAML names `#oncall` and nothing else.
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct AppConfigSlack {

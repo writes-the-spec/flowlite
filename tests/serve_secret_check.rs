@@ -21,7 +21,7 @@ use common::ServerGuard;
 const BINARY: &str = env!("CARGO_BIN_EXE_flowlite");
 
 /// A data directory with one job whose only task names a secret nothing defines - no
-/// config.toml at all, so `app_config.secrets` is empty.
+/// flowlite.toml at all, so `app_config.secrets` is empty.
 fn data_dir_with_unresolvable_secret() -> PathBuf {
     let dir = std::env::temp_dir()
         .join(format!("flowlite-secret-check-{}", uuid::Uuid::new_v4()));

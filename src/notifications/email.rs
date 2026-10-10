@@ -7,7 +7,7 @@ use crate::notifications::message::NotificationMessage;
 
 
 /// Delivery by email, and the one place that talks SMTP. Built from `[smtp]` in
-/// config.toml, so a caller only has to know who to tell and what to say.
+/// flowlite.toml, so a caller only has to know who to tell and what to say.
 pub struct EmailChannel {
     smtp: AppConfigSmtp,
 }

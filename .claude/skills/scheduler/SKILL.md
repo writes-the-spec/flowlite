@@ -23,7 +23,7 @@ The **Scheduler** ([src/scheduler/scheduler.rs](../../../src/scheduler/scheduler
 id: nightly
 name: Nightly
 cron: "0 0 3 * * *"     # 6 fields, seconds first
-timezone: Europe/Vienna # defaults to [schedule_defaults] in config.toml, itself UTC
+timezone: Europe/Vienna # defaults to [schedule_defaults] in flowlite.toml, itself UTC
 start_date: 2026-01-01  # optional
 end_date: 2026-12-31    # optional
 disabled: false

@@ -1,6 +1,6 @@
 [
   {
-    "query": "add a [metrics] section to config.toml",
+    "query": "add a [metrics] section to flowlite.toml",
     "should_trigger": true
   },
   {
@@ -8,7 +8,7 @@
     "should_trigger": true
   },
   {
-    "query": "i set a key in config.toml and nothing changed",
+    "query": "i set a key in flowlite.toml and nothing changed",
     "should_trigger": true
   },
   {

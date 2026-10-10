@@ -24,7 +24,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Lay an example job, an example schedule and a commented config.toml into this data
+    /// Lay an example job, an example schedule and a commented flowlite.toml into this data
     /// directory, leaving any of the three that are already there untouched.
     Init(InitCmd),
     Serve(ServeCmd),

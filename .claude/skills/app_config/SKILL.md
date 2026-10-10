@@ -1,18 +1,18 @@
 ---
 name: app_config
-description: The config layer (src/app_config/) - how config.toml and FLOWLITE_ environment variables become the one AppConfig every service reads, one file per section, and where a default belongs. Use when adding or changing a config key or section, deciding what a field should default to, wiring a new [section] into AppConfig, working out why a setting in config.toml appears to do nothing, or handling a secret or a concurrency limit.
+description: The config layer (src/app_config/) - how flowlite.toml and FLOWLITE_ environment variables become the one AppConfig every service reads, one file per section, and where a default belongs. Use when adding or changing a config key or section, deciding what a field should default to, wiring a new [section] into AppConfig, working out why a setting in flowlite.toml appears to do nothing, or handling a secret or a concurrency limit.
 ---
 
 # Config conventions (src/app_config/)
 
-One `AppConfig`, built once at startup and handed to everything. `<data_dir>/config.toml` is read only by [src/app_config/app_config.rs](../../../src/app_config/app_config.rs); each `[section]` is a struct in its own file, re-exported from [mod.rs](../../../src/app_config/mod.rs). It holds what differs per machine; job and schedule definitions are YAML ([yaml skill](../yaml/SKILL.md)).
+One `AppConfig`, built once at startup and handed to everything. `<data_dir>/flowlite.toml` is read only by [src/app_config/app_config.rs](../../../src/app_config/app_config.rs); each `[section]` is a struct in its own file, re-exported from [mod.rs](../../../src/app_config/mod.rs). It holds what differs per machine; job and schedule definitions are YAML ([yaml skill](../yaml/SKILL.md)).
 
 ## How a value is resolved
 
 `AppConfig::load` merges figment layers, lowest first:
 
-1. `Serialized::defaults(AppConfig::default())` — a missing `config.toml` loads fine.
-2. `Toml::file(data_dir/config.toml)`.
+1. `Serialized::defaults(AppConfig::default())` — a missing `flowlite.toml` loads fine.
+2. `Toml::file(data_dir/flowlite.toml)`.
 3. `Env::prefixed("FLOWLITE_").split("__")` — `FLOWLITE_SLACK__TOKEN` is `[slack] token`, `FLOWLITE_SECRETS__WAREHOUSE_PW` one `secrets` entry.
 4. `Serialized::default("data_dir", ...)` — last, so a file inside the directory can't redirect it.
 
@@ -42,11 +42,11 @@ impl AppConfigMetrics {
 
 2. `mod metrics;` and `pub use` in [mod.rs](../../../src/app_config/mod.rs).
 3. A `#[serde(default)]` field on `AppConfig`, plus its line in `AppConfig::default()` and the manual `Debug`.
-4. A test in [app_config.rs](../../../src/app_config/app_config.rs) `mod tests` loading a real `config.toml` from a temp dir.
+4. A test in [app_config.rs](../../../src/app_config/app_config.rs) `mod tests` loading a real `flowlite.toml` from a temp dir.
 
 ## Rules
 
-- **Every key has a default, defined here.** No reader writes `unwrap_or(30)`; a key without one breaks every existing `config.toml`.
+- **Every key has a default, defined here.** No reader writes `unwrap_or(30)`; a key without one breaks every existing `flowlite.toml`.
 - **A section with no possible default is `Option<T>`, absent = off**, with `#[serde(default, skip_serializing_if = "Option::is_none")]`. `[smtp]` / `[slack]`: a job naming an unconfigured channel is a **startup error**, not a silent non-delivery. Without `skip_serializing_if`, a `null` in the defaults layer is what a real section would have to merge over.
 - **Serde defaults per field only inside `Option<T>` sections.** A `#[serde(default)]` section is in the defaults layer, so figment supplies every key (`[ui]` naming only `page_size` keeps the rest). An `Option<T>` section has nothing underneath: optional keys carry `#[serde(default = "...")]` (`smtp.port`, `slack.api_url`), and those without (`smtp.host`, `smtp.from`, `slack.token`) make a half-written section a startup error.
 - **Durations: a `*_seconds` field plus a method returning `Duration`** (`poll_interval_seconds` / `poll_interval()`).

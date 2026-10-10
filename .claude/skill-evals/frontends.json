@@ -72,7 +72,7 @@
     "should_trigger": false
   },
   {
-    "query": "my config.toml key seems to do nothing at all",
+    "query": "my flowlite.toml key seems to do nothing at all",
     "should_trigger": false
   },
   {

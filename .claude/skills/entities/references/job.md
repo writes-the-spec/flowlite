@@ -13,7 +13,7 @@ One row per job YAML file under `<data_dir>/jobs/*.yml` — the *definition*; an
 | `parameters` | `NOT NULL`. Declared name → default, `'{}'` if none. Only the declaration; `submit_job` resolves overrides. |
 | `env` | `NOT NULL`, `'{}'` if none. Merged under each task's `env:` by `submit_job` (task wins); only the merge is stored, on `task_run.env`. |
 | `secret_env` | `NOT NULL`, `'{}'` if none. Variable name → secret name, never a value. Merged like `env`, stored on `task_run.secret_env`. |
-| `on_failure_recipients` | `NOT NULL`. `{"email": [...], "slack": [...]}` from `on_failure:`, `'{}'` if nobody; a channel naming nobody is **absent**, not `[]`. Built by `job_notify_recipients`. A recipient on a channel `config.toml` does not configure fails `CRUD::init`. |
+| `on_failure_recipients` | `NOT NULL`. `{"email": [...], "slack": [...]}` from `on_failure:`, `'{}'` if nobody; a channel naming nobody is **absent**, not `[]`. Built by `job_notify_recipients`. A recipient on a channel `flowlite.toml` does not configure fails `CRUD::init`. |
 | `on_success_recipients` | `NOT NULL`. Same, from `on_success:`. Separate because the two are read independently and often only one is declared. |
 | `limits` | `NOT NULL` JSON array of named concurrency limits, `'[]'` if none; resolved against `[concurrency_limits]`, not validated here. Every task claims these on top of its own. |
 

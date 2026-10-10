@@ -8,7 +8,7 @@ One row per schedule YAML file under `<data_dir>/schedules/*.yml`. The [Schedule
 | `schedule_id` | **Primary key.** |
 | `name`, `description` | Display only. `description` is `NOT NULL`, serde-defaulted to `""`. |
 | `cron` | **Six fields, seconds first** (the `cron` crate's dialect) — a five-field crontab silently means something else. |
-| `timezone` | IANA name. Undeclared → `[schedule_defaults]` in config.toml, itself defaulting to UTC. |
+| `timezone` | IANA name. Undeclared → `[schedule_defaults]` in flowlite.toml, itself defaulting to UTC. |
 | `start_date`, `end_date` | Nullable `DATE`; an open-ended schedule has no bound. |
 | `disabled` | `INTEGER NOT NULL` — a boolean has no third state. |
 | `submit_ahead` | `INTEGER NOT NULL`. Occurrences kept submitted ahead of time; defaults to `1` in the YAML, refused at `0` (spell that `disabled: true`). |

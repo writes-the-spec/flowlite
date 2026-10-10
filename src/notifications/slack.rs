@@ -5,7 +5,7 @@ use crate::notifications::message::NotificationMessage;
 
 
 /// Delivery by Slack, and the one place that talks to its API. Built from `[slack]` in
-/// config.toml, so a caller only has to know which conversations to post in and what to
+/// flowlite.toml, so a caller only has to know which conversations to post in and what to
 /// say.
 pub struct SlackChannel {
     slack: AppConfigSlack,

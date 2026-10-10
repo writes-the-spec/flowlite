@@ -56,7 +56,7 @@ fn unsatisfied_secret_reference_error(reference: &SecretEnvReference) -> anyhow:
 
     anyhow::anyhow!(
         "{} needs secret '{}' for {}, but nothing defines it. Add it under [secrets] in \
-         config.toml, or set FLOWLITE_SECRETS__{}.",
+         flowlite.toml, or set FLOWLITE_SECRETS__{}.",
         declarer,
         reference.secret_name,
         reference.variable_name,
@@ -259,7 +259,7 @@ mod tests {
         assert!(error.contains("secret 'warehouse_pw'"), "{error}");
         assert!(error.contains("PGPASSWORD"), "{error}");
         assert!(error.contains("but nothing defines it"), "{error}");
-        assert!(error.contains("[secrets] in config.toml"), "{error}");
+        assert!(error.contains("[secrets] in flowlite.toml"), "{error}");
         assert!(error.contains("FLOWLITE_SECRETS__WAREHOUSE_PW"), "{error}");
     }
 

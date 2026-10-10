@@ -27,7 +27,7 @@ impl McpServer {
     // The description is what a model chooses this tool by, so it says what lands and that
     // nothing is lost. Why it takes no argument is the struct's business, above, and would
     // only cost the caller tokens here.
-    /// Create an example job, an example schedule and a commented config.toml in this
+    /// Create an example job, an example schedule and a commented flowlite.toml in this
     /// server's data directory, so a new directory has something to run. Files already
     /// there are kept as they are, never overwritten.
     #[tool]

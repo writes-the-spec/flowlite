@@ -17,7 +17,7 @@ pub struct ScheduleYaml {
     pub description: String,
     pub cron: Schedule,
     /// `None` is "not declared", which `CRUD::init` resolves against
-    /// `[schedule_defaults]` in config.toml rather than a zone written here.
+    /// `[schedule_defaults]` in flowlite.toml rather than a zone written here.
     #[serde(default)]
     pub timezone: Option<Tz>,
     pub start_date: Option<chrono::NaiveDate>,
@@ -64,7 +64,7 @@ fn no_duplicate_job_ids(schedule: &ScheduleYaml) -> Result<(), validator::Valida
     Ok(())
 }
 
-/// The default lives here rather than in `[schedule_defaults]` in config.toml: a timezone
+/// The default lives here rather than in `[schedule_defaults]` in flowlite.toml: a timezone
 /// is a deployment-wide fact, but how much of the future to materialise is a property of
 /// the individual schedule.
 fn default_submit_ahead() -> u32 {

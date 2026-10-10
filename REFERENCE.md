@@ -17,7 +17,7 @@ Everything flowlite does, section by section. The [README](README.md) is the sho
 
 ## The data directory
 
-flowlite reads `jobs/`, `schedules/` and an optional `config.toml` from its data directory,
+flowlite reads `jobs/`, `schedules/` and an optional `flowlite.toml` from its data directory,
 and writes `flowlite.db` there. That directory is the current one unless `-D` /
 `--data-dir` / `FLOWLITE_DATA_DIR` says otherwise — which `init` follows like every other
 command, so the directory need not exist yet:
@@ -28,8 +28,8 @@ flowlite --data-dir /var/lib/flowlite serve
 ```
 
 `init` writes `jobs/hello.yaml` (`.yml` works too), `schedules/daily-hello.yaml` and a
-`config.toml` that is entirely comments — a map of what can be set and what each key
-defaults to, so the directory behaves exactly as one with no `config.toml` at all. `init`
+`flowlite.toml` that is entirely comments — a map of what can be set and what each key
+defaults to, so the directory behaves exactly as one with no `flowlite.toml` at all. `init`
 never overwrites: a file already there is kept and reported as kept.
 
 ## Jobs
@@ -307,7 +307,7 @@ own environment. That is where composition belongs — which is why there is no 
 interpolation inside `env:` or `secret_env:`: a block states a fixed name, not a second
 templating language to learn.
 
-`warehouse_pw` is resolved against `[secrets]` in `config.toml` or
+`warehouse_pw` is resolved against `[secrets]` in `flowlite.toml` or
 `FLOWLITE_SECRETS__WAREHOUSE_PW` in the server's own environment — see
 [Configuration](#configuration). The name is what travels: it is what a run stores, what
 the dashboard and the task pages show (`PGPASSWORD ← warehouse_pw`), and what `--json`
@@ -321,7 +321,7 @@ and task pages. For a credential, reach for `secret_env:`.
 Five things are refused when a job's YAML is read, before it is ever served:
 
 - a variable name that is not a valid environment variable name;
-- a secret name outside `[a-z0-9_]+`, or containing `__`. `config.toml` can quote a name
+- a secret name outside `[a-z0-9_]+`, or containing `__`. `flowlite.toml` can quote a name
   like `"Warehouse-PW"`, but `FLOWLITE_SECRETS__*` cannot reach it, and `__` is the
   separator that form uses for nested keys — `FLOWLITE_SECRETS__WAREHOUSE__PW` sets
   `secrets.warehouse.pw`, never the name `warehouse__pw`. Either way the name would work on
@@ -340,7 +340,7 @@ Job 'nightly-sync'
 
 Caused by:
     task 'load' needs secret 'warehouse_pw' for PGPASSWORD, but nothing defines it. Add it
-    under [secrets] in config.toml, or set FLOWLITE_SECRETS__WAREHOUSE_PW.
+    under [secrets] in flowlite.toml, or set FLOWLITE_SECRETS__WAREHOUSE_PW.
 ```
 
 That check runs only in `serve`. `job-run list` and the other read commands work with no
@@ -477,7 +477,7 @@ unreachable mail server never holds up the runs themselves.
 
 Who to tell is a property of the job, so it lives in the job's YAML. *Where mail goes out
 through* is a property of the machine, so it lives in `[smtp]` and `[slack]` in
-`config.toml` — see [Configuration](#configuration), which also covers why the password and
+`flowlite.toml` — see [Configuration](#configuration), which also covers why the password and
 the token belong in flowlite's environment rather than in that file.
 
 Slack wants a bot token with `chat:write` rather than an incoming webhook on purpose: a
@@ -485,14 +485,14 @@ webhook URL *is* its destination, so a job naming a second conversation would ca
 secret URL in its YAML. With a token a job names `#oncall` and nothing else; invite the bot
 to each conversation you want it to post in.
 
-**A job that names a recipient of a channel `config.toml` does not configure refuses to
+**A job that names a recipient of a channel `flowlite.toml` does not configure refuses to
 start**, naming the job, the block and the file:
 
 ```
 Invalid notifications of job 'nightly-sync' at /srv/flowlite/jobs/nightly.yaml
 
 Caused by:
-    on_failure.slack names #oncall but config.toml has no [slack] section, so nothing
+    on_failure.slack names #oncall but flowlite.toml has no [slack] section, so nothing
     can be sent by slack. Add one, or remove the recipients.
 ```
 
@@ -578,7 +578,7 @@ panel spells it out as `unlimited`. A `0` limit is therefore never `FULL`. `flow
 --json` keeps it as the number `0`, so a script comparing it against `in_use` never has to
 special-case a dash.
 
-It reads `config.toml` for the maxima and the on-disk database for the counts directly, so
+It reads `flowlite.toml` for the maxima and the on-disk database for the counts directly, so
 it answers for a data directory whose server is down as readily as one whose server is up —
 the same guarantee `status` makes by reading the lock file instead of asking the process.
 
@@ -1104,7 +1104,7 @@ it wrote and which were already there:
   "files": [
     { "path": "jobs/hello.yaml", "created": true },
     { "path": "schedules/daily-hello.yaml", "created": true },
-    { "path": "config.toml", "created": false }
+    { "path": "flowlite.toml", "created": false }
   ]
 }
 ```
@@ -1143,7 +1143,7 @@ would ever settle the row it would poll.
 
 ## Configuration
 
-Everything below has a default, so flowlite runs with no `config.toml` at all. Write one in
+Everything below has a default, so flowlite runs with no `flowlite.toml` at all. Write one in
 the data directory to change any of it; a file naming a single key leaves every other
 default alone, and each key can also be set as an environment variable
 (`FLOWLITE_UI__PAGE_SIZE=10`, `FLOWLITE_ORCHESTRATOR__POLL_INTERVAL_SECONDS=5`).

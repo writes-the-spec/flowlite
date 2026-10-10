@@ -17,7 +17,7 @@ use crate::toolkit::Toolkit;
 use super::result::{error_result, success_json};
 
 /// No fields: there is nothing to filter here. The rows are the whole answer, and there are
-/// as many as `config.toml` declares limits, plus one.
+/// as many as `flowlite.toml` declares limits, plus one.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListLimits {
@@ -53,7 +53,7 @@ struct Limits {
     waiting_attempts: u32,
 }
 
-/// Reads `config.toml` for the maxima and the disk tables for the counts, which is all
+/// Reads `flowlite.toml` for the maxima and the disk tables for the counts, which is all
 /// `flowlite limits` reads too - so it answers for a directory whose server is down, and
 /// neither seeds `mem` nor holds a memory connection, exactly as that command does not.
 async fn limits_rows(toolkit: &Toolkit) -> anyhow::Result<Limits> {

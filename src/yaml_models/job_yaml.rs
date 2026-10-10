@@ -19,11 +19,11 @@ pub struct JobYamlTask {
     #[serde(default)]
     pub depends_on: Vec<String>,
     /// Named concurrency limits this claims, resolved against [concurrency_limits] in
-    /// config.toml. A job's limits are claimed by every one of its tasks.
+    /// flowlite.toml. A job's limits are claimed by every one of its tasks.
     #[serde(default)]
     pub limits: Vec<String>,
     /// Seconds one attempt may run for. `None` is "not declared", which `CRUD::init`
-    /// resolves against `[job_defaults]` in config.toml rather than a number written here.
+    /// resolves against `[job_defaults]` in flowlite.toml rather than a number written here.
     #[serde(default)]
     pub timeout: Option<u32>,
     /// Seconds an attempt may go without writing to stdout or stderr before it is timed
@@ -104,11 +104,11 @@ pub struct JobYaml {
     #[serde(default, deserialize_with = "deserialize_string_map")]
     pub secret_env: BTreeMap<String, String>,
     /// Named concurrency limits this claims, resolved against [concurrency_limits] in
-    /// config.toml. A job's limits are claimed by every one of its tasks.
+    /// flowlite.toml. A job's limits are claimed by every one of its tasks.
     #[serde(default)]
     pub limits: Vec<String>,
     /// Who to tell when a run of this job fails or times out. Naming a recipient of a
-    /// channel config.toml does not configure is a startup error — see
+    /// channel flowlite.toml does not configure is a startup error — see
     /// `CRUD::validate_job_notifications`.
     #[serde(default)]
     pub on_failure: JobYamlNotify,
@@ -277,7 +277,7 @@ fn validate_secret_env_block(
             anyhow::bail!(
                 "{} names secret '{}' for variable '{}', which is not a valid secret \
                  name. A secret name may contain only lowercase ASCII letters, digits \
-                 and underscores, and may not contain a double underscore: config.toml \
+                 and underscores, and may not contain a double underscore: flowlite.toml \
                  can hold any other character but FLOWLITE_SECRETS__* cannot reach it, \
                  and __ is the separator that form uses for nested keys, so \
                  FLOWLITE_SECRETS__A__B sets a.b rather than a__b. Either way the name \
@@ -342,7 +342,7 @@ fn is_valid_env_var_name(name: &str) -> bool {
 
 /// `FLOWLITE_SECRETS__*` is how a secret's value reaches `AppConfig` in production, and it
 /// can only carry the characters an environment variable name can - so a secret name
-/// outside that set would parse from `[secrets]` in `config.toml` on a development box
+/// outside that set would parse from `[secrets]` in `flowlite.toml` on a development box
 /// and never be reachable through the env var form at all.
 ///
 /// `__` is rejected for the same reason even though every character in it is allowed:
@@ -490,7 +490,7 @@ secret_env:
     /// `Env::prefixed("FLOWLITE_").split("__")` is a `key.replace("__", ".")`, so
     /// `warehouse__pw` is not the name `FLOWLITE_SECRETS__WAREHOUSE__PW` reaches - that
     /// spelling builds `secrets.warehouse.pw`, a nested map. The name would work from
-    /// config.toml and be unreachable from the environment, which is the case the message
+    /// flowlite.toml and be unreachable from the environment, which is the case the message
     /// above warns about, and an operator who set the variable anyway would make
     /// `AppConfig::load` fail for every command in that shell.
     #[test]
@@ -587,7 +587,7 @@ tasks:
 
     /// A job may name limits at both levels - the job's own claim and each task's own,
     /// which are separate lists rather than one merged at parse time. No validation here:
-    /// a name config.toml has never heard of still parses fine, since checking that is a
+    /// a name flowlite.toml has never heard of still parses fine, since checking that is a
     /// later concern, not this parser's.
     #[test]
     fn limits_are_parsed_at_both_levels() {

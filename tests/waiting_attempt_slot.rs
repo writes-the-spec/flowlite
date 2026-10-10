@@ -22,7 +22,7 @@ fn data_dir(label: &str) -> PathBuf {
     std::fs::create_dir_all(dir.join("jobs")).unwrap();
 
     std::fs::write(
-        dir.join("config.toml"),
+        dir.join("flowlite.toml"),
         "[orchestrator]\nmax_running_attempts = 1\n",
     ).unwrap();
 

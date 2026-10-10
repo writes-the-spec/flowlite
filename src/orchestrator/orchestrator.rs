@@ -26,7 +26,7 @@ pub struct Orchestrator {
     /// The child processes the two attempt services share: the dispatcher spawns them,
     /// the monitor waits on them, and `shutdown` kills whatever is left.
     pub children: Arc<TaskRunAttemptChildren>,
-    /// config.toml, or its defaults.
+    /// flowlite.toml, or its defaults.
     pub app_config: AppConfig,
     /// Set by `shutdown`, so no service starts a pass - or an attempt - after it.
     stopping: Arc<AtomicBool>,

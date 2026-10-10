@@ -5,7 +5,7 @@ use crate::notifications::message::NotificationMessage;
 use crate::notifications::slack::SlackChannel;
 
 
-/// Every channel this process can actually deliver over, built once from config.toml.
+/// Every channel this process can actually deliver over, built once from flowlite.toml.
 ///
 /// A channel nothing configured is `None` here rather than absent: a notification asking
 /// for it is then recorded as failed, naming what is missing, instead of sitting open
@@ -41,13 +41,13 @@ impl NotificationChannels {
             NotificationChannel::Email => match &self.email {
                 Some(email) => email.send(recipients, message).await,
                 None => anyhow::bail!(
-                    "config.toml has no [smtp] section, so nothing can be delivered by email",
+                    "flowlite.toml has no [smtp] section, so nothing can be delivered by email",
                 ),
             },
             NotificationChannel::Slack => match &self.slack {
                 Some(slack) => slack.send(recipients, message).await,
                 None => anyhow::bail!(
-                    "config.toml has no [slack] section, so nothing can be delivered by slack",
+                    "flowlite.toml has no [slack] section, so nothing can be delivered by slack",
                 ),
             },
         }

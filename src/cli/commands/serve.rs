@@ -112,7 +112,7 @@ impl ServeCmd {
 
         // Started alongside the orchestrator rather than inside it, the way the scheduler
         // is: nothing in the orchestrator calls it, and it calls nothing back. It is
-        // started whatever config.toml configures — with no channel at all it simply has
+        // started whatever flowlite.toml configures — with no channel at all it simply has
         // nothing open to deliver, and says so on the row rather than in a silence.
         let notification_service = NotificationService::new(
             crud.clone(),

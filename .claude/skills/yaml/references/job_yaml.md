@@ -22,7 +22,7 @@ on_success:
 
 ## `JobYaml`
 
-"`[job_defaults]`, N": `Option` on the model, filled by `CRUD::init` from config.toml, else N.
+"`[job_defaults]`, N": `Option` on the model, filled by `CRUD::init` from flowlite.toml, else N.
 
 | Field | Default | Notes |
 |---|---|---|
@@ -34,7 +34,7 @@ on_success:
 | `parameters` | `{}` | Name → default. A schedule or `job submit --param` may override a declared name; an undeclared one is a submit error. [entities](../../entities/references/job.md). |
 | `env` | `{}` | For **every** task; see [which env wins](#which-env-wins). |
 | `secret_env` | `{}` | Variable name → `[secrets]` name. Only the name travels (row, dashboard, `--json`); the value is resolved at spawn. |
-| `on_failure` | `{}` | `JobYamlNotify`: `email` (addresses), `slack` (`#channel`, channel id or user id). Sent on `Failed`/`TimedOut`, never `Aborted`. One notification per channel with recipients. **A recipient on a channel config.toml doesn't configure fails startup** (`CRUD::validate_job_notifications`) — a notification that never leaves is invisible afterwards. Fields per channel, not a map, as `NotificationChannel` is an enum ([notifications skill](../../notifications/SKILL.md)). |
+| `on_failure` | `{}` | `JobYamlNotify`: `email` (addresses), `slack` (`#channel`, channel id or user id). Sent on `Failed`/`TimedOut`, never `Aborted`. One notification per channel with recipients. **A recipient on a channel flowlite.toml doesn't configure fails startup** (`CRUD::validate_job_notifications`) — a notification that never leaves is invisible afterwards. Fields per channel, not a map, as `NotificationChannel` is an enum ([notifications skill](../../notifications/SKILL.md)). |
 | `on_success` | `{}` | Same shape and check, for `Succeeded`; addressed independently (failure wakes on-call, success tells whoever waits on the data). A run's ending delivers exactly one of the two. |
 | `limits` | `[]` | `[concurrency_limits]` names, claimed by every task on top of its own. Unknown name fails startup (`CRUD::validate_job_limits`). |
 | `tasks` | `[]` | No tasks is legal; the run finishes `Succeeded` at once. |

@@ -279,7 +279,7 @@ impl CRUD {
     /// job may well ask for Slack on a success and only mail on a failure.
     ///
     /// The match is over the same enum the sender matches on, so a new channel cannot be
-    /// added without saying what config.toml section it needs to work at all.
+    /// added without saying what flowlite.toml section it needs to work at all.
     fn validate_job_notifications(&self, job_yaml: &JobYaml) -> anyhow::Result<()> {
 
         let blocks = [
@@ -301,7 +301,7 @@ impl CRUD {
 
                 if let Some(section) = missing_section {
                     anyhow::bail!(
-                        "{}.{} names {} but config.toml has no {} section, so nothing \
+                        "{}.{} names {} but flowlite.toml has no {} section, so nothing \
                          can be sent by {}. Add one, or remove the recipients.",
                         block,
                         channel,
@@ -316,7 +316,7 @@ impl CRUD {
         Ok(())
     }
 
-    /// Rejects a job that claims a concurrency limit `[concurrency_limits]` in config.toml
+    /// Rejects a job that claims a concurrency limit `[concurrency_limits]` in flowlite.toml
     /// never named. A name is valid by being a key of that map - the number behind it is
     /// irrelevant here, so a limit configured `0` is still a name a job may claim. Checking
     /// this at startup rather than at enforcement is what makes a typo'd name fail loudly
@@ -331,7 +331,7 @@ impl CRUD {
             if !concurrency_limits.contains_key(limit) {
                 anyhow::bail!(
                     "Job '{}' claims limit '{}', which is not a key of \
-                     [concurrency_limits] in config.toml",
+                     [concurrency_limits] in flowlite.toml",
                     job_yaml.id,
                     limit,
                 );
@@ -343,7 +343,7 @@ impl CRUD {
                 if !concurrency_limits.contains_key(limit) {
                     anyhow::bail!(
                         "Job '{}' task '{}' claims limit '{}', which is not a key of \
-                         [concurrency_limits] in config.toml",
+                         [concurrency_limits] in flowlite.toml",
                         job_yaml.id,
                         task_yaml.id,
                         limit,

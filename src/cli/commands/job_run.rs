@@ -233,7 +233,7 @@ impl JobRunLogsCmd {
 impl JobRunStopCmd {
     /// Seeds no config: a stop is a row against a run, whose definition is already
     /// snapshotted onto it. `--wait` polls at the orchestrator's interval, which comes
-    /// from config.toml - read, not seeded.
+    /// from flowlite.toml - read, not seeded.
     pub async fn run(&self, toolkit: Toolkit, json: bool) -> anyhow::Result<()> {
 
         let poll_interval = toolkit.app_config.orchestrator.poll_interval();
