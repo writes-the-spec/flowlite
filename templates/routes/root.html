@@ -44,6 +44,75 @@
         }
     </script>
 
+    {# A polled region swaps in fresh elements, and a fresh element starts scrolled to the
+       top - so without this a reader scrolled down the run table, or along a wide one, is
+       thrown back every refresh_interval_seconds. Before a swap, every element in the
+       target that is scrolled is noted by where it sits: its nearest ancestor with an id,
+       its tag and class, and which of its like-classed siblings under that ancestor it
+       is. After the swap the same spot in the new markup gets the same offsets back.
+
+       Located that way rather than by a marker on each scroll container so that a
+       template author adding a scrolling element gets this without knowing it exists,
+       and anchored on ids so a row added above a log (a new attempt, say) does not hand
+       its offset to the wrong one. Restored on afterSwap, which fires before the
+       browser paints the new markup, so the table never shows at the top first. #}
+    <script>
+        const pendingScrolls = new Map();
+
+        {# Leaves out htmx's own classes: the new markup carries htmx-added until it
+           settles, and the old may carry htmx-settling. #}
+        function classesOf(element) {
+            return Array.from(element.classList).filter((name) => !name.startsWith("htmx-")).join(" ");
+        }
+
+        function likeClassed(anchor, tagName, classes) {
+            return Array.from(anchor.getElementsByTagName(tagName)).filter(
+                (other) => classesOf(other) === classes && other.parentElement.closest("[id]") === anchor
+            );
+        }
+
+        document.addEventListener("htmx:beforeSwap", (event) => {
+            const target = event.detail.target;
+            if (!target.id) return;
+
+            const scrolled = [];
+            for (const element of target.querySelectorAll("*")) {
+                if (element.scrollTop === 0 && element.scrollLeft === 0) continue;
+
+                const anchor = element.parentElement.closest("[id]");
+                const classes = classesOf(element);
+                scrolled.push({
+                    anchorId: anchor.id,
+                    tagName: element.tagName,
+                    classes,
+                    index: likeClassed(anchor, element.tagName, classes).indexOf(element),
+                    top: element.scrollTop,
+                    left: element.scrollLeft,
+                });
+            }
+            pendingScrolls.set(target.id, scrolled);
+        });
+
+        {# Fires once per swapped-in element, so the entry is taken on the first. #}
+        document.addEventListener("htmx:afterSwap", (event) => {
+            const id = event.detail.target.id;
+            const scrolled = pendingScrolls.get(id);
+            if (!scrolled) return;
+            pendingScrolls.delete(id);
+
+            for (const spot of scrolled) {
+                const anchor = document.getElementById(spot.anchorId);
+                if (!anchor) continue;
+
+                const element = likeClassed(anchor, spot.tagName, spot.classes)[spot.index];
+                if (!element) continue;
+
+                element.scrollTop = spot.top;
+                element.scrollLeft = spot.left;
+            }
+        });
+    </script>
+
     <link rel="stylesheet" href="/assets/css/app.css">
     <script src="/assets/vendors/htmx/htmx.min.js"></script>
 </head>
