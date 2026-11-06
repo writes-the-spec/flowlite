@@ -6,7 +6,7 @@
             <th class="runs__state">state</th>
             <th class="runs__id">run</th>
             <th>job</th>
-            <th class="runs__when">created</th>
+            <th class="runs__when">scheduled</th>
             <th class="runs__bar">duration</th>
             <th class="runs__dur"></th>
             <th class="runs__go"></th>
@@ -28,7 +28,7 @@
 
             <td class="runs__job">{% if run.job_exists %}<a href="/jobs/{{ run.job_id }}">{{ run.job_name }}</a>{% else %}{{ run.job_name }}{% endif %}</td>
 
-            <td class="runs__when">{{ run.created_at }}</td>
+            <td class="runs__when">{{ run.scheduled_at }}</td>
 
             <td class="runs__bar">
                 <div class="bar bar--{{ run.status }}" style="--span: {{ run.span_pct }}%"></div>

@@ -22,7 +22,7 @@ pub struct JobRunDisplay {
     pub job_exists: bool,
     pub status: JobRunStatus,
     pub status_word: &'static str,
-    pub created_at: String,
+    pub scheduled_at: String,
     pub duration: String,
     pub span_pct: i64,
 }
@@ -101,7 +101,7 @@ pub async fn job_run_table_route(
                 JobRunStatus::Succeeded => "",
                 status => format::job_run_word(status),
             },
-            created_at: format::short_timestamp(run.created_at),
+            scheduled_at: format::short_timestamp(run.scheduled_at),
             duration: seconds.map(format::duration).unwrap_or_else(|| "—".to_string()),
             span_pct: match seconds {
                 Some(seconds) if slowest_seconds > 0 => seconds * 100 / slowest_seconds,
