@@ -53,12 +53,18 @@ impl Orchestrator {
         }
     }
 
-    /// Ends every task still running. Called once, as `serve` returns.
+    /// Ends every task still running and settles its attempt. Called once, as `serve`
+    /// returns.
     ///
     /// The services stop first, each after the pass it is in: otherwise, during the grace
     /// below, a dispatcher would start new attempts and the monitor would settle the ones
     /// being shut down. Then every command gets SIGTERM together and
     /// `[orchestrator] kill_grace_seconds` to exit before SIGKILL.
+    ///
+    /// Each attempt is then settled here, mostly `Interrupted`, so the next start resumes
+    /// its task run rather than finding a `Running` row it cannot account for. One that
+    /// fails to settle is left `Running`, for `recover` to settle `Invalid` as it would
+    /// after a crash.
     ///
     /// Each attempt is in its own process group, so nothing kills them for us: before
     /// they were grouped, Ctrl-C reached them only because they shared this process's
@@ -74,7 +80,29 @@ impl Orchestrator {
             let _ = poller.await;
         }
 
-        self.children.terminate_all(self.app_config.orchestrator.kill_grace()).await;
+        let ended_children = self.children.terminate_all(self.app_config.orchestrator.kill_grace()).await;
+
+        let task_run_attempt_monitor = TaskRunAttemptMonitor::new(
+            self.crud.clone(),
+            self.conn_pool.clone(),
+            self.children.clone(),
+            self.signals.clone(),
+            self.app_config.clone(),
+        );
+
+        for ended_child in ended_children {
+
+            let task_run_attempt_id = ended_child.task_run_attempt_id;
+
+            if let Err(error) = task_run_attempt_monitor.settle_after_shutdown(ended_child).await {
+                eprintln!(
+                    "Task run attempt {} could not be settled at shutdown and is left \
+                     running, for the next start to settle invalid: {:#}",
+                    task_run_attempt_id,
+                    error,
+                );
+            }
+        }
     }
 
     /// Settles what an earlier run of the program left mid-flight, and kills the processes

@@ -52,10 +52,11 @@ impl TaskRunMonitor {
         }
     }
 
-    /// Derives the next status from the last attempt's status alone; a failed attempt with
-    /// retries left inserts its next attempt here, since starting one is not itself a
-    /// status. `None`, unreachable, if no check claims the status — a value rather than an
-    /// `Err`, so that the `Err` this can still return means only that the insert failed.
+    /// Derives the next status from the last attempt's status, and for a failure the count
+    /// of failed attempts; an interrupted attempt, or a failed one with retries left,
+    /// inserts its next attempt here, since starting one is not itself a status. `None`,
+    /// unreachable, if no check claims the status — a value rather than an `Err`, so that
+    /// the `Err` this can still return means only that a query or the insert failed.
     async fn derive_next_status(
         &self,
         task_run: &TaskRun,
@@ -76,9 +77,17 @@ impl TaskRunMonitor {
             return Ok(Some(TaskRunStatus::Running));
         }
 
+        // The server shut down under it, which says nothing about the command, so the task
+        // run carries on with a fresh attempt, whatever its retries.
+        if last_task_run_attempt.status == TaskRunAttemptStatus::Interrupted {
+            self.insert_next_attempt(task_run, last_task_run_attempt).await?;
+            return Ok(Some(TaskRunStatus::Running));
+        }
+
         if last_task_run_attempt.status == TaskRunAttemptStatus::Failed {
-            // Attempts count from 1, so max_retries + 1 of them run in all.
-            if last_task_run_attempt.attempt < task_run.max_retries + 1 {
+            // Counted by failures rather than read off the attempt number, which an
+            // interrupted attempt also takes. max_retries + 1 failures end the task run.
+            if self.count_failed_attempts(task_run).await? < task_run.max_retries + 1 {
                 self.insert_next_attempt(task_run, last_task_run_attempt).await?;
                 return Ok(Some(TaskRunStatus::Running));
             }
@@ -214,6 +223,27 @@ impl TaskRunMonitor {
         Ok(task_run_attempts.into_iter().last())
     }
 
+    /// How many of the task run's attempts failed: the retries it has used, plus the first
+    /// attempt when that failed too.
+    async fn count_failed_attempts(&self, task_run: &TaskRun) -> anyhow::Result<u32> {
+
+        let failed_attempts = self.crud.select_task_run_attempts(
+            &*self.conn_pool,
+            &SelectTaskRunAttemptsData {
+                filter: SelectTaskRunAttemptsDataFilter {
+                    id: None,
+                    task_run_id: Some(task_run.id),
+                    job_run_id: None,
+                    task_id: None,
+                    status: Some(TaskRunAttemptStatus::Failed),
+                },
+                sort: None,
+            }
+        ).await?;
+
+        Ok(failed_attempts.len() as u32)
+    }
+
     async fn update_task_run_status(&self, task_run: &TaskRun, status: TaskRunStatus) -> anyhow::Result<()> {
 
         self.crud.update_task_runs(
@@ -268,11 +298,25 @@ mod tests {
     use crate::test_support::TestDb;
 
     /// Runs the monitor over a running task run whose last attempt has the given status,
-    /// and reports what it settled the task run as, with the attempts it left behind.
+    /// every attempt before it having failed - the only way a task run reaches a later
+    /// attempt without an interruption - and reports what it settled the task run as, with
+    /// the attempts it left behind.
     async fn settle(
         max_retries: u32,
         attempt: u32,
         attempt_status: TaskRunAttemptStatus,
+    ) -> (TaskRunStatus, Vec<u32>) {
+
+        let mut statuses = vec![TaskRunAttemptStatus::Failed; attempt as usize - 1];
+        statuses.push(attempt_status);
+
+        settle_attempts(max_retries, &statuses).await
+    }
+
+    /// The same over attempts 1, 2, ... with the given statuses, the last one last.
+    async fn settle_attempts(
+        max_retries: u32,
+        statuses: &[TaskRunAttemptStatus],
     ) -> (TaskRunStatus, Vec<u32>) {
 
         let db = TestDb::new().await;
@@ -280,7 +324,9 @@ mod tests {
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_retryable_task_run(job_run.id, max_retries, 60).await;
 
-        db.insert_task_run_attempt(&task_run, attempt, attempt_status).await;
+        for (index, status) in statuses.iter().enumerate() {
+            db.insert_task_run_attempt(&task_run, index as u32 + 1, *status).await;
+        }
 
         db.task_run_monitor().handle(&task_run).await.unwrap();
 
@@ -322,7 +368,45 @@ mod tests {
         let (status, attempts) = settle(2, 3, TaskRunAttemptStatus::Failed).await;
 
         assert_eq!(status, TaskRunStatus::Failed);
-        assert_eq!(attempts, vec![3]);
+        assert_eq!(attempts, vec![1, 2, 3]);
+    }
+
+    /// `serve` shutting down says nothing about the command, so the task run carries on
+    /// even with no retries at all.
+    #[tokio::test]
+    async fn an_interrupted_attempt_is_resumed_with_no_retries_to_spend() {
+        let (status, attempts) = settle(0, 1, TaskRunAttemptStatus::Interrupted).await;
+
+        assert_eq!(status, TaskRunStatus::Running);
+        assert_eq!(attempts, vec![1, 2]);
+    }
+
+    /// An interruption takes an attempt number but not a retry: one failure, one
+    /// interruption and one more failure is still inside `max_retries: 2`.
+    #[tokio::test]
+    async fn an_interruption_does_not_use_up_a_retry() {
+        let (status, attempts) = settle_attempts(2, &[
+            TaskRunAttemptStatus::Failed,
+            TaskRunAttemptStatus::Interrupted,
+            TaskRunAttemptStatus::Failed,
+        ]).await;
+
+        assert_eq!(status, TaskRunStatus::Running);
+        assert_eq!(attempts, vec![1, 2, 3, 4]);
+    }
+
+    /// And the retries still run out: with `max_retries: 1`, the second failure ends the
+    /// task run however many interruptions came between.
+    #[tokio::test]
+    async fn failures_still_run_out_around_an_interruption() {
+        let (status, attempts) = settle_attempts(1, &[
+            TaskRunAttemptStatus::Failed,
+            TaskRunAttemptStatus::Interrupted,
+            TaskRunAttemptStatus::Failed,
+        ]).await;
+
+        assert_eq!(status, TaskRunStatus::Failed);
+        assert_eq!(attempts, vec![1, 2, 3]);
     }
 
     #[tokio::test]

@@ -467,11 +467,19 @@ fn run_summary(job_run: &JobRun) -> String {
 fn failure_title(failure: &JobRunFailureTask) -> String {
 
     match &failure.attempt {
-        Some(attempt) => format!(
+        // "Of" only while the number can be read against the allowance. An attempt
+        // `serve` interrupted takes a number without using a retry, so a task run resumed
+        // after a restart can end on attempt 4 of 3.
+        Some(attempt) if attempt.attempt <= failure.task_run.max_retries + 1 => format!(
             "Output of {}, attempt {} of {}",
             failure.task_run.task_id,
             attempt.attempt,
             failure.task_run.max_retries + 1,
+        ),
+        Some(attempt) => format!(
+            "Output of {}, attempt {}",
+            failure.task_run.task_id,
+            attempt.attempt,
         ),
         // A task run that never got an attempt still explains the run: it is why the
         // tasks below it were skipped.

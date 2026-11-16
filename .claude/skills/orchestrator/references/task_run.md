@@ -46,13 +46,14 @@ A job run stopped while `Queued` or `Scheduled` skips all its task runs at once 
 | not finished | left `Running` (still the attempt services') |
 | `Failed`, no retry left | `Failed` |
 | `Failed`, retry left | left `Running`; `insert_next_attempt` writes attempt `last.attempt + 1` `Queued`, which `TaskRunAttemptDispatcher` holds until `retry_delay` passes |
+| `Interrupted` | left `Running`; `insert_next_attempt` writes the next attempt `Queued` whatever `max_retries` says — `serve` shut down under it, which says nothing about the command. The dispatcher doesn't hold it for `retry_delay` |
 | `TimedOut` | `TimedOut` |
 | `is_stopped` (`Aborted`/`Skipped`) | `Aborted` — it had started |
 | anything else | `None` → `set_to_invalid`, logged as a bug. Unreachable. A failed retry insert returns `Err` and settles nothing |
 
 The checks are exclusive, so **order carries nothing** here; `Invalid` is first only to read like `JobRunMonitor`. `TaskRunAttemptStatus::is_stopped` needs no failure ruled out first, since an attempt is skipped only by a stop.
 
-Only `Failed` is retried. Attempts count from 1: `1 + max_retries` executions in all, `max_retries: 0` means one. Count and delay come off the `task_run` row, so the submitted policy applies.
+Only `Failed` is retried, and `Interrupted` resumed. Retries are counted by **failed attempts** (`count_failed_attempts`), not read off `last.attempt`, because an interrupted attempt takes an attempt number without using a retry: `1 + max_retries` failures end the task run, `max_retries: 0` means the first. So `attempt` can exceed `max_retries + 1` (the failure notification drops its "of N" then). Count and delay come off the `task_run` row, so the submitted policy applies.
 
 A stop landing *between* attempts isn't seen here: the monitor inserts the next attempt, the attempt dispatcher skips it, and the task run finishes `Aborted` from that.
 
@@ -61,7 +62,7 @@ A stop landing *between* attempts isn't seen here: the monitor inserts the next 
 - **`Waiting` has exactly one writer: `JobRunDispatcher::set_to_running`.** Everything else writes `Planned` (the two insert paths), `Running` or a terminal status. A second writer would make `TaskRunDispatcher` depend on the job run's status again.
 - **A `Planned`, `Waiting` or `Running` task run keeps its job run `Running`**; one never visited again strands it — see [job_run.md](job_run.md).
 - **A `Running` task run always has an unfinished attempt or a finished last attempt to decide on.** An attempt that never finishes stalls the task run and the job run.
-- **A new `TaskRunAttemptStatus` needs a return** in `derive_next_status`; otherwise the fall-through in `handle_running_task_run` settles `Invalid` at runtime (which is exactly what `Invalid` itself hit before it had a return). The two `Failed` cases split on `last.attempt` vs `task_run.max_retries + 1`, so a failure is retried or reported, never both or neither.
+- **A new `TaskRunAttemptStatus` needs a return** in `derive_next_status`; otherwise the fall-through in `handle_running_task_run` settles `Invalid` at runtime (which is exactly what `Invalid` itself hit before it had a return). The two `Failed` cases split on the count of failed attempts vs `task_run.max_retries + 1`, so a failure is retried or reported, never both or neither.
 - **A new terminal `TaskRunStatus` needs three edits**: the failure list in `TaskRunDispatcher::should_skip` (or dependents wait for ever), a return in `JobRunMonitor::derive_next_status` at the right rank, and a badge in `templates/routes/job_runs/job_run_id/route.html`. Exhaustive matches (`is_finished`, `is_stopped`, `Display`, `format::task_run_word`) force the rest; `JobRunStatus::ALL` feeds the dashboard's filter chips and the CLI's `--status` parser.
 - **This monitor never writes `Skipped`**; only `TaskRunDispatcher` (or `CRUD::skip_job_run`) skips, and only an unstarted task run.
 - **Terminal statuses set `finished_at`** — `TaskRunMonitor::update_task_run_status`, or `TaskRunDispatcher::set_to_skipped`.

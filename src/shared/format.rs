@@ -71,6 +71,7 @@ pub fn task_run_attempt_word(status: TaskRunAttemptStatus) -> &'static str {
         TaskRunAttemptStatus::Skipped => "skipped",
         TaskRunAttemptStatus::Aborted => "aborted",
         TaskRunAttemptStatus::TimedOut => "timed out",
+        TaskRunAttemptStatus::Interrupted => "interrupted",
         TaskRunAttemptStatus::Invalid => "invalid",
     }
 }

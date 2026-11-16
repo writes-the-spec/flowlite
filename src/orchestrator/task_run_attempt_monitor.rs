@@ -4,7 +4,7 @@ use crate::crud::CRUD;
 use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus, UpdateTaskRunAttemptsData, UpdateTaskRunAttemptsDataFilter, UpdateTaskRunAttemptsDataInput};
 use crate::crud::task_run_attempt_output::{InsertTaskRunAttemptOutputData, InsertTaskRunAttemptOutputDataInput, TaskRunAttemptOutputStream};
-use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren, Termination};
+use crate::orchestrator::task_run_attempt_children::{EndedChild, TaskRunAttemptChild, TaskRunAttemptChildren, Termination};
 use crate::poller::Service;
 use crate::run_dir::{job_run_dir, task_output_path};
 use crate::signals::Signals;
@@ -355,6 +355,68 @@ impl TaskRunAttemptMonitor {
         self.finish_reading(task_run_attempt, task_run_attempt_child).await?;
 
         self.finish_task_run_attempt(task_run_attempt, status, None).await
+    }
+
+    /// Settles the attempt of a child `serve`'s shutdown has just ended, once the pollers
+    /// have stopped. Called by `Orchestrator::shutdown`, never on a pass.
+    ///
+    /// An outcome decided before the shutdown stands: a timeout or a stop already under way
+    /// settles as what it was going to, and a process that had exited by itself reports its
+    /// exit the way `derive_next_status` would have. Everything else is `Interrupted`, which
+    /// TaskRunMonitor resumes with a fresh attempt at the next start. It goes through
+    /// `finish_task_run_attempt` like every other outcome, so the runs the attempt submitted
+    /// are stopped: the attempt that resumes it submits its own.
+    pub async fn settle_after_shutdown(&self, ended_child: EndedChild) -> anyhow::Result<()> {
+
+        let EndedChild { task_run_attempt_id, child: mut task_run_attempt_child, exited_before_shutdown } = ended_child;
+
+        let task_run_attempt = self.get_task_run_attempt(task_run_attempt_id).await?;
+
+        if let Some(status) = task_run_attempt_child.terminating.as_ref().map(|termination| termination.status) {
+            return self.finish_termination(&task_run_attempt, &mut task_run_attempt_child, status).await;
+        }
+
+        match exited_before_shutdown {
+            Some(exit_status) if exit_status.success() =>
+                self.set_to_succeeded(&task_run_attempt, &mut task_run_attempt_child).await,
+            Some(_) =>
+                self.set_to_failed(&task_run_attempt, &mut task_run_attempt_child).await,
+            None => {
+                self.finish_reading(&task_run_attempt, &mut task_run_attempt_child).await?;
+
+                // After the drain, so it is the last line of the attempt's stderr, as it was
+                // the last thing to happen to it.
+                self.insert_output(
+                    &task_run_attempt,
+                    String::new(),
+                    "flowlite: serve shut down while this attempt was running; the task \
+                     resumes with a new attempt when serve starts again\n".to_string(),
+                ).await?;
+
+                self.finish_task_run_attempt(&task_run_attempt, TaskRunAttemptStatus::Interrupted, None).await
+            },
+        }
+    }
+
+    async fn get_task_run_attempt(&self, task_run_attempt_id: i64) -> anyhow::Result<TaskRunAttempt> {
+
+        self.crud.select_task_run_attempts(
+            &*self.conn_pool,
+            &SelectTaskRunAttemptsData {
+                filter: SelectTaskRunAttemptsDataFilter {
+                    id: Some(task_run_attempt_id),
+                    task_run_id: None,
+                    job_run_id: None,
+                    task_id: None,
+                    status: None,
+                },
+                sort: None,
+            }
+        )
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Task run attempt not found: {}", task_run_attempt_id))
     }
 
     /// Records whatever the readers have delivered so far and returns immediately.
@@ -1220,6 +1282,75 @@ mod tests {
     /// this program is not in TaskRunAttemptChildren, so there is nothing left to wait for.
     /// Raises, as TaskRunMonitor does for a running task run with no attempt, and leaves
     /// the row Running: nothing else settles it.
+    /// Ends every child the way `Orchestrator::shutdown` does, once its pollers have
+    /// stopped, and settles each one.
+    async fn shut_down(db: &TestDb) {
+
+        let monitor = db.task_run_attempt_monitor();
+
+        for ended_child in db.children.terminate_all(std::time::Duration::ZERO).await {
+            monitor.settle_after_shutdown(ended_child).await.unwrap();
+        }
+    }
+
+    /// A command still running when `serve` stops is interrupted, not lost: the row is
+    /// settled before the server exits, with a line on its stderr saying why, so the next
+    /// start resumes its task run rather than finding a Running row it cannot account for.
+    #[tokio::test]
+    async fn shutdown_interrupts_an_attempt_that_is_still_running() {
+        let _environment = reading_the_environment();
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_running_child(&task_run_attempt, "sleep 30", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        shut_down(&db).await;
+
+        let settled = db.task_run_attempt(task_run_attempt.id).await;
+
+        assert_eq!(settled.status, TaskRunAttemptStatus::Interrupted);
+        assert!(settled.finished_at.is_some());
+        assert!(stderr_of(&db, &task_run_attempt).await.contains("serve shut down"));
+    }
+
+    /// A command that had already exited by itself before the shutdown reached it reports
+    /// its own outcome: resuming it would run a finished command a second time.
+    #[tokio::test]
+    async fn shutdown_reports_the_exit_of_an_attempt_that_had_already_finished() {
+        let _environment = reading_the_environment();
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_exited_child(&task_run_attempt, "exit 0", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        shut_down(&db).await;
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Succeeded,
+        );
+    }
+
+    /// A stop already being carried out when the shutdown came settles as the stop it was.
+    #[tokio::test]
+    async fn shutdown_keeps_the_outcome_of_a_termination_already_under_way() {
+        let _environment = reading_the_environment();
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_running_child(&task_run_attempt, "trap '' TERM; sleep 30", Utc::now() + TimeDelta::seconds(3600)).await;
+        db.insert_job_run_stop(task_run_attempt.job_run_id).await;
+
+        db.task_run_attempt_monitor_with_kill_grace(60).handle(&task_run_attempt).await.unwrap();
+
+        shut_down(&db).await;
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Aborted,
+        );
+    }
+
     #[tokio::test]
     async fn a_running_attempt_with_no_process_is_invalid() {
         let db = TestDb::new().await;

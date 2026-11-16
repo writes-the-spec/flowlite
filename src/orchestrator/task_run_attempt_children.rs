@@ -122,6 +122,17 @@ impl TaskRunAttemptChild {
 }
 
 
+/// A child `TaskRunAttemptChildren::terminate_all` ended, its process group killed and its
+/// pipes not yet drained.
+pub struct EndedChild {
+    pub task_run_attempt_id: i64,
+    pub child: TaskRunAttemptChild,
+    /// How it exited if it had already done so before shutdown signalled it - a real
+    /// outcome the monitor had not got round to recording.
+    pub exited_before_shutdown: Option<std::process::ExitStatus>,
+}
+
+
 /// The child processes of the task run attempts, keyed by task run attempt id.
 /// Shared by TaskRunAttemptDispatcher, which spawns them, and TaskRunAttemptMonitor,
 /// which owns them from there on. Lives only in memory, so a running attempt that is
@@ -158,13 +169,21 @@ impl TaskRunAttemptChildren {
     /// SIGKILL to whatever has not exited when `grace` runs out. Called only once the
     /// pollers have stopped, so nothing takes a child out of the map during the wait.
     ///
-    /// The attempt rows are left Running on purpose: `Orchestrator::recover` settles them
-    /// on the next start.
-    pub async fn terminate_all(&self, grace: Duration) {
+    /// Hands every child back, for `Orchestrator::shutdown` to settle its attempt. Whether
+    /// it had already exited is read before the SIGTERM, since an exit after it says only
+    /// that the command did as it was told.
+    pub async fn terminate_all(&self, grace: Duration) -> Vec<EndedChild> {
 
         let mut children = self.children.lock().await;
 
-        for task_run_attempt_child in children.values() {
+        let mut exited_before_shutdown = HashMap::new();
+
+        for (task_run_attempt_id, task_run_attempt_child) in children.iter_mut() {
+
+            if let Ok(Some(exit_status)) = task_run_attempt_child.child.try_wait() {
+                exited_before_shutdown.insert(*task_run_attempt_id, exit_status);
+            }
+
             task_run_attempt_child.terminate_process_group();
         }
 
@@ -176,9 +195,20 @@ impl TaskRunAttemptChildren {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        for (_, mut task_run_attempt_child) in children.drain() {
+        let mut ended_children = Vec::new();
+
+        for (task_run_attempt_id, mut task_run_attempt_child) in children.drain() {
+
             task_run_attempt_child.kill_process_group().await;
+
+            ended_children.push(EndedChild {
+                task_run_attempt_id,
+                child: task_run_attempt_child,
+                exited_before_shutdown: exited_before_shutdown.remove(&task_run_attempt_id),
+            });
         }
+
+        ended_children
     }
 
 }
@@ -197,7 +227,7 @@ mod tests {
     use crate::test_support::reading_the_environment;
 
     /// Shutting down has to reach the command's whole process tree, the same as a timeout
-    /// or a stop: leaving it running is what makes the next start's Invalid a lie.
+    /// or a stop: leaving it running is what would make the Interrupted it is settled as a lie.
     #[tokio::test]
     async fn shutdown_kills_the_process_group_of_every_attempt() {
 

@@ -13,6 +13,10 @@ pub enum TaskRunAttemptStatus {
     Skipped,
     Aborted,
     TimedOut,
+    /// Ended by `serve` shutting down, not by anything the command did or anyone asked
+    /// for. TaskRunMonitor resumes the task run with a fresh attempt, which counts against
+    /// neither `max_retries` nor `retry_delay`.
+    Interrupted,
     Invalid,
 }
 
@@ -29,6 +33,7 @@ impl TaskRunAttemptStatus {
             | TaskRunAttemptStatus::Skipped
             | TaskRunAttemptStatus::Aborted
             | TaskRunAttemptStatus::TimedOut
+            | TaskRunAttemptStatus::Interrupted
             | TaskRunAttemptStatus::Invalid => true,
         }
     }
@@ -41,7 +46,8 @@ impl TaskRunAttemptStatus {
     /// failure ruled out first.
     ///
     /// `Invalid` is deliberately not a stop: nobody stopped an attempt flowlite merely
-    /// lost track of, and its process may well still be running.
+    /// lost track of, and its process may well still be running. Nor is `Interrupted`:
+    /// the server went away, not the run, which carries on when it comes back.
     pub fn is_stopped(&self) -> bool {
         match self {
             TaskRunAttemptStatus::Aborted
@@ -51,6 +57,7 @@ impl TaskRunAttemptStatus {
             | TaskRunAttemptStatus::Succeeded
             | TaskRunAttemptStatus::Failed
             | TaskRunAttemptStatus::TimedOut
+            | TaskRunAttemptStatus::Interrupted
             | TaskRunAttemptStatus::Invalid => false,
         }
     }
@@ -67,6 +74,7 @@ impl std::fmt::Display for TaskRunAttemptStatus {
             TaskRunAttemptStatus::Skipped => write!(f, "skipped"),
             TaskRunAttemptStatus::Aborted => write!(f, "aborted"),
             TaskRunAttemptStatus::TimedOut => write!(f, "timedout"),
+            TaskRunAttemptStatus::Interrupted => write!(f, "interrupted"),
             TaskRunAttemptStatus::Invalid => write!(f, "invalid"),
         }
     }

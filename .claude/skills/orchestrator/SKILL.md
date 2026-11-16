@@ -95,7 +95,7 @@ The releaser skips a stopped `Scheduled` run itself (with its task runs, via [`C
 
 `Invalid` settles a row whose outcome the program cannot determine (as opposed to failed, timed out or stopped). Writers:
 
-- **A `Running` attempt with no process in `TaskRunAttemptChildren`.** The map holds only this process's children, so this is the restart path (shutdown kills process groups but leaves rows `Running`, since writing statuses would race the pollers). `Orchestrator::recover` handles these before any poller starts — see [Picking up after a crash](#picking-up-after-a-crash).
+- **A `Running` attempt with no process in `TaskRunAttemptChildren`.** The map holds only this process's children, so this is the crash path: a clean shutdown settles its attempts itself (mostly `Interrupted`, see [Shutting down](#shutting-down)), so only a crash, a `kill -9` or a settle that failed at shutdown leaves rows `Running`. `Orchestrator::recover` handles these before any poller starts — see [Picking up after a crash](#picking-up-after-a-crash).
 - **A queued attempt already spawned for** (`started_at` set but never recorded `Running`) — `TaskRunAttemptDispatcher` refuses to run the command twice.
 - **The `Ok(_)` fall-throughs** above, one per service.
 
@@ -104,6 +104,12 @@ It propagates: an invalid attempt makes its task run invalid and is **never retr
 **Why settle rather than raise:** an unsettled row strands everything above it — the job run stays `Running` and holds a `max_parallel_runs` slot for ever; with `max_parallel_runs: 1` the job never runs again without hand-editing the DB.
 
 **Where a raise is still right:** a missing `task_run`/`job_run` row for an attempt, or a dependency with no row. Enforced invariants keep those shut — foreign keys, a run's rows deleted only all together in one transaction (`CRUD::delete_job_runs_with_children`), and YAML refusing an unknown `depends_on`. Convert a raise only when its state can actually occur.
+
+## Shutting down
+
+`Orchestrator::shutdown` stops the pollers first and waits for each to finish its pass, so nothing else writes an attempt status from then on. Only then does it kill every command (`TaskRunAttemptChildren::terminate_all`) and settle each attempt itself, through `TaskRunAttemptMonitor::settle_after_shutdown`: a timeout or stop already under way keeps its status, a process that had exited before the `SIGTERM` reports its exit, and the rest settle **`Interrupted`**. `TaskRunMonitor` answers `Interrupted` with a fresh attempt at the next start, using no retry and waiting no `retry_delay`, so a deploy or Ctrl-C resumes running work rather than failing it. The command re-runs from its start; the new attempt gets the old one's output as `FLOWLITE_PREVIOUS_ATTEMPT_LOG`.
+
+`Interrupted` is not a stop (`is_stopped()` is false): the server went away, not the run. It is the one attempt status written outside a dispatcher or monitor pass, which is safe only because the pollers are already joined.
 
 ## Picking up after a crash
 

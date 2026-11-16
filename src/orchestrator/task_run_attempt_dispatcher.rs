@@ -198,7 +198,8 @@ impl TaskRunAttemptDispatcher {
     ///
     /// The delay is checked first: only a retry waits on it (attempt 1 has nothing to wait
     /// for, so it never reaches the task run query below), and it costs no query at all
-    /// for the common case of a first attempt. The cap, once reached, applies to every
+    /// for the common case of a first attempt. An attempt resuming one that `serve`
+    /// interrupted is not a retry and does not wait. The cap, once reached, applies to every
     /// attempt regardless of retry state. The named-limit check runs last, in
     /// `a_claimed_limit_is_full`.
     async fn should_stay_queued(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
@@ -208,7 +209,9 @@ impl TaskRunAttemptDispatcher {
 
             let retry_delay = TimeDelta::seconds(task_run.retry_delay as i64);
 
-            if Utc::now() < task_run_attempt.created_at + retry_delay {
+            if Utc::now() < task_run_attempt.created_at + retry_delay
+                && !self.follows_an_interruption(task_run_attempt).await?
+            {
                 return Ok(true);
             }
         }
@@ -224,6 +227,29 @@ impl TaskRunAttemptDispatcher {
         }
 
         self.a_claimed_limit_is_full(task_run_attempt).await
+    }
+
+    /// Whether the attempt before this one was interrupted by `serve` shutting down, which
+    /// makes this one a resumption rather than a retry.
+    async fn follows_an_interruption(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
+
+        let interrupted_attempts = self.crud.select_task_run_attempts(
+            &*self.conn_pool,
+            &SelectTaskRunAttemptsData {
+                filter: SelectTaskRunAttemptsDataFilter {
+                    id: None,
+                    task_run_id: Some(task_run_attempt.task_run_id),
+                    job_run_id: None,
+                    task_id: None,
+                    status: Some(TaskRunAttemptStatus::Interrupted),
+                },
+                sort: None,
+            },
+        ).await?;
+
+        Ok(interrupted_attempts
+            .iter()
+            .any(|interrupted| interrupted.attempt + 1 == task_run_attempt.attempt))
     }
 
     /// The third and last reason `should_stay_queued` leaves a row queued: one of the
@@ -946,6 +972,26 @@ mod tests {
         let status = settled_attempt_status(2, 60, true).await;
 
         assert_eq!(status, TaskRunAttemptStatus::Skipped);
+    }
+
+    /// The attempt after one `serve` interrupted is a resumption, not a retry, so it starts
+    /// at once however long the task's retry_delay is.
+    #[tokio::test]
+    async fn an_attempt_resuming_an_interrupted_one_does_not_wait_out_the_retry_delay() {
+
+        let _environment = reading_the_environment();
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_retryable_task_run(job_run.id, 0, 60).await;
+
+        db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Interrupted).await;
+        let resumed = db.insert_task_run_attempt(&task_run, 2, TaskRunAttemptStatus::Queued).await;
+
+        db.task_run_attempt_dispatcher().handle(&resumed).await.unwrap();
+
+        assert_eq!(db.task_run_attempt(resumed.id).await.status, TaskRunAttemptStatus::Running);
     }
 
     #[tokio::test]

@@ -807,8 +807,8 @@ tasks submitted, the `get_job_run` tool and `--json` carry the same as `parent` 
 `child_job_run_ids`, and the run page links both ways.
 
 A child lives as long as the attempt that started it, unless that attempt succeeded. When
-the attempt ends any other way — stopped, failed, timed out, lost in a crash — the unfinished
-runs it submitted are stopped too, and theirs in turn. So stopping a run whose task is
+the attempt ends any other way — stopped, failed, timed out, interrupted by a shutdown, lost
+in a crash — the unfinished runs it submitted are stopped too, and theirs in turn. So stopping a run whose task is
 waiting on a child with `job submit --wait` stops the child as well, and a retry does not
 leave the failed attempt's children running beside its own. A task that submits without
 waiting and exits 0 has handed its child off: stopping the parent afterwards leaves that
@@ -901,16 +901,23 @@ Most statuses say what happened to your command: it succeeded, it failed, it ran
 timeout, you stopped it. `invalid` says something different — that flowlite cannot account
 for the row at all.
 
-The case that actually happens is a restart with work in flight. Shutting `serve` down
-stops its services, gives every command it spawned `SIGTERM` together and the same
-`kill_grace_seconds` to exit, kills what is left, and leaves those attempts marked running
-on purpose; a
-crash or a `kill -9` leaves them with the processes still alive. Either way the next start
-has no exit status to read and no process to wait on, so no honest outcome can be claimed:
+The case that actually happens is a crash or a `kill -9` with work in flight, which leaves
+its attempts marked running with the processes still alive. The next start has no exit
+status to read and no process to wait on, so no honest outcome can be claimed:
 
 ```bash
 flowlite job-run list --status invalid
 ```
+
+An ordinary restart is not this case. Shutting `serve` down with Ctrl-C or `SIGTERM` stops
+its services, gives every command it spawned `SIGTERM` together and the same
+`kill_grace_seconds` to exit, and kills what is left. It then marks each of those attempts
+`interrupted`, with a line on its stderr saying so. When `serve` starts again, each task
+that was interrupted carries on with a new attempt, run from the start of its command. That
+attempt uses none of `max_retries` and does not wait out `retry_delay`, and like a retry
+it is handed the interrupted attempt's output in `FLOWLITE_PREVIOUS_ATTEMPT_LOG`. A command
+that had already exited by itself, or was already being ended for a timeout or a stop,
+keeps that outcome instead.
 
 An invalid attempt makes its task run invalid, that makes the job run invalid, and
 everything downstream is skipped. It is **never retried** — flowlite does not know what
