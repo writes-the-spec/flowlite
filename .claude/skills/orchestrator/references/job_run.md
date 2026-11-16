@@ -13,7 +13,6 @@
 | `Aborted` | Stopped after it started — a task run killed mid-flight, or one skipped before its command began. |
 | `Skipped` | Stopped before it started. Nothing ran. |
 | `Invalid` | flowlite cannot account for the row — see [Rows flowlite cannot read](../SKILL.md#rows-flowlite-cannot-read). |
-| `Deleted` | Tombstone from `flowlite job-run delete` on a `Scheduled` run. Unlike `Skipped`, frees the occurrence for the scheduler to submit again. |
 
 **`Aborted` vs `Skipped` is decided by the row's own lifecycle**, not its task runs: started → `Aborted`, never started → `Skipped`. The releaser and dispatcher write only `Skipped`, the monitor only `Aborted`. There is deliberately no `Cancelled`.
 
@@ -28,7 +27,7 @@
 
 It is the one service that relies on the poll interval rather than a wake-up: nothing publishes when a future instant arrives. That split is also why the [Scheduler](../../scheduler/SKILL.md) is separate — it decides *which* runs exist, the releaser *when* one is due.
 
-A `Scheduled` run is never withdrawn: the scheduler only inserts, so a run whose schedule has since changed (lower `submit_ahead`, edited cron, disabled or deleted schedule) is still released at its instant. Only a [`job_run_stop`](../../entities/references/job_run_stop.md) row (step 1) or `flowlite job-run delete` (`Deleted`, before the releaser selects it) prevents it.
+A `Scheduled` run is never withdrawn: the scheduler only inserts, so a run whose schedule has since changed (lower `submit_ahead`, edited cron, disabled or deleted schedule) is still released at its instant. Only a [`job_run_stop`](../../entities/references/job_run_stop.md) row (step 1) prevents it.
 
 ## Dispatcher: Queued → Running / Skipped
 

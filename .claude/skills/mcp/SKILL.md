@@ -5,7 +5,7 @@ description: Add or modify MCP tools in src/mcp/ - flowlite as a set of tools an
 
 # MCP module conventions (src/mcp/)
 
-`flowlite mcp` speaks MCP over stdin/stdout. [src/mcp/mod.rs](../../../src/mcp/mod.rs) holds `McpServer` (an `Arc<Toolkit>` and a composed `ToolRouter`); each tool is one file under `src/mcp/tools/`. Ten of the eleven tools are a CLI command's `--json` branch without the shell (same filters, sort and fields); `init_data_dir` has no twin (`init` prints prose), so its `InitResult` shape is its own, in `src/shared/`.
+`flowlite mcp` speaks MCP over stdin/stdout. [src/mcp/mod.rs](../../../src/mcp/mod.rs) holds `McpServer` (an `Arc<Toolkit>` and a composed `ToolRouter`); each tool is one file under `src/mcp/tools/`. Nine of the ten tools are a CLI command's `--json` branch without the shell (same filters, sort and fields); `init_data_dir` has no twin (`init` prints prose), so its `InitResult` shape is its own, in `src/shared/`.
 
 ## Adding a tool (e.g. `list_schedules`)
 
@@ -63,5 +63,5 @@ The example mirrors nothing because there is no `schedule` command; where one ex
 - **A failure is a tool result, not a protocol error:** `error_result(&err)` carries the anyhow chain verbatim (`{:#}`) so the model can fix its input.
 - **Results go through [tools/result.rs](../../../src/mcp/tools/result.rs):** `success_json` (text as `--json` prints it, plus the same value as `structured_content`), or `job_run_result` for a run that may carry the unserved-directory warning (a warned result drops `structured_content`). Serialize the struct, not a `serde_json::Value`, whose `BTreeMap` alphabetizes fields away from the CLI's order - unless the CLI prints that same `Value` (`status_json`).
 - **Waits are bounded by [src/mcp/wait.rs](../../../src/mcp/wait.rs):** `clamp_wait_seconds` (absent or `0` returns at once, above 300 clamps to 300) and `wait_for_settled_job_run`, which returns the unfinished run when the bound elapses - "still running, here is the id" is an answer, not an error. Before any wait over 0, call `ensure_data_dir_is_served`, or the tool hangs on a row nothing writes.
-- **Never import from `src/cli/` or `src/router/`;** shared needs (`JobRunDetail`, `parse_job_run_status`, `stop_job_run`, `delete_job_run`, ...) live in `src/shared/`. See the `frontends` skill; `tests/frontend_boundaries.rs` enforces it.
+- **Never import from `src/cli/` or `src/router/`;** shared needs (`JobRunDetail`, `parse_job_run_status`, `stop_job_run`, ...) live in `src/shared/`. See the `frontends` skill; `tests/frontend_boundaries.rs` enforces it.
 - Design note: [docs/2026-09-11-mcp-server-design.md](../../../docs/2026-09-11-mcp-server-design.md).

@@ -30,7 +30,7 @@ An ordinary [`Service`](../../../src/poller.rs):
 | not finished | left open | left open |
 | `Failed`, `TimedOut` | delivered → `sent` / `failed` | `skipped` |
 | `Succeeded` | `skipped` | delivered → `sent` / `failed` |
-| `Aborted`, `Skipped`, `Deleted` | `skipped` (somebody stopped it and already knows) | `skipped` |
+| `Aborted`, `Skipped` | `skipped` (somebody stopped it and already knows) | `skipped` |
 | `Invalid` | delivered → `sent` / `failed` (nobody chose this ending, so it most needs reporting) | `skipped` |
 
 "Has it ended?" is `JobRunStatus::is_finished` ([src/crud/job_run.rs](../../../src/crud/job_run.rs)). "Is this ending mine?" is `NotifyOn::wants` ([src/crud/job_run_notification.rs](../../../src/crud/job_run_notification.rs)), a question for the row, never the service: a job that wants both endings gets **a row for each**, and one ending settles them differently. Both functions match exhaustively, so a new run status won't compile until it states its meaning for failure and for success.

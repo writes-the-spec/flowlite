@@ -5,7 +5,6 @@
 //! connection. `job_run_definition` is the exception: it is not an operation but the
 //! vocabulary `submit_job` and `rerun_job` share.
 
-pub mod delete_job_run;
 pub mod delete_job_runs_with_children;
 pub mod invalidate_job_run;
 pub mod job_run_definition;

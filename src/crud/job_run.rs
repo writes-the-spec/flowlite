@@ -18,11 +18,6 @@ pub enum JobRunStatus {
     Aborted,
     TimedOut,
     Invalid,
-    /// Removed by hand while still Scheduled, and kept as a tombstone rather than deleted.
-    /// The one status the Scheduler's existence check ignores, so the occurrence it held is
-    /// free to be submitted again - which is what separates it from Skipped, where the user
-    /// cancelled the occurrence and it must never come back.
-    Deleted,
 }
 
 impl JobRunStatus {
@@ -32,7 +27,7 @@ impl JobRunStatus {
     /// It lives beside the enum so the surfaces that need to enumerate statuses - the
     /// filter chips and the CLI's `--status` parser - read one list rather than each
     /// keeping its own copy to forget to update.
-    pub const ALL: [JobRunStatus; 10] = [
+    pub const ALL: [JobRunStatus; 9] = [
         JobRunStatus::Scheduled,
         JobRunStatus::Queued,
         JobRunStatus::Running,
@@ -42,7 +37,6 @@ impl JobRunStatus {
         JobRunStatus::Aborted,
         JobRunStatus::TimedOut,
         JobRunStatus::Invalid,
-        JobRunStatus::Deleted,
     ];
 
     /// Whether the run has settled and will not change again. Matched exhaustively on
@@ -58,41 +52,9 @@ impl JobRunStatus {
             | JobRunStatus::Skipped
             | JobRunStatus::Aborted
             | JobRunStatus::TimedOut
-            | JobRunStatus::Invalid
-            | JobRunStatus::Deleted => true,
-        }
-    }
-
-    /// Whether the run's own snapshot is still the user's to replay. `Deleted` is the one
-    /// status it is not: that run was removed by hand before anything of it ran, and its
-    /// occurrence goes back to the schedule, which submits it again on its next pass -
-    /// so a rerun would be a second copy of the run the user just removed.
-    ///
-    /// Every other status keeps its rows and means them, `Skipped` included: there the
-    /// occurrence was cancelled rather than handed back, and asking for one run of the
-    /// definition by hand is a different thing to ask.
-    ///
-    /// Says nothing about whether the run is over - a scheduled ad-hoc submit is replayed
-    /// this way once its file is gone, and `job-run rerun` allows exactly that. The
-    /// dashboard's button asks `is_finished` as well, because a page is where you would
-    /// otherwise start the same work twice by clicking.
-    ///
-    /// Matched exhaustively, like `is_finished`, so a new status has to answer this too.
-    pub fn is_rerunnable(&self) -> bool {
-        match self {
-            JobRunStatus::Deleted => false,
-            JobRunStatus::Scheduled
-            | JobRunStatus::Queued
-            | JobRunStatus::Running
-            | JobRunStatus::Succeeded
-            | JobRunStatus::Failed
-            | JobRunStatus::Skipped
-            | JobRunStatus::Aborted
-            | JobRunStatus::TimedOut
             | JobRunStatus::Invalid => true,
         }
     }
-
 }
 
 impl std::fmt::Display for JobRunStatus {
@@ -107,7 +69,6 @@ impl std::fmt::Display for JobRunStatus {
             JobRunStatus::Aborted => write!(f, "aborted"),
             JobRunStatus::TimedOut => write!(f, "timedout"),
             JobRunStatus::Invalid => write!(f, "invalid"),
-            JobRunStatus::Deleted => write!(f, "deleted"),
         }
     }
 }
@@ -523,26 +484,6 @@ mod tests {
     #[test]
     fn a_scheduled_run_is_not_finished() {
         assert!(!JobRunStatus::Scheduled.is_finished());
-    }
-
-    /// Settled, but nothing of it ever ran, and the occurrence it held goes back to the
-    /// schedule to be submitted again. A rerun of it would be a second copy of the run the
-    /// user removed by hand.
-    #[test]
-    fn a_deleted_run_is_finished_but_not_rerunnable() {
-        assert!(JobRunStatus::Deleted.is_finished());
-        assert!(!JobRunStatus::Deleted.is_rerunnable());
-    }
-
-    /// Deleted is the only one. A skipped run's definition ran nowhere either, but its
-    /// occurrence was cancelled rather than handed back, so replaying it still means
-    /// something - and a scheduled run is replayable too, which is how an ad-hoc submit
-    /// outlives the file it came from.
-    #[test]
-    fn every_other_status_is_rerunnable() {
-        for status in JobRunStatus::ALL {
-            assert_eq!(status.is_rerunnable(), status != JobRunStatus::Deleted, "{status}");
-        }
     }
 
     /// The dashboard's filter chips, the CLI's `--status` parser and the MCP tool all read

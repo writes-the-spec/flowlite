@@ -1,8 +1,5 @@
 //! `rerun_job`: a fresh run of the definition an earlier run executed, not of whatever
 //! the YAML says now - which is why a run whose job has since been deleted is rerunnable.
-//!
-//! Which runs may be rerun at all is not asked here: `JobRunStatus::is_rerunnable` is that
-//! rule, and each frontend puts it in front of this call.
 
 use sqlx::SqliteConnection;
 
@@ -149,26 +146,6 @@ mod tests {
         let rerun_id = db.crud.rerun_job(&mut conn, original.id, Some(second_attempt.id)).await.unwrap();
 
         assert_eq!(db.job_run(rerun_id).await.parent_task_run_attempt_id, Some(second_attempt.id));
-    }
-
-    /// A tombstone keeps every row a rerun reads, and this submits from whatever run it is
-    /// handed - the status gate lives in the frontends, on `JobRunStatus::is_rerunnable`,
-    /// which refuses a deleted run precisely because its schedule writes the occurrence
-    /// again. Held here so that gate stays the only thing standing between the two.
-    #[tokio::test]
-    async fn a_deleted_run_is_replayed_from_its_rows_like_any_other() {
-
-        let db = TestDb::new().await;
-
-        let job_run = db.insert_job_run(JobRunStatus::Scheduled).await;
-        db.insert_task_run_for_command(job_run.id, "echo hi", 60).await;
-
-        let mut conn = db.conn_pool.acquire().await.unwrap();
-        assert!(db.crud.delete_job_run(&mut conn, job_run.id).await.unwrap());
-
-        let rerun_id = db.crud.rerun_job(&mut conn, job_run.id, None).await.unwrap();
-
-        assert_eq!(db.job_run(rerun_id).await.status, JobRunStatus::Scheduled);
     }
 
     /// A rerun replays the run's own inputs. Nothing here reads config, so the rerun of a

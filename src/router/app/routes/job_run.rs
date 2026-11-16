@@ -12,9 +12,7 @@ use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput}
 use crate::crud::task_run::{TaskRun, SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRunStatus};
 use crate::router::app::app_state::AppState;
 use crate::shared::format;
-use crate::shared::job_run::{
-    deleted_occurrence, select_child_job_run_ids, select_job_run_parent, DeletedOccurrence, JobRunParent,
-};
+use crate::shared::job_run::{select_child_job_run_ids, select_job_run_parent, JobRunParent};
 
 pub struct JobRunDisplay {
     pub id: i64,
@@ -67,10 +65,6 @@ struct JobRunIdRouteTemplate {
     task_count: String,
     polling: bool,
     refresh_seconds: u32,
-    deletable: bool,
-    /// The second sentence of the delete dialog: what becomes of the occurrence, which is
-    /// the whole reason to reach for Delete rather than Skip.
-    delete_note: &'static str,
     skippable: bool,
     stoppable: bool,
     rerunnable: bool,
@@ -208,7 +202,6 @@ pub async fn job_run_id_route(
     let child_job_run_ids = select_child_job_run_ids(&crud, conn, job_run.id).await.unwrap_or_default();
 
     let controls = job_run_controls(job_run.status);
-    let delete_note = delete_note(deleted_occurrence(&job_run, now));
 
     let template = JobRunIdRouteTemplate {
         current_route: "home",
@@ -238,8 +231,6 @@ pub async fn job_run_id_route(
         // a page loaded during that pass must keep polling rather than going stale.
         polling: matches!(job_run.status, JobRunStatus::Scheduled | JobRunStatus::Queued | JobRunStatus::Running),
         refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
-        deletable: controls.deletable,
-        delete_note,
         skippable: controls.skippable,
         stoppable: controls.stoppable,
         rerunnable: controls.rerunnable,
@@ -267,20 +258,6 @@ pub async fn rerun_job_run_route(
         }
     };
 
-    // The button renders only on a rerunnable run, so arriving on one that is not means a
-    // page that has gone stale - or a POST that never came from the page at all. Either
-    // way the run page the redirect lands on says what the run actually is.
-    match crate::shared::job_run::select_job_run(&crud, &mut conn, job_run_id).await {
-        Ok(job_run) if !job_run.status.is_rerunnable() => {
-            return Redirect::to(&format!("/job-runs/{}", job_run_id)).into_response();
-        }
-        Ok(_) => {}
-        Err(err) => {
-            eprintln!("Error rerunning job run: {}", err);
-            return Html("Error rerunning job run").into_response();
-        }
-    }
-
     let result = crud.rerun_job(&mut conn, job_run_id, None).await;
 
     match result {
@@ -291,35 +268,6 @@ pub async fn rerun_job_run_route(
         Err(err) => {
             eprintln!("Error rerunning job run: {}", err);
             Html("Error rerunning job run").into_response()
-        }
-    }
-}
-
-pub async fn delete_job_run_route(
-    State(state): State<AppState>,
-    Extension(crud): Extension<CRUD>,
-    Path(job_run_id): Path<i64>,
-) -> impl IntoResponse {
-    let mut conn = match state.conn_pool.acquire().await {
-        Ok(conn) => conn,
-        Err(err) => {
-            eprintln!("Error deleting job run: {}", err);
-            return Html("Error deleting job run").into_response();
-        }
-    };
-
-    // `delete_job_run` re-checks the status inside its own transaction and leaves anything
-    // but a `Scheduled` run alone, so a page that has gone stale - or one whose run came due
-    // between the render and the click - redirects to a run that says what actually
-    // happened, the way the stop route does, rather than to a dead end.
-    match crud.delete_job_run(&mut conn, job_run_id).await {
-        Ok(_) => {
-            state.signals.publish();
-            Redirect::to(&format!("/job-runs/{}", job_run_id)).into_response()
-        }
-        Err(err) => {
-            eprintln!("Error deleting job run: {}", err);
-            Html("Error deleting job run").into_response()
         }
     }
 }
@@ -349,8 +297,8 @@ pub async fn stop_job_run_route(
     };
 
     // A settled run's stop row would never be read, so none is written. Every button that
-    // reaches this route - the stop on a queued or running run, the skip in the delete
-    // dialog on a scheduled one - renders only on a run that is still going, so arriving
+    // reaches this route - the stop on a queued or running run, the skip on a scheduled
+    // one - renders only on a run that is still going, so arriving
     // here means a page that has gone stale; not an error worth a dead end, and the run
     // page the redirect lands on already says what actually happened.
     if job_run.status.is_finished() {
@@ -375,25 +323,9 @@ pub async fn stop_job_run_route(
     }
 }
 
-/// What the delete dialog promises about the occurrence. Only a run a schedule owns, whose
-/// instant is still ahead, is written again - so only that run may be offered it, or the
-/// dialog talks a user into a delete on the strength of a run that never comes back.
-fn delete_note(occurrence: DeletedOccurrence) -> &'static str {
-    match occurrence {
-        DeletedOccurrence::Resubmitted =>
-            "Its schedule submits the occurrence again on its next pass, under the job as it now stands.",
-        DeletedOccurrence::NotScheduled =>
-            "It was submitted by hand rather than by a schedule, so nothing writes it again.",
-        DeletedOccurrence::AlreadyPassed =>
-            "Its instant has already gone by, and the scheduler only fills occurrences still ahead, so it will not be written again.",
-    }
-}
-
-/// Which of the four buttons a run's status offers. One function, because "may this be
-/// stopped?" and "may this be deleted?" are the same question asked at two ends of a run's
-/// life, and answering them in separate places is how a run comes to offer both.
+/// Which of the three buttons a run's status offers, decided in one place so a run never
+/// comes to offer two that contradict each other.
 struct JobRunControls {
-    deletable: bool,
     skippable: bool,
     stoppable: bool,
     rerunnable: bool,
@@ -401,63 +333,20 @@ struct JobRunControls {
 
 fn job_run_controls(status: JobRunStatus) -> JobRunControls {
     JobRunControls {
-        // Nothing of it has run, and removing it hands the occurrence back to the schedule.
-        deletable: status == JobRunStatus::Scheduled,
-        // The same status as the delete, and the opposite answer to the same question: a
-        // skip keeps the occurrence, a delete hands it back. Only a scheduled run can be
-        // called off before its schedule has had the chance to submit it again.
+        // A stop on a run that has not come due skips it, and keeps its occurrence taken.
         skippable: status == JobRunStatus::Scheduled,
         // Queued too, not only Running: a queued run is due and starts on the next pass,
         // and waiting for it to start before offering the stop is offering it too late.
         stoppable: matches!(status, JobRunStatus::Queued | JobRunStatus::Running),
-        // Two halves. A rerun replays the run's own snapshot, which is only an answer once
-        // the run is over - a button offered earlier is how the same work comes to run
-        // twice. And a `Deleted` run is over but not rerunnable: its schedule writes the
-        // occurrence again on its own.
-        rerunnable: status.is_finished() && status.is_rerunnable(),
+        // A rerun replays the run's own snapshot, which is only an answer once the run is
+        // over - a button offered earlier is how the same work comes to run twice.
+        rerunnable: status.is_finished(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The dialog may promise a resubmission only where there is one to promise: an ad-hoc
-    /// run carries no schedule, and a run whose instant has gone by is behind the point the
-    /// Scheduler derives occurrences from.
-    #[test]
-    fn the_delete_dialog_promises_a_resubmission_only_where_one_follows() {
-        assert!(delete_note(DeletedOccurrence::Resubmitted).contains("submits the occurrence again"));
-        assert!(delete_note(DeletedOccurrence::NotScheduled).contains("nothing writes it again"));
-        assert!(delete_note(DeletedOccurrence::AlreadyPassed).contains("not be written again"));
-    }
-
-    /// A scheduled run has no process and no output, and deleting it hands its occurrence
-    /// back to the schedule — the one status where that is true.
-    #[test]
-    fn only_a_scheduled_run_offers_delete() {
-        for status in JobRunStatus::ALL {
-            assert_eq!(
-                job_run_controls(status).deletable,
-                status == JobRunStatus::Scheduled,
-                "{status}",
-            );
-        }
-    }
-
-    /// A skip and a delete are offered together, on the one status where the occurrence is
-    /// still the schedule's to decide — they differ in what they leave behind, not in when
-    /// they are reachable.
-    #[test]
-    fn only_a_scheduled_run_offers_skip() {
-        for status in JobRunStatus::ALL {
-            assert_eq!(
-                job_run_controls(status).skippable,
-                status == JobRunStatus::Scheduled,
-                "{status}",
-            );
-        }
-    }
 
     /// Queued as well as Running: a queued run is already due and starts on the next pass,
     /// so the page has to offer the stop before anything of it has run.
@@ -468,7 +357,7 @@ mod tests {
     }
 
     /// Stopping settles the run, so a settled one has nothing left to stop — and a
-    /// scheduled one is deleted rather than stopped.
+    /// scheduled one is skipped rather than stopped.
     #[test]
     fn a_settled_or_scheduled_run_offers_no_stop() {
         assert!(!job_run_controls(JobRunStatus::Scheduled).stoppable);
@@ -487,22 +376,22 @@ mod tests {
         }
     }
 
-    /// Finished, and still no rerun: the occurrence a deleted run held is the schedule's
-    /// again, so the button would submit a second copy of what is already coming back.
-    /// The one status where the page's two halves part company.
+    /// Every settled status offers it.
     #[test]
-    fn a_deleted_run_offers_no_rerun_though_it_is_finished() {
-        assert!(JobRunStatus::Deleted.is_finished());
-        assert!(!job_run_controls(JobRunStatus::Deleted).rerunnable);
+    fn a_settled_run_offers_rerun() {
+        for status in JobRunStatus::ALL.into_iter().filter(|status| status.is_finished()) {
+            assert!(job_run_controls(status).rerunnable, "{status}");
+        }
     }
 
-    /// Every settled status but that one still offers it.
+    /// Only a scheduled run offers skip: the one status where a stop calls the run off
+    /// before anything of it has run.
     #[test]
-    fn a_settled_run_that_is_not_deleted_offers_rerun() {
-        for status in JobRunStatus::ALL.into_iter().filter(|status| status.is_finished()) {
+    fn only_a_scheduled_run_offers_skip() {
+        for status in JobRunStatus::ALL {
             assert_eq!(
-                job_run_controls(status).rerunnable,
-                status != JobRunStatus::Deleted,
+                job_run_controls(status).skippable,
+                status == JobRunStatus::Scheduled,
                 "{status}",
             );
         }

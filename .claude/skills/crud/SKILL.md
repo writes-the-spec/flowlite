@@ -18,7 +18,6 @@ Each entity has its own file under `src/crud/`, with methods on the shared `CRUD
 | [task_run_inputs.rs](../../../src/crud/multistatements/task_run_inputs.rs) | `select_task_run_outputs`, `TaskRunOutput` — what a run's tasks produced so far, for `FLOWLITE_TASK_OUTPUT` |
 | [skip_job_run.rs](../../../src/crud/multistatements/skip_job_run.rs) | `skip_job_run` — a job run plus its task runs, for a run nobody started |
 | [invalidate_job_run.rs](../../../src/crud/multistatements/invalidate_job_run.rs) | `invalidate_job_run` — the same pair, for a run no outcome claimed (a bug path, from `JobRunReleaser::set_to_invalid`) |
-| [delete_job_run.rs](../../../src/crud/multistatements/delete_job_run.rs) | `delete_job_run` — the same pair for a `Scheduled` run removed by hand, tombstoned as `Deleted` (not erased), which frees its occurrence for the Scheduler |
 | [delete_job_runs_with_children.rs](../../../src/crud/multistatements/delete_job_runs_with_children.rs) | `delete_job_runs_with_children` — erases a run's rows from all six tables |
 | [retention_candidates.rs](../../../src/crud/multistatements/retention_candidates.rs) | `count_finished_job_runs`, `select_job_ids_with_finished_job_runs`, `select_deletable_job_runs` — which finished runs retention may delete; how many is the retention service's call |
 | [stop_child_job_runs.rs](../../../src/crud/multistatements/stop_child_job_runs.rs) | `stop_child_job_runs` — a stop row per unfinished run an attempt submitted, when it ends unsuccessfully |

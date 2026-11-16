@@ -171,7 +171,6 @@ open and nothing to start first. Register it with any MCP client as a stdio serv
 | `get_job_run` | What happened to run 42, task by task, and what did each task produce? |
 | `get_job_run_logs` | What did each attempt write to stdout and stderr? |
 | `stop_job_run` | Stop run 42, and tell me what it settled to. |
-| `delete_job_run` | Remove run 42 before it is due, so its schedule writes it again. |
 | `get_serve_status` | Is anything actually serving this directory? |
 | `list_limits` | What is a queued run waiting behind? |
 | `validate_data_dir` | Would `serve` start on the YAML and flowlite.toml I just edited? |

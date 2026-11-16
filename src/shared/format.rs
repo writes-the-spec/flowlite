@@ -44,7 +44,6 @@ pub fn job_run_word(status: JobRunStatus) -> &'static str {
         JobRunStatus::Aborted => "aborted",
         JobRunStatus::TimedOut => "timed out",
         JobRunStatus::Invalid => "invalid",
-        JobRunStatus::Deleted => "deleted",
     }
 }
 

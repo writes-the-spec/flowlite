@@ -34,7 +34,7 @@ description: Map of every entity in flowlite - the tables of flowlite.db and the
 
 - **Declaring a table** (keys, `NOT NULL`, no `DEFAULT`, foreign key reach) is the [db-schema skill](../db-schema/SKILL.md)'s; read [declaring-a-table.md](../db-schema/references/declaring-a-table.md) first. "Empty, not unknown" in the references is its nullability rule.
 - **Updated after insert?** Tables are, via `update_*` methods. `Declared` never changes once loaded, apart from the one ad-hoc job `job submit -f` adds to its own copy.
-- **Rows are deleted only by `RetentionService`** ([src/retention/service.rs](../../../src/retention/service.rs)) — no CLI command, route or other service, the Scheduler included. (`job-run delete` only tombstones a run as `Deleted`; see [job_run.md](references/job_run.md).) It deletes finished runs — never `Scheduled`/`Queued`/`Running`, never one owing a `pending` notification — with every row in the other five tables carrying the `job_run_id`, and every run its tasks submitted. Per-job survival is the `Job`'s `keep_runs` ([job.md](references/job.md)).
+- **Rows are deleted only by `RetentionService`** ([src/retention/service.rs](../../../src/retention/service.rs)) — no CLI command, route or other service, the Scheduler included. It deletes finished runs — never `Scheduled`/`Queued`/`Running`, never one owing a `pending` notification — with every row in the other five tables carrying the `job_run_id`, and every run its tasks submitted. Per-job survival is the `Job`'s `keep_runs` ([job.md](references/job.md)).
 
 ## Adding a new entity
 

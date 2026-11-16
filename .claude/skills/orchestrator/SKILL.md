@@ -28,7 +28,7 @@ Each level — [job run](references/job_run.md), [task run](references/task_run.
 - **Dispatcher: held → `Running` or `Skipped`.** Held is `Queued` for a job run and an attempt, `Waiting` for a task run. One exception: `TaskRunAttemptDispatcher` settles an attempt whose command cannot be started `Failed`, since there is no process for the monitor to finish.
 - **Monitor: `Running` → a finished status.** Never touches a held row.
 
-**Nothing else writes a run status**, with one exception: `CRUD::delete_job_run` (`job-run delete`, the MCP tool and the web route) tombstones a still-`Scheduled` run as `Deleted`, which no service ever selects.
+**Nothing else writes a run status.**
 
 Two levels start one step earlier, in a status nothing dispatches, so a row written ahead of time stays invisible until something decides its moment has come:
 

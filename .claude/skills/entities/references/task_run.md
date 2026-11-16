@@ -28,7 +28,7 @@ The orchestrator reads config only here; `TaskRunDispatcher::get_dependent_task_
   - `JobRunDispatcher::set_to_running` — `Planned` → `Waiting`, all of the job run's in one update; the only way into `Waiting`, so what makes a task run visible to `TaskRunDispatcher`.
   - `TaskRunDispatcher` — `Waiting` → `Running`/`Skipped`.
   - `TaskRunMonitor` — `Running` → terminal.
-  - Bulk settles of a never-started job run: `CRUD::skip_job_run` (→ `Skipped`; `JobRunReleaser`, `JobRunDispatcher`, for a stopped run), `CRUD::invalidate_job_run` (→ `Invalid`), `CRUD::delete_job_run` (→ `Skipped`, under a `Deleted` job run).
+  - Bulk settles of a never-started job run: `CRUD::skip_job_run` (→ `Skipped`; `JobRunReleaser`, `JobRunDispatcher`, for a stopped run), `CRUD::invalidate_job_run` (→ `Invalid`).
 
 ## Deleted by
 

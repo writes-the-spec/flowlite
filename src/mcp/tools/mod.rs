@@ -1,4 +1,4 @@
-//! The eleven tools, one file each: arguments in, the same CRUD a CLI command runs,
+//! The ten tools, one file each: arguments in, the same CRUD a CLI command runs,
 //! structures out.
 //!
 //! Each tool mirrors one CLI command's `--json` branch exactly - same filters, same sort,
@@ -26,7 +26,6 @@ use rmcp::handler::server::router::tool::ToolRouter;
 
 use crate::mcp::McpServer;
 
-mod delete_job_run;
 mod get_job_run;
 mod get_job_run_logs;
 mod get_serve_status;
@@ -41,7 +40,7 @@ mod validate_data_dir;
 
 impl McpServer {
 
-    /// The eleven per-tool routers, added together - so a tool is added or removed by adding
+    /// The ten per-tool routers, added together - so a tool is added or removed by adding
     /// or removing a file and its line here. The order is the one a reader follows, not one
     /// a client sees: rmcp's `list_all` sorts tools by name before sending them.
     ///
@@ -55,7 +54,6 @@ impl McpServer {
             + Self::get_job_run_router()
             + Self::get_job_run_logs_router()
             + Self::stop_job_run_router()
-            + Self::delete_job_run_router()
             + Self::init_data_dir_router()
             + Self::get_serve_status_router()
             + Self::list_limits_router()

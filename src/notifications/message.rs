@@ -398,7 +398,6 @@ fn job_run_emoji(status: JobRunStatus) -> &'static str {
         JobRunStatus::Aborted => ":octagonal_sign:",
         JobRunStatus::TimedOut => ":alarm_clock:",
         JobRunStatus::Invalid => ":warning:",
-        JobRunStatus::Deleted => ":wastebasket:",
     }
 }
 
@@ -522,7 +521,6 @@ fn job_run_accent(status: JobRunStatus) -> &'static str {
         JobRunStatus::Aborted => "#b54708",
         JobRunStatus::TimedOut => "#b42318",
         JobRunStatus::Invalid => "#6f42c1",
-        JobRunStatus::Deleted => "#6a737d",
     }
 }
 

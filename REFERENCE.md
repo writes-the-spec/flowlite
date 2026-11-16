@@ -99,8 +99,7 @@ number shows more of the future, at the cost of that many standing rows per sche
 written ahead sit in the `scheduled` status and start at their own instant. The reconcile
 only ever adds: taking a schedule's YAML away, disabling it, lowering `submit_ahead` or
 editing its cron leaves the runs already written in place, and they will be released and
-executed at their instant like any other. `flowlite job-run stop <id>` calls one off, and
-`flowlite job-run delete <id>` removes it and lets the schedule write the occurrence again.
+executed at their instant like any other. `flowlite job-run stop <id>` calls one off.
 
 ### When an edit takes effect
 
@@ -123,38 +122,22 @@ deletes it, so an occurrence written under the old YAML runs under the old YAML.
 ### Replacing an outstanding run with the edited definition
 
 `job-run rerun` replays the run's own snapshot, so it is no help here: it is the old
-definition again. Delete the run instead, and let the schedule write the occurrence back:
+definition again. Stop the outstanding run and submit the occurrence yourself:
 
 ```bash
 # Edit the job's YAML first, and restart flowlite serve so it re-reads the file.
 flowlite job-run list --job nightly --status scheduled  # find the outstanding run
-flowlite job-run delete 42
+flowlite job-run stop 42                                # it settles skipped
+flowlite job submit nightly --schedule-at 2026-09-15T03:00:00+02:00
 ```
 
-The next scheduler pass finds no run standing for that occurrence and submits it again,
-carrying the job as the restarted server now reads it. Only a run still `scheduled` can be
-deleted — one already queued or running is the dispatcher's, and `job-run stop` is what
-calls that off.
-
-Two things have to hold for the occurrence to come back, and the command says which way it
-went. The run has to belong to a schedule: one submitted by hand with `job submit
---schedule-at` carries no schedule, so deleting it frees nothing and submitting it again is
-yours to do. And its instant has to be still ahead, because the scheduler derives
-occurrences forward from now — a run deleted in the last seconds before its own time is not
-written back either. The run page on the dashboard offers the same three, one per stage of a
-run's life: **Delete** while it is scheduled, **Stop run** once it is queued or running,
-and **Rerun** once it has finished.
-
-**Deleting is not stopping, and the difference is which one the schedule writes again.** A
-stopped run settles `skipped`, and that row goes on holding its instant for ever, so the
-occurrence is never submitted a second time — cancelling a single occurrence has to stick.
-A deleted run settles `deleted`, the one status the scheduler's existence check ignores, so
-the occurrence is free and the next pass fills it. Reach for `stop` to call a run off, and
-for `delete` to have it written again.
-
-Nothing is erased. The run keeps its row, its task runs and everything it was submitted
-with, so `flowlite job-run get 42` still reads afterwards and `--status deleted` lists what
-you removed. Retention reaps a deleted run like any other settled one.
+A stopped run settles `skipped`, and that row goes on holding its instant, so the schedule
+never writes the occurrence a second time: cancelling one occurrence has to stick. The run
+you submit carries the job as the restarted server now reads it, and runs at the same
+instant with the same `FLOWLITE_SCHEDULED_AT`. It is a hand-submitted run rather than the
+schedule's, so it does not show on the schedule's page. The run page on the dashboard offers
+**Skip run** while a run is scheduled, **Stop run** once it is queued or running, and
+**Rerun** once it has finished.
 
 ## Command inputs
 
@@ -461,9 +444,8 @@ same facts as Block Kit, with the output capped shorter than in mail by default 
 message is read in a scroll, and the mail is where the long tail belongs.
 
 **`on_failure:` means a real failure** — `failed`, `timed out` and `invalid`, never
-`aborted` or `deleted`. A run you stopped or removed yourself is not news, and neither block
-is told about one. An
-`invalid` run is the opposite case: nobody chose it, so it is the ending most worth being
+`aborted` or `skipped`. A run you stopped yourself is not news, and neither block is told
+about one. An `invalid` run is the opposite case: nobody chose it, so it is the ending most worth being
 told about — see [When flowlite loses track of a run](#when-flowlite-loses-track-of-a-run).
 
 A run records who it will tell **when it is submitted**, alongside the commands and
@@ -634,7 +616,6 @@ flowlite job-run list --job nightly --status failed
 flowlite job-run get 42                                # one run and its task runs
 flowlite job-run stop 42                               # ask a running run to stop
 flowlite job-run stop 42 --wait                        # ...and block until it has settled
-flowlite job-run delete 42                             # remove a run still waiting its turn
 ```
 
 `stop` writes a request rather than killing anything itself — the `serve` process notices
@@ -846,8 +827,7 @@ password would be the worst thing a rerun could do.
 
 **A run is rerunnable for as long as it is retained, and no longer.** Retention (below)
 deletes the config snapshot along with the run, so `job-run rerun` on a run retention has
-reaped fails the same way it does for an id that never existed. (A run in the `deleted`
-status is a different thing entirely — its rows are all still there, and it reruns fine.)
+reaped fails the same way it does for an id that never existed.
 
 ## Retention
 
@@ -1074,7 +1054,7 @@ over its stdio, and the process exits when the client closes stdin. Running
 `flowlite -D ./data init` first is optional, since an agent handed an empty directory can
 call `init_data_dir` itself.
 
-Eleven tools, each a projection of a command that already exists:
+Ten tools, each a projection of a command that already exists:
 
 | Tool | Answers |
 |---|---|
@@ -1085,13 +1065,12 @@ Eleven tools, each a projection of a command that already exists:
 | `get_job_run` | What happened to run 42, task by task? |
 | `get_job_run_logs` | What did each attempt write to stdout and stderr? |
 | `stop_job_run` | Stop run 42, and tell me what it settled to. |
-| `delete_job_run` | Remove run 42 before it is due, so its schedule writes it again. |
 | `get_serve_status` | Is anything actually serving this directory? |
 | `list_limits` | What is a run waiting behind? |
 | `validate_data_dir` | Would `serve` start on the YAML and flowlite.toml I just edited? |
 
 Each returns the JSON its `--json` twin prints, so an agent and a shell script reading one
-run read the same fields. Three differ, each for a stated reason.
+run read the same fields. Two differ, each for a stated reason.
 
 `get_job_run_logs` differs only in length: it keeps the last `max_bytes` of each stream,
 20000 by default and 200000 at most, and says on a marker line how many bytes it dropped —
@@ -1103,11 +1082,6 @@ way, 20 runs by default and 200 at most.
 `{"job_run_id": 42, "stop_requested": true}` unless you passed `--wait`. One shape either
 way means an agent reads `.status` off the result instead of branching on which argument it
 sent.
-
-`delete_job_run` is the other half of the stop, and the two differ in what they leave
-behind: a stop says the occurrence is never to run, a delete hands it back to the schedule.
-It returns the deleted run, with a second block saying so wherever nothing will write the
-occurrence again — an ad-hoc run, or one whose instant has gone by.
 
 `get_serve_status` and `list_limits` are the pair an agent reaches for when a run does not
 progress: the first says whether anything is serving the directory at all, the second what

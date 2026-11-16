@@ -20,7 +20,6 @@ pub fn create_router(app_state: AppState) -> Router {
         .route("/job-runs/{job_run_id}", get(app::routes::job_run::job_run_id_route))
         .route("/job-runs/{job_run_id}/stop", post(app::routes::job_run::stop_job_run_route))
         .route("/job-runs/{job_run_id}/rerun", post(app::routes::job_run::rerun_job_run_route))
-        .route("/job-runs/{job_run_id}/delete", post(app::routes::job_run::delete_job_run_route))
         .route("/task-runs/{task_run_id}", get(app::routes::task_run::task_run_id_route))
         // On these routes only: the assets and the login form are how someone without a
         // session gets one. It lets everything through when there is no `[auth]`.
