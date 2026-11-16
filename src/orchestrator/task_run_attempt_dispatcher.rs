@@ -10,7 +10,7 @@ use crate::crud::task_run_attempt_output::{
     InsertTaskRunAttemptOutputData, InsertTaskRunAttemptOutputDataInput, SelectTaskRunAttemptOutputsData,
     SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort, TaskRunAttemptOutputStream,
 };
-use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
+use crate::orchestrator::task_run_attempt_children::{kill_process_group, TaskRunAttemptChild, TaskRunAttemptChildren};
 use crate::orchestrator::task_run_attempt_env::{build_task_run_attempt_env, PreviousAttemptFiles};
 use crate::app_config::AppConfig;
 use crate::orchestrator::task_run_attempt_reader::read_task_run_attempt_stream;
@@ -124,9 +124,10 @@ impl TaskRunAttemptDispatcher {
         Ok(())
     }
 
-    /// Settles a queued attempt a spawn was already begun for, which only a crash between
-    /// the spawn and the Running write leaves behind. Its command may be running, so
-    /// starting it again would run the command twice — worse than an unknown outcome.
+    /// Settles a queued attempt a spawn was already begun for, which a crash between the
+    /// spawn and the Running write leaves behind, or a Running write that failed. Its
+    /// command may have run, so starting it again would run the command twice — worse
+    /// than an unknown outcome.
     async fn set_to_invalid_already_spawned(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         eprintln!(
@@ -433,10 +434,17 @@ impl TaskRunAttemptDispatcher {
             },
         };
 
-        let stdout = child.stdout.take()
-            .ok_or_else(|| anyhow::anyhow!("Failed to get stdout of task: {}", task_run_attempt.task_id))?;
-        let stderr = child.stderr.take()
-            .ok_or_else(|| anyhow::anyhow!("Failed to get stderr of task: {}", task_run_attempt.task_id))?;
+        // The group id is this child's pid, `process_group(0)` having made it a group
+        // leader. Read before the child moves into the map, where ownership of it ends.
+        let process_group_id = child.id().map(|pid| pid as i32);
+
+        // Both are piped above, so this does not happen; but a command that has been
+        // spawned is killed rather than left running with nothing to time it out or stop it.
+        let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+            kill_process_group(process_group_id, &mut child).await;
+
+            anyhow::bail!("Failed to get stdout or stderr of task: {}", task_run_attempt.task_id);
+        };
 
         // Written from a task of its own rather than here. A pipe holds about 64KB, so a
         // command that reads its input slowly - or does some work before reading any of it
@@ -486,13 +494,9 @@ impl TaskRunAttemptDispatcher {
             )),
         ];
 
-        // The group id is this child's pid, `process_group(0)` having made it a group
-        // leader. Read before the child moves into the map, where ownership of it ends.
-        let process_group_id = child.id().map(|pid| pid as i64);
-
         let running_task_run_attempt = TaskRunAttemptChild {
             child,
-            process_group_id: process_group_id.map(|pid| pid as i32),
+            process_group_id,
             chunks,
             readers,
             times_out_at,
@@ -503,7 +507,7 @@ impl TaskRunAttemptDispatcher {
 
         self.children.insert(task_run_attempt.id, running_task_run_attempt).await;
 
-        self.crud.update_task_run_attempts(
+        let marked_running = self.crud.update_task_run_attempts(
             &*self.conn_pool,
             &UpdateTaskRunAttemptsData {
                 filter: UpdateTaskRunAttemptsDataFilter {
@@ -513,11 +517,23 @@ impl TaskRunAttemptDispatcher {
                 },
                 input: UpdateTaskRunAttemptsDataInput {
                     status: Some(TaskRunAttemptStatus::Running),
-                    process_group_id: Some(process_group_id),
+                    process_group_id: Some(process_group_id.map(i64::from)),
                     ..Default::default()
                 },
             },
-        ).await?;
+        ).await;
+
+        // TaskRunAttemptMonitor only picks up Running rows, so a process left in the map
+        // here would run with no timeout and no stop until serve exits. Killed instead;
+        // `started_at` is set, so the next pass settles the attempt Invalid rather than
+        // start the command a second time.
+        if let Err(error) = marked_running {
+            if let Some(mut unmonitored) = self.children.remove(task_run_attempt.id).await {
+                unmonitored.kill_process_group().await;
+            }
+
+            return Err(error);
+        }
 
         self.signals.publish();
 
@@ -899,6 +915,53 @@ mod tests {
 
         assert!(result.is_err(), "a failed read must reach the Poller, which logs and retries");
         assert_eq!(db.task_run_attempt(attempt.id).await.status, TaskRunAttemptStatus::Queued);
+    }
+
+    /// The process is already in the map when the Running write fails, and the monitor
+    /// never looks at a Queued row, so leaving it there ran the command with no timeout and
+    /// no stop. It is killed, and the next pass settles the attempt Invalid rather than
+    /// start it a second time.
+    #[tokio::test]
+    async fn a_failed_running_write_kills_the_command_it_spawned() {
+
+        let _environment = crate::test_support::reading_the_environment();
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let survived = db.data_dir().join("survived");
+
+        let task_run = db.insert_task_run_for_command(
+            job_run.id,
+            &format!("sleep 1; echo survived > {}", survived.display()),
+            3600,
+        ).await;
+
+        let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
+
+        sqlx::query(
+            "CREATE TRIGGER refuse_running BEFORE UPDATE ON task_run_attempt \
+             WHEN NEW.status = 'running' BEGIN SELECT RAISE(ABORT, 'refused'); END",
+        )
+            .execute(&*db.conn_pool)
+            .await
+            .unwrap();
+
+        assert!(db.task_run_attempt_dispatcher().handle(&attempt).await.is_err());
+        assert!(db.children.remove(attempt.id).await.is_none(), "the process was left in the map");
+
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        assert!(!survived.exists(), "the command outlived the failed write");
+
+        sqlx::query("DROP TRIGGER refuse_running")
+            .execute(&*db.conn_pool)
+            .await
+            .unwrap();
+
+        let attempt = db.task_run_attempt(attempt.id).await;
+
+        db.task_run_attempt_dispatcher().handle(&attempt).await.unwrap();
+
+        assert_eq!(db.task_run_attempt(attempt.id).await.status, TaskRunAttemptStatus::Invalid);
     }
 
     /// Pins the stopped check ahead of the queued check. Swap them and a retry still inside

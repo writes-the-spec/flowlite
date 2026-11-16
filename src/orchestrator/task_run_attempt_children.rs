@@ -67,10 +67,7 @@ impl TaskRunAttemptChild {
     /// running. TaskRunAttemptDispatcher puts every attempt in its own group, whose id is
     /// the pid of the sh it spawned. The kill that follows reaps that sh.
     pub async fn kill_process_group(&mut self) {
-
-        self.signal_process_group(libc::SIGKILL);
-
-        let _ = self.child.kill().await;
+        kill_process_group(self.process_group_id, &mut self.child).await;
     }
 
     /// Whether the command has gone its whole idle timeout without writing anything.
@@ -111,14 +108,29 @@ impl TaskRunAttemptChild {
     }
 
     fn signal_process_group(&self, signal: libc::c_int) {
-
-        if let Some(process_group_id) = self.process_group_id {
-            // Safe: killpg only delivers a signal, and a group that is already gone
-            // reports ESRCH, which is exactly the state we wanted.
-            unsafe { libc::killpg(process_group_id, signal) };
-        }
+        signal_process_group(self.process_group_id, signal);
     }
 
+}
+
+
+/// `TaskRunAttemptChild::kill_process_group` for a child that never became one: the
+/// dispatcher's, when it cannot hand over a command it has already spawned.
+pub async fn kill_process_group(process_group_id: Option<i32>, child: &mut Child) {
+
+    signal_process_group(process_group_id, libc::SIGKILL);
+
+    let _ = child.kill().await;
+}
+
+
+fn signal_process_group(process_group_id: Option<i32>, signal: libc::c_int) {
+
+    if let Some(process_group_id) = process_group_id {
+        // Safe: killpg only delivers a signal, and a group that is already gone
+        // reports ESRCH, which is exactly the state we wanted.
+        unsafe { libc::killpg(process_group_id, signal) };
+    }
 }
 
 

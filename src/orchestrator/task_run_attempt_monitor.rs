@@ -47,17 +47,33 @@ impl TaskRunAttemptMonitor {
 
     /// Takes the process `TaskRunAttemptChildren` holds for the attempt — or settles it
     /// `Invalid` when it holds none, since that is a row this program cannot read rather
-    /// than an outcome it can name — then dispatches the write for whatever
-    /// `derive_next_status` decides. Deciding only reads.
+    /// than an outcome it can name — and moves the attempt on a step.
     ///
-    /// `Running` is the only outcome that hands the process back; every other arm consumes
-    /// it. A failure to derive puts it back untouched rather than settling `Invalid`: it may
-    /// be a transient failure, and the process is still there to ask about next pass.
+    /// The process goes back in the map unless the pass settled the attempt. A pass that
+    /// failed part-way, on a write or a read, left the row Running, and the next pass has
+    /// to find the process to finish it. Dropped instead, the command ran on unowned, since
+    /// a dropped `Child` is not killed, and the next pass settled it `Invalid`.
     async fn handle_running_task_run_attempt(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
 
         let Some(mut task_run_attempt_child) = self.children.remove(task_run_attempt.id).await else {
             return self.set_to_invalid(task_run_attempt, None).await;
         };
+
+        let pass = self.advance(task_run_attempt, &mut task_run_attempt_child).await;
+
+        if !matches!(pass, Ok(Pass::Settled)) {
+            self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
+        }
+
+        pass.map(|_| ())
+    }
+
+    /// Dispatches the write for whatever `derive_next_status` decides. Deciding only reads.
+    async fn advance(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        task_run_attempt_child: &mut TaskRunAttemptChild,
+    ) -> anyhow::Result<Pass> {
 
         // Already asked to exit, so its status was decided then; all that is left is
         // waiting for it to go, or for the grace to run out.
@@ -65,22 +81,24 @@ impl TaskRunAttemptMonitor {
             return self.handle_terminating(task_run_attempt, task_run_attempt_child, status).await;
         }
 
-        match self.derive_next_status(task_run_attempt, &mut task_run_attempt_child).await {
-            Ok(TaskRunAttemptStatus::Succeeded) =>
-                self.set_to_succeeded(task_run_attempt, &mut task_run_attempt_child).await,
-            Ok(TaskRunAttemptStatus::Failed) =>
-                self.set_to_failed(task_run_attempt, &mut task_run_attempt_child).await,
-            Ok(status @ (TaskRunAttemptStatus::TimedOut | TaskRunAttemptStatus::Aborted)) =>
-                self.begin_termination(task_run_attempt, task_run_attempt_child, status).await,
-            Ok(TaskRunAttemptStatus::Running) => {
-                let result = self.record_output(task_run_attempt, &mut task_run_attempt_child).await;
-                self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
-                result
+        match self.derive_next_status(task_run_attempt, task_run_attempt_child).await? {
+            TaskRunAttemptStatus::Succeeded => {
+                self.set_to_succeeded(task_run_attempt, task_run_attempt_child).await?;
+                Ok(Pass::Settled)
             },
-            Ok(_) => self.set_to_invalid(task_run_attempt, Some(&mut task_run_attempt_child)).await,
-            Err(error) => {
-                self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
-                Err(error)
+            TaskRunAttemptStatus::Failed => {
+                self.set_to_failed(task_run_attempt, task_run_attempt_child).await?;
+                Ok(Pass::Settled)
+            },
+            status @ (TaskRunAttemptStatus::TimedOut | TaskRunAttemptStatus::Aborted) =>
+                self.begin_termination(task_run_attempt, task_run_attempt_child, status).await,
+            TaskRunAttemptStatus::Running => {
+                self.record_output(task_run_attempt, task_run_attempt_child).await?;
+                Ok(Pass::StillRunning)
+            },
+            _ => {
+                self.set_to_invalid(task_run_attempt, Some(task_run_attempt_child)).await?;
+                Ok(Pass::Settled)
             },
         }
     }
@@ -286,33 +304,40 @@ impl TaskRunAttemptMonitor {
     async fn begin_termination(
         &self,
         task_run_attempt: &TaskRunAttempt,
-        mut task_run_attempt_child: TaskRunAttemptChild,
+        task_run_attempt_child: &mut TaskRunAttemptChild,
         status: TaskRunAttemptStatus,
-    ) -> anyhow::Result<()> {
-
-        // Onto the attempt's stderr, the way a rejected result is: a wall-clock timeout
-        // and an idle one both settle TimedOut, and this is where a reader tells them apart.
-        if status == TaskRunAttemptStatus::TimedOut {
-            let note = timeout_note(&task_run_attempt_child, Utc::now());
-            self.insert_output(task_run_attempt, String::new(), note).await?;
-        }
+    ) -> anyhow::Result<Pass> {
 
         let grace = self.app_config.orchestrator.kill_grace();
 
+        // Signalled before anything is written, so a write that fails cannot leave a
+        // command past its timeout running: the process goes back in the map already
+        // terminating, and a later pass finishes it.
         if grace.is_zero() {
-            return self.finish_termination(task_run_attempt, &mut task_run_attempt_child, status).await;
+            task_run_attempt_child.kill_process_group().await;
+        } else {
+            task_run_attempt_child.terminate_process_group();
         }
-
-        task_run_attempt_child.terminate_process_group();
 
         task_run_attempt_child.terminating = Some(Termination {
             status,
             kill_at: Utc::now() + grace,
         });
 
-        let result = self.record_output(task_run_attempt, &mut task_run_attempt_child).await;
-        self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
-        result
+        // Onto the attempt's stderr, the way a rejected result is: a wall-clock timeout
+        // and an idle one both settle TimedOut, and this is where a reader tells them apart.
+        if status == TaskRunAttemptStatus::TimedOut {
+            let note = timeout_note(task_run_attempt_child, Utc::now());
+            self.insert_output(task_run_attempt, String::new(), note).await?;
+        }
+
+        if grace.is_zero() {
+            self.finish_termination(task_run_attempt, task_run_attempt_child, status).await?;
+            return Ok(Pass::Settled);
+        }
+
+        self.record_output(task_run_attempt, task_run_attempt_child).await?;
+        Ok(Pass::StillRunning)
     }
 
     /// A command that was asked to exit: settled once nothing of its group is left, or
@@ -321,21 +346,21 @@ impl TaskRunAttemptMonitor {
     async fn handle_terminating(
         &self,
         task_run_attempt: &TaskRunAttempt,
-        mut task_run_attempt_child: TaskRunAttemptChild,
+        task_run_attempt_child: &mut TaskRunAttemptChild,
         status: TaskRunAttemptStatus,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Pass> {
 
         let past_grace = task_run_attempt_child.terminating
             .as_ref()
             .is_some_and(|termination| Utc::now() >= termination.kill_at);
 
         if past_grace || task_run_attempt_child.process_group_is_gone() {
-            return self.finish_termination(task_run_attempt, &mut task_run_attempt_child, status).await;
+            self.finish_termination(task_run_attempt, task_run_attempt_child, status).await?;
+            return Ok(Pass::Settled);
         }
 
-        let result = self.record_output(task_run_attempt, &mut task_run_attempt_child).await;
-        self.children.insert(task_run_attempt.id, task_run_attempt_child).await;
-        result
+        self.record_output(task_run_attempt, task_run_attempt_child).await?;
+        Ok(Pass::StillRunning)
     }
 
     /// Kills whatever of the group is left, drains and settles. The kill comes before the
@@ -542,8 +567,8 @@ impl TaskRunAttemptMonitor {
     ) -> anyhow::Result<()> {
 
         // Before the status rather than after it: if this fails, the attempt is still
-        // Running with its process gone, so the next pass settles it invalid through here
-        // and tries again. Written after, a failure would never be retried.
+        // Running and its process goes back in the map, so the next pass comes back
+        // through here and tries again. Written after, a failure would never be retried.
         if status != TaskRunAttemptStatus::Succeeded {
             let mut conn = self.conn_pool.acquire().await?;
             self.crud.stop_child_job_runs(&mut conn, task_run_attempt).await?;
@@ -596,6 +621,14 @@ impl Service for TaskRunAttemptMonitor {
     async fn handle(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<()> {
         self.handle_running_task_run_attempt(task_run_attempt).await
     }
+}
+
+
+/// Where a monitor pass left the attempt, which decides whether its process goes back in
+/// `TaskRunAttemptChildren`.
+enum Pass {
+    Settled,
+    StillRunning,
 }
 
 
@@ -1393,6 +1426,85 @@ mod tests {
             .expect("a pass that errored must put the process back, not orphan it");
 
         handed_back.child.kill().await.unwrap();
+    }
+
+    /// Makes every output write fail until `allow_output_writes`.
+    async fn refuse_output_writes(db: &TestDb) {
+
+        sqlx::query(
+            "CREATE TRIGGER refuse_output BEFORE INSERT ON task_run_attempt_output \
+             BEGIN SELECT RAISE(ABORT, 'refused'); END",
+        )
+            .execute(&*db.conn_pool)
+            .await
+            .unwrap();
+    }
+
+    async fn allow_output_writes(db: &TestDb) {
+
+        sqlx::query("DROP TRIGGER refuse_output")
+            .execute(&*db.conn_pool)
+            .await
+            .unwrap();
+    }
+
+    /// The timeout note is written before the attempt settles. When that write failed, the
+    /// process used to be dropped unsignalled and a command past its timeout ran on.
+    #[tokio::test]
+    async fn a_timeout_whose_note_cannot_be_written_still_ends_the_command() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+        let pid_file = db.data_dir().join("pid");
+
+        db.spawn_running_child(
+            &task_run_attempt,
+            &format!("echo $$ > {}; exec sleep 30", pid_file.display()),
+            Utc::now() - TimeDelta::seconds(1),
+        ).await;
+
+        let pid = read_pid_file(&pid_file).await;
+        refuse_output_writes(&db).await;
+
+        let monitor = db.task_run_attempt_monitor();
+
+        assert!(monitor.handle(&task_run_attempt).await.is_err());
+        assert!(has_exited(pid).await, "the command outlived its timeout");
+
+        allow_output_writes(&db).await;
+
+        monitor.handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::TimedOut,
+        );
+    }
+
+    /// A process that exited non-zero is still Failed after a pass whose drain could not be
+    /// written. The process used to be dropped, and the next pass, finding none, settled
+    /// the attempt Invalid, which is never retried.
+    #[tokio::test]
+    async fn a_settle_that_fails_to_write_is_retried_rather_than_settled_invalid() {
+        let db = TestDb::new().await;
+        let task_run_attempt = running_attempt(&db).await;
+
+        db.spawn_exited_child(&task_run_attempt, "echo out; exit 1", Utc::now() + TimeDelta::seconds(3600)).await;
+
+        refuse_output_writes(&db).await;
+
+        let monitor = db.task_run_attempt_monitor();
+
+        assert!(monitor.handle(&task_run_attempt).await.is_err());
+        assert_eq!(db.task_run_attempt(task_run_attempt.id).await.status, TaskRunAttemptStatus::Running);
+
+        allow_output_writes(&db).await;
+
+        monitor.handle(&task_run_attempt).await.unwrap();
+
+        assert_eq!(
+            db.task_run_attempt(task_run_attempt.id).await.status,
+            TaskRunAttemptStatus::Failed,
+        );
     }
 
     #[tokio::test]
