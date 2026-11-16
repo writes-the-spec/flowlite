@@ -65,10 +65,8 @@ impl CRUD {
                 id: data.filter.id,
                 job_id: data.filter.job_id.clone(),
                 status: data.filter.status,
-                statuses: None,
                 schedule_id: data.filter.schedule_id.clone(),
-                scheduled_at: None,
-                parent_job_run_id: None,
+                ..Default::default()
             },
             sort: None,
             limit: None,
@@ -286,11 +284,8 @@ mod tests {
     async fn task_run_count(db: &TestDb, job_run_id: i64) -> usize {
         db.crud.select_task_runs(&*db.conn_pool, &SelectTaskRunsData {
             filter: SelectTaskRunsDataFilter {
-                id: None,
                 job_run_id: Some(job_run_id),
-                job_id: None,
-                task_id: None,
-                status: None,
+                ..Default::default()
             },
             sort: None,
         }).await.unwrap().len()
@@ -299,11 +294,8 @@ mod tests {
     async fn task_run_attempt_count(db: &TestDb, job_run_id: i64) -> usize {
         db.crud.select_task_run_attempts(&*db.conn_pool, &SelectTaskRunAttemptsData {
             filter: SelectTaskRunAttemptsDataFilter {
-                id: None,
-                task_run_id: None,
                 job_run_id: Some(job_run_id),
-                task_id: None,
-                status: None,
+                ..Default::default()
             },
             sort: None,
         }).await.unwrap().len()
@@ -312,13 +304,8 @@ mod tests {
     async fn task_run_attempt_output_count(db: &TestDb, job_run_id: i64) -> usize {
         db.crud.select_task_run_attempt_outputs(&*db.conn_pool, &SelectTaskRunAttemptOutputsData {
             filter: SelectTaskRunAttemptOutputsDataFilter {
-                id: None,
-                task_run_attempt_id: None,
-                task_run_id: None,
                 job_run_id: Some(job_run_id),
-                job_id: None,
-                task_id: None,
-                stream: None,
+                ..Default::default()
             },
             sort: None,
         }).await.unwrap().len()
@@ -327,8 +314,8 @@ mod tests {
     async fn job_run_stop_count(db: &TestDb, job_run_id: i64) -> usize {
         db.crud.select_job_run_stops(&*db.conn_pool, &SelectJobRunStopsData {
             filter: SelectJobRunStopsDataFilter {
-                id: None,
                 job_run_id: Some(job_run_id),
+                ..Default::default()
             },
             sort: None,
             limit: None,
@@ -340,12 +327,7 @@ mod tests {
         db.crud.select_job_run(&*db.conn_pool, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
                 id: Some(job_run_id),
-                job_id: None,
-                status: None,
-                statuses: None,
-                schedule_id: None,
-                scheduled_at: None,
-                parent_job_run_id: None,
+                ..Default::default()
             },
             sort: None,
             limit: Some(1),

@@ -43,7 +43,7 @@ pub struct InsertTaskRunAttemptOutputData {
 }
 
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct SelectTaskRunAttemptOutputsDataFilter {
     pub id: Option<i64>,
     pub task_run_attempt_id: Option<i64>,
@@ -322,15 +322,7 @@ mod tests {
     }
 
     fn filter() -> SelectTaskRunAttemptOutputsDataFilter {
-        SelectTaskRunAttemptOutputsDataFilter {
-            id: None,
-            task_run_attempt_id: None,
-            task_run_id: None,
-            job_run_id: None,
-            job_id: None,
-            task_id: None,
-            stream: None,
-        }
+        SelectTaskRunAttemptOutputsDataFilter::default()
     }
 
     /// `id` is the ordering, so chunks written in sequence read back in sequence. That is

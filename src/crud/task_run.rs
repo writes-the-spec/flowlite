@@ -109,7 +109,7 @@ pub struct InsertTaskRunData {
     pub input: InsertTaskRunDataInput,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct SelectTaskRunsDataFilter {
     pub id: Option<i64>,
     pub job_run_id: Option<i64>,
@@ -143,7 +143,7 @@ pub struct DeleteTaskRunsData {
     pub filter: DeleteTaskRunsDataFilter,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct UpdateTaskRunsDataInput {
     pub status: Option<TaskRunStatus>,
     pub started_at: Option<Option<DateTime<Utc>>>,

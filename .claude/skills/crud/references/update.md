@@ -5,7 +5,7 @@ Only entities that change state after creation get an `update_*`: `job_run`, `ta
 ## Struct shape
 
 ```rust
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Update<Entity>sDataInput {
     pub status: Option<SomeStatusEnum>,
     pub started_at: Option<Option<DateTime<Utc>>>,
@@ -24,7 +24,7 @@ pub struct Update<Entity>sData {
 }
 ```
 
-Declare `input` before `filter`, as the existing files do.
+Declare `input` before `filter`, as the existing files do. `Update*DataInput` derives `Default`, so a call site names the columns it writes and ends with `..Default::default()`; an all-`None` input is already refused as a no-op. `Update*DataFilter` does not: an empty filter updates every row, so each site spells out every field.
 
 ### Double `Option` for nullable columns
 

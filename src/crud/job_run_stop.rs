@@ -12,7 +12,7 @@ pub struct InsertJobRunStopData {
     pub input: InsertJobRunStopDataInput,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct SelectJobRunStopsDataFilter {
     pub id: Option<i64>,
     pub job_run_id: Option<i64>,
@@ -82,8 +82,8 @@ impl CRUD {
     {
         let stop = self.select_job_run_stop(executor, &SelectJobRunStopsData {
             filter: SelectJobRunStopsDataFilter {
-                id: None,
                 job_run_id: Some(job_run_id),
+                ..Default::default()
             },
             sort: None,
             limit: Some(1),

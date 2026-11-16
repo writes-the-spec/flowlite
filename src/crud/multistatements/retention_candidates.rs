@@ -33,7 +33,7 @@ pub enum SelectDeletableJobRunsDataSort {
     OldestFirst,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct SelectDeletableJobRunsDataFilter {
     pub job_id: Option<String>,
 }
@@ -157,11 +157,8 @@ impl CRUD {
 
         let pending = self.select_job_run_notifications(&mut *conn, &SelectJobRunNotificationsData {
             filter: SelectJobRunNotificationsDataFilter {
-                id: None,
-                job_run_id: None,
-                notify_on: None,
-                channel: None,
                 status: Some(JobRunNotificationStatus::Pending),
+                ..Default::default()
             },
             sort: None,
             limit: None,
@@ -194,13 +191,9 @@ fn finished_job_runs_filter(job_id: Option<String>) -> SelectJobRunsDataFilter {
         .collect();
 
     SelectJobRunsDataFilter {
-        id: None,
         job_id,
-        status: None,
         statuses: Some(finished),
-        schedule_id: None,
-        scheduled_at: None,
-        parent_job_run_id: None,
+        ..Default::default()
     }
 }
 
@@ -321,8 +314,7 @@ mod tests {
         db.crud.update_job_run_notifications(&*db.conn_pool, &UpdateJobRunNotificationsData {
             input: UpdateJobRunNotificationsDataInput {
                 status: Some(JobRunNotificationStatus::Sent),
-                error: None,
-                sent_at: None,
+                ..Default::default()
             },
             filter: UpdateJobRunNotificationsDataFilter { id: Some(notification.id) },
         }).await.unwrap();
@@ -450,8 +442,7 @@ mod tests {
         db.crud.update_job_run_notifications(&*db.conn_pool, &UpdateJobRunNotificationsData {
             input: UpdateJobRunNotificationsDataInput {
                 status: Some(JobRunNotificationStatus::Sent),
-                error: None,
-                sent_at: None,
+                ..Default::default()
             },
             filter: UpdateJobRunNotificationsDataFilter { id: Some(notification.id) },
         }).await.unwrap();
@@ -502,8 +493,7 @@ mod tests {
         db.crud.update_job_run_notifications(&*db.conn_pool, &UpdateJobRunNotificationsData {
             input: UpdateJobRunNotificationsDataInput {
                 status: Some(JobRunNotificationStatus::Sent),
-                error: None,
-                sent_at: None,
+                ..Default::default()
             },
             filter: UpdateJobRunNotificationsDataFilter { id: Some(notification.id) },
         }).await.unwrap();

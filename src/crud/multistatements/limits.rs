@@ -24,11 +24,8 @@ impl CRUD {
 
         self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
             filter: SelectTaskRunAttemptsDataFilter {
-                id: None,
-                task_run_id: None,
-                job_run_id: None,
-                task_id: None,
                 status: Some(TaskRunAttemptStatus::Running),
+                ..Default::default()
             },
             sort: None,
         }).await
@@ -46,7 +43,7 @@ impl CRUD {
         let job = self.select_job(&mut *conn, &SelectJobsData {
             filter: SelectJobsDataFilter {
                 job_id: Some(job_id.to_string()),
-                name_like: None,
+                ..Default::default()
             },
             sort: None,
             limit: Some(1),
@@ -63,13 +60,9 @@ impl CRUD {
 
         let running_job_runs = self.select_job_runs(&mut *conn, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
-                id: None,
                 job_id: Some(job_id.to_string()),
                 status: Some(JobRunStatus::Running),
-                statuses: None,
-                schedule_id: None,
-                scheduled_at: None,
-                parent_job_run_id: None,
+                ..Default::default()
             },
             sort: None,
             limit: None,
@@ -114,10 +107,7 @@ impl CRUD {
             let task_run = self.select_task_run(&mut *conn, &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
                     id: Some(running_attempt.task_run_id),
-                    job_run_id: None,
-                    job_id: None,
-                    task_id: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: None,
             }).await?

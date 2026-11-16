@@ -87,10 +87,7 @@ where
     let attempts = crud.select_task_run_attempts(executor, &SelectTaskRunAttemptsData {
         filter: SelectTaskRunAttemptsDataFilter {
             id: Some(parent_task_run_attempt_id),
-            task_run_id: None,
-            job_run_id: None,
-            task_id: None,
-            status: None,
+            ..Default::default()
         },
         sort: None,
     }).await?;
@@ -115,13 +112,8 @@ where
 
     let children = crud.select_job_runs(executor, &SelectJobRunsData {
         filter: SelectJobRunsDataFilter {
-            id: None,
-            job_id: None,
-            status: None,
-            statuses: None,
-            schedule_id: None,
-            scheduled_at: None,
             parent_job_run_id: Some(job_run_id),
+            ..Default::default()
         },
         sort: Some(SelectJobRunsDataSort::Id),
         limit: None,
@@ -151,12 +143,7 @@ pub(crate) async fn select_job_run(
     let job_run = crud.select_job_run(&mut *conn, &SelectJobRunsData {
         filter: SelectJobRunsDataFilter {
             id: Some(job_run_id),
-            job_id: None,
-            status: None,
-            statuses: None,
-            schedule_id: None,
-            scheduled_at: None,
-            parent_job_run_id: None,
+            ..Default::default()
         },
         sort: None,
         limit: Some(1),
@@ -184,12 +171,7 @@ pub(crate) async fn stop_job_run(
     let job_run = crud.select_job_run(&mut *conn, &SelectJobRunsData {
         filter: SelectJobRunsDataFilter {
             id: Some(job_run_id),
-            job_id: None,
-            status: None,
-            statuses: None,
-            schedule_id: None,
-            scheduled_at: None,
-            parent_job_run_id: None,
+            ..Default::default()
         },
         sort: None,
         limit: Some(1),
@@ -449,8 +431,7 @@ mod tests {
                 filter: UpdateJobRunsDataFilter { id: Some(job_run_id) },
                 input: UpdateJobRunsDataInput {
                     status: Some(JobRunStatus::Aborted),
-                    started_at: None,
-                    finished_at: None,
+                    ..Default::default()
                 },
             }).await.unwrap();
         });
@@ -595,8 +576,8 @@ mod tests {
     async fn job_run_stop(db: &TestDb, job_run_id: i64) -> Option<crate::crud::job_run_stop::JobRunStop> {
         db.crud.select_job_run_stop(&*db.conn_pool, &SelectJobRunStopsData {
             filter: SelectJobRunStopsDataFilter {
-                id: None,
                 job_run_id: Some(job_run_id),
+                ..Default::default()
             },
             sort: None,
             limit: None,

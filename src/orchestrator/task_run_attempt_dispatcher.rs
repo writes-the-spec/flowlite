@@ -113,11 +113,8 @@ impl TaskRunAttemptDispatcher {
                 },
                 input: UpdateTaskRunAttemptsDataInput {
                     status: Some(TaskRunAttemptStatus::Invalid),
-                    started_at: None,
                     finished_at: Some(Some(Utc::now())),
-                    process_group_id: None,
-                    output: None,
-                    waiting_since: None,
+                    ..Default::default()
                 },
             },
         ).await?;
@@ -149,11 +146,8 @@ impl TaskRunAttemptDispatcher {
                 },
                 input: UpdateTaskRunAttemptsDataInput {
                     status: Some(TaskRunAttemptStatus::Invalid),
-                    started_at: None,
                     finished_at: Some(Some(Utc::now())),
-                    process_group_id: None,
-                    output: None,
-                    waiting_since: None,
+                    ..Default::default()
                 },
             },
         ).await?;
@@ -176,11 +170,8 @@ impl TaskRunAttemptDispatcher {
                 },
                 input: UpdateTaskRunAttemptsDataInput {
                     status: Some(TaskRunAttemptStatus::Skipped),
-                    started_at: None,
                     finished_at: Some(Some(Utc::now())),
-                    process_group_id: None,
-                    output: None,
-                    waiting_since: None,
+                    ..Default::default()
                 },
             },
         ).await?;
@@ -236,11 +227,9 @@ impl TaskRunAttemptDispatcher {
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
-                    id: None,
                     task_run_id: Some(task_run_attempt.task_run_id),
-                    job_run_id: None,
-                    task_id: None,
                     status: Some(TaskRunAttemptStatus::Interrupted),
+                    ..Default::default()
                 },
                 sort: None,
             },
@@ -406,12 +395,8 @@ impl TaskRunAttemptDispatcher {
                     status: None,
                 },
                 input: UpdateTaskRunAttemptsDataInput {
-                    status: None,
                     started_at: Some(Some(started_at)),
-                    finished_at: None,
-                    process_group_id: None,
-                    output: None,
-                    waiting_since: None,
+                    ..Default::default()
                 },
             },
         ).await?;
@@ -438,12 +423,8 @@ impl TaskRunAttemptDispatcher {
                             status: None,
                         },
                         input: UpdateTaskRunAttemptsDataInput {
-                            status: None,
                             started_at: Some(None),
-                            finished_at: None,
-                            process_group_id: None,
-                            output: None,
-                            waiting_since: None,
+                            ..Default::default()
                         },
                     },
                 ).await?;
@@ -532,11 +513,8 @@ impl TaskRunAttemptDispatcher {
                 },
                 input: UpdateTaskRunAttemptsDataInput {
                     status: Some(TaskRunAttemptStatus::Running),
-                    started_at: None,
-                    finished_at: None,
                     process_group_id: Some(process_group_id),
-                    output: None,
-                    waiting_since: None,
+                    ..Default::default()
                 },
             },
         ).await?;
@@ -597,11 +575,8 @@ impl TaskRunAttemptDispatcher {
                 },
                 input: UpdateTaskRunAttemptsDataInput {
                     status: Some(TaskRunAttemptStatus::Failed),
-                    started_at: None,
                     finished_at: Some(Some(Utc::now())),
-                    process_group_id: None,
-                    output: None,
-                    waiting_since: None,
+                    ..Default::default()
                 },
             },
         ).await?;
@@ -617,11 +592,8 @@ impl TaskRunAttemptDispatcher {
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
-                    id: None,
-                    task_run_id: None,
-                    job_run_id: None,
-                    task_id: None,
                     status: Some(TaskRunAttemptStatus::Queued),
+                    ..Default::default()
                 },
                 sort: Some(SelectTaskRunAttemptsDataSort::Id),
             }
@@ -639,10 +611,7 @@ impl TaskRunAttemptDispatcher {
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
                     id: Some(task_run_attempt.task_run_id),
-                    job_run_id: None,
-                    job_id: None,
-                    task_id: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: None,
             }
@@ -705,11 +674,8 @@ impl TaskRunAttemptDispatcher {
 
         let attempts = self.crud.select_task_run_attempts(&*self.conn_pool, &SelectTaskRunAttemptsData {
             filter: SelectTaskRunAttemptsDataFilter {
-                id: None,
                 task_run_id: Some(task_run_attempt.task_run_id),
-                job_run_id: None,
-                task_id: None,
-                status: None,
+                ..Default::default()
             },
             sort: None,
         }).await?;
@@ -726,13 +692,8 @@ impl TaskRunAttemptDispatcher {
 
         let chunks = self.crud.select_task_run_attempt_outputs(&*self.conn_pool, &SelectTaskRunAttemptOutputsData {
             filter: SelectTaskRunAttemptOutputsDataFilter {
-                id: None,
                 task_run_attempt_id: Some(previous_attempt.id),
-                task_run_id: None,
-                job_run_id: None,
-                job_id: None,
-                task_id: None,
-                stream: None,
+                ..Default::default()
             },
             sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),
         }).await?;
@@ -763,12 +724,7 @@ impl TaskRunAttemptDispatcher {
             &SelectJobRunsData {
                 filter: SelectJobRunsDataFilter {
                     id: Some(task_run_attempt.job_run_id),
-                    job_id: None,
-                    status: None,
-                    statuses: None,
-                    schedule_id: None,
-                    scheduled_at: None,
-                    parent_job_run_id: None,
+                    ..Default::default()
                 },
                 sort: None,
                 limit: Some(1),
@@ -1760,13 +1716,9 @@ mod tests {
             &*db.conn_pool,
             &SelectTaskRunAttemptOutputsData {
                 filter: SelectTaskRunAttemptOutputsDataFilter {
-                    id: None,
                     task_run_attempt_id: Some(task_run_attempt.id),
-                    task_run_id: None,
-                    job_run_id: None,
-                    job_id: None,
-                    task_id: None,
                     stream: Some(TaskRunAttemptOutputStream::Stderr),
+                    ..Default::default()
                 },
                 sort: None,
             },

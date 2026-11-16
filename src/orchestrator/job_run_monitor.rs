@@ -110,11 +110,8 @@ impl JobRunMonitor {
             &*self.conn_pool,
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
-                    id: None,
                     job_run_id: Some(job_run.id),
-                    task_id: None,
-                    job_id: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: Some(SelectTaskRunsDataSort::Id),
             }
@@ -128,13 +125,8 @@ impl JobRunMonitor {
             &*self.conn_pool,
             &SelectJobRunsData {
                 filter: SelectJobRunsDataFilter {
-                    id: None,
-                    job_id: None,
                     status: Some(JobRunStatus::Running),
-                    statuses: None,
-                    schedule_id: None,
-                    scheduled_at: None,
-                    parent_job_run_id: None,
+                    ..Default::default()
                 },
                 sort: None,
                 limit: None,
@@ -152,8 +144,8 @@ impl JobRunMonitor {
                     filter: UpdateJobRunsDataFilter { id: Some(job_run.id) },
                     input: UpdateJobRunsDataInput {
                         status: Some(status),
-                        started_at: None,
                         finished_at: Some(Some(Utc::now())),
+                        ..Default::default()
                     },
                 },
             )

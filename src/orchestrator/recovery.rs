@@ -21,11 +21,8 @@ pub async fn recover_orphaned_task_run_attempts(
         &**conn_pool,
         &SelectTaskRunAttemptsData {
             filter: SelectTaskRunAttemptsDataFilter {
-                id: None,
-                task_run_id: None,
-                job_run_id: None,
-                task_id: None,
                 status: Some(TaskRunAttemptStatus::Running),
+                ..Default::default()
             },
             sort: Some(SelectTaskRunAttemptsDataSort::Id),
         },
@@ -66,11 +63,8 @@ pub async fn recover_orphaned_task_run_attempts(
                 },
                 input: UpdateTaskRunAttemptsDataInput {
                     status: Some(TaskRunAttemptStatus::Invalid),
-                    started_at: None,
                     finished_at: Some(Some(Utc::now())),
-                    process_group_id: None,
-                    output: None,
-                    waiting_since: None,
+                    ..Default::default()
                 },
             },
         ).await?;

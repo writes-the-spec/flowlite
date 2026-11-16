@@ -111,7 +111,7 @@ impl CRUD {
         let jobs = self.select_jobs(&mut *conn, &SelectJobsData {
             filter: SelectJobsDataFilter {
                 job_id: job_id.map(str::to_string),
-                name_like: None,
+                ..Default::default()
             },
             sort: Some(SelectJobsDataSort::RowId),
             limit: None,
@@ -120,8 +120,8 @@ impl CRUD {
 
         let tasks = self.select_tasks(&mut *conn, &SelectTasksData {
             filter: SelectTasksDataFilter {
-                task_id: None,
                 job_id: job_id.map(str::to_string),
+                ..Default::default()
             },
             sort: Some(SelectTasksDataSort::RowId),
             limit: None,

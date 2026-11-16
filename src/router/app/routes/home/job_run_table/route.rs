@@ -57,13 +57,9 @@ pub async fn job_run_table_route(
 
     let job_runs = crud.select_job_runs(&*state.conn_pool, &SelectJobRunsData {
         filter: SelectJobRunsDataFilter {
-            id: None,
             job_id: filter_job_id.clone(),
             status: query.filter_status,
-            statuses: None,
-            schedule_id: None,
-            scheduled_at: None,
-            parent_job_run_id: None,
+            ..Default::default()
         },
         sort: Some(SelectJobRunsDataSort::IdDesc),
         limit: Some((page_size + 1) as i64),

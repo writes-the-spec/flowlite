@@ -136,7 +136,7 @@ pub enum SelectJobRunsDataSort {
     IdDesc,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct SelectJobRunsDataFilter {
     pub id: Option<i64>,
     pub job_id: Option<String>,
@@ -197,7 +197,7 @@ pub struct DeleteJobRunsData {
     pub filter: DeleteJobRunsDataFilter,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct UpdateJobRunsDataInput {
     pub status: Option<JobRunStatus>,
     pub started_at: Option<Option<DateTime<Utc>>>,
@@ -867,13 +867,8 @@ mod tests {
 
         let runs = db.crud.select_job_runs(&*db.conn_pool, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
-                id: None,
-                job_id: None,
-                status: None,
-                statuses: None,
                 schedule_id: Some("nightly".to_string()),
-                scheduled_at: None,
-                parent_job_run_id: None,
+                ..Default::default()
             },
             sort: None,
             limit: None,
@@ -909,12 +904,7 @@ mod tests {
         let still_there = db.crud.select_job_run(&*db.conn_pool, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
                 id: Some(released.id),
-                job_id: None,
-                status: None,
-                statuses: None,
-                schedule_id: None,
-                scheduled_at: None,
-                parent_job_run_id: None,
+                ..Default::default()
             },
             sort: None,
             limit: Some(1),

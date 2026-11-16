@@ -373,8 +373,7 @@ impl TestDb {
         self.crud.select_schedule(&*self.conn_pool, &SelectSchedulesData {
             filter: SelectSchedulesDataFilter {
                 schedule_id: Some(schedule_id.to_string()),
-                name_like: None,
-                disabled: None,
+                ..Default::default()
             },
             sort: None,
             limit: Some(1),
@@ -1101,11 +1100,8 @@ impl TestDb {
             &*self.conn_pool,
             &SelectJobRunNotificationsData {
                 filter: SelectJobRunNotificationsDataFilter {
-                    id: None,
                     job_run_id: Some(job_run_id),
-                    notify_on: None,
-                    channel: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: Some(SelectJobRunNotificationsDataSort::Id),
                 limit: None,
@@ -1121,12 +1117,7 @@ impl TestDb {
             &SelectJobRunsData {
                 filter: SelectJobRunsDataFilter {
                     id: Some(id),
-                    job_id: None,
-                    status: None,
-                    statuses: None,
-                    schedule_id: None,
-                    scheduled_at: None,
-                    parent_job_run_id: None,
+                    ..Default::default()
                 },
                 sort: None,
                 limit: Some(1),
@@ -1142,10 +1133,7 @@ impl TestDb {
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
                     id: Some(id),
-                    job_run_id: None,
-                    job_id: None,
-                    task_id: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: None,
             },
@@ -1158,11 +1146,8 @@ impl TestDb {
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
-                    id: None,
                     task_run_id: Some(task_run_id),
-                    job_run_id: None,
-                    task_id: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: Some(SelectTaskRunAttemptsDataSort::Attempt),
             },
@@ -1178,13 +1163,7 @@ impl TestDb {
         self.crud.select_task_run_attempts(
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
-                filter: SelectTaskRunAttemptsDataFilter {
-                    id: None,
-                    task_run_id: None,
-                    job_run_id: None,
-                    task_id: None,
-                    status: None,
-                },
+                filter: SelectTaskRunAttemptsDataFilter::default(),
                 sort: Some(SelectTaskRunAttemptsDataSort::Id),
             },
         ).await.unwrap()
@@ -1196,8 +1175,8 @@ impl TestDb {
     pub async fn job_run_stop_count(&self, job_run_id: i64) -> usize {
         self.crud.select_job_run_stops(&*self.conn_pool, &crate::crud::job_run_stop::SelectJobRunStopsData {
             filter: crate::crud::job_run_stop::SelectJobRunStopsDataFilter {
-                id: None,
                 job_run_id: Some(job_run_id),
+                ..Default::default()
             },
             sort: None,
             limit: None,
@@ -1326,13 +1305,8 @@ impl TestDb {
             &*self.conn_pool,
             &SelectTaskRunAttemptOutputsData {
                 filter: SelectTaskRunAttemptOutputsDataFilter {
-                    id: None,
                     task_run_attempt_id: Some(task_run_attempt_id),
-                    task_run_id: None,
-                    job_run_id: None,
-                    job_id: None,
-                    task_id: None,
-                    stream: None,
+                    ..Default::default()
                 },
                 sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),
             },

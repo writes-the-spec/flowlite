@@ -155,11 +155,8 @@ impl NotificationService {
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
-                    id: None,
                     task_run_id: Some(task_run.id),
-                    job_run_id: None,
-                    task_id: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: Some(SelectTaskRunAttemptsDataSort::Id),
             }
@@ -177,13 +174,8 @@ impl NotificationService {
             &*self.conn_pool,
             &SelectTaskRunAttemptOutputsData {
                 filter: SelectTaskRunAttemptOutputsDataFilter {
-                    id: None,
                     task_run_attempt_id: Some(attempt.id),
-                    task_run_id: None,
-                    job_run_id: None,
-                    job_id: None,
-                    task_id: None,
-                    stream: None,
+                    ..Default::default()
                 },
                 sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),
             }
@@ -203,12 +195,7 @@ impl NotificationService {
             &SelectJobRunsData {
                 filter: SelectJobRunsDataFilter {
                     id: Some(job_run_id),
-                    job_id: None,
-                    status: None,
-                    statuses: None,
-                    schedule_id: None,
-                    scheduled_at: None,
-                    parent_job_run_id: None,
+                    ..Default::default()
                 },
                 sort: None,
                 limit: Some(1),
@@ -225,11 +212,8 @@ impl NotificationService {
             &*self.conn_pool,
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
-                    id: None,
                     job_run_id: Some(job_run_id),
-                    task_id: None,
-                    job_id: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: Some(SelectTaskRunsDataSort::Id),
             }
@@ -248,11 +232,8 @@ impl NotificationService {
             &*self.conn_pool,
             &SelectJobRunNotificationsData {
                 filter: SelectJobRunNotificationsDataFilter {
-                    id: None,
-                    job_run_id: None,
-                    notify_on: None,
-                    channel: None,
                     status: Some(JobRunNotificationStatus::Pending),
+                    ..Default::default()
                 },
                 sort: Some(SelectJobRunNotificationsDataSort::Id),
                 limit: None,
@@ -269,8 +250,8 @@ impl NotificationService {
                 filter: UpdateJobRunNotificationsDataFilter { id: Some(notification.id) },
                 input: UpdateJobRunNotificationsDataInput {
                     status: Some(JobRunNotificationStatus::Sent),
-                    error: None,
                     sent_at: Some(Some(Utc::now())),
+                    ..Default::default()
                 },
             },
         ).await
@@ -287,8 +268,7 @@ impl NotificationService {
                 filter: UpdateJobRunNotificationsDataFilter { id: Some(notification.id) },
                 input: UpdateJobRunNotificationsDataInput {
                     status: Some(JobRunNotificationStatus::Skipped),
-                    error: None,
-                    sent_at: None,
+                    ..Default::default()
                 },
             },
         ).await
@@ -303,7 +283,7 @@ impl NotificationService {
                 input: UpdateJobRunNotificationsDataInput {
                     status: Some(JobRunNotificationStatus::Failed),
                     error: Some(error.to_string()),
-                    sent_at: None,
+                    ..Default::default()
                 },
             },
         ).await

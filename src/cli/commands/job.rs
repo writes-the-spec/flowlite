@@ -86,10 +86,7 @@ impl JobListCmd {
         crud.init(&mut conn).await?;
 
         let jobs = crud.select_jobs(&mut conn, &SelectJobsData {
-            filter: SelectJobsDataFilter {
-                job_id: None,
-                name_like: None,
-            },
+            filter: SelectJobsDataFilter::default(),
             sort: None,
             limit: None,
             offset: None,

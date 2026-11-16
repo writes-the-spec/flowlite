@@ -62,7 +62,7 @@ pub async fn schedule_id_route(
     let schedule_jobs = crud.select_schedule_jobs(conn, &SelectScheduleJobsData {
         filter: SelectScheduleJobsDataFilter {
             schedule_id: Some(schedule.schedule_id.clone()),
-            job_id: None,
+            ..Default::default()
         },
         sort: Some(SelectScheduleJobsDataSort::RowId),
         limit: None,

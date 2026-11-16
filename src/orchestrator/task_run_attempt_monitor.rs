@@ -404,10 +404,7 @@ impl TaskRunAttemptMonitor {
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
                     id: Some(task_run_attempt_id),
-                    task_run_id: None,
-                    job_run_id: None,
-                    task_id: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: None,
             }
@@ -522,11 +519,8 @@ impl TaskRunAttemptMonitor {
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
-                    id: None,
-                    task_run_id: None,
-                    job_run_id: None,
-                    task_id: None,
                     status: Some(status),
+                    ..Default::default()
                 },
                 sort: Some(SelectTaskRunAttemptsDataSort::Id),
             }
@@ -565,11 +559,9 @@ impl TaskRunAttemptMonitor {
                 },
                 input: UpdateTaskRunAttemptsDataInput {
                     status: Some(status),
-                    started_at: None,
                     finished_at: Some(Some(Utc::now())),
-                    process_group_id: None,
                     output,
-                    waiting_since: None,
+                    ..Default::default()
                 },
             },
         ).await?;
@@ -707,13 +699,9 @@ mod tests {
             &*db.conn_pool,
             &SelectTaskRunAttemptOutputsData {
                 filter: SelectTaskRunAttemptOutputsDataFilter {
-                    id: None,
                     task_run_attempt_id: Some(task_run_attempt.id),
-                    task_run_id: None,
-                    job_run_id: None,
-                    job_id: None,
-                    task_id: None,
                     stream: Some(TaskRunAttemptOutputStream::Stderr),
+                    ..Default::default()
                 },
                 sort: None,
             },
@@ -1369,11 +1357,8 @@ mod tests {
             &*db.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
-                    id: None,
-                    task_run_id: None,
-                    job_run_id: None,
-                    task_id: None,
                     status: Some(TaskRunAttemptStatus::Running),
+                    ..Default::default()
                 },
                 sort: None,
             },
@@ -1550,13 +1535,8 @@ mod tests {
             &*db.conn_pool,
             &SelectTaskRunAttemptOutputsData {
                 filter: SelectTaskRunAttemptOutputsDataFilter {
-                    id: None,
                     task_run_attempt_id: Some(task_run_attempt.id),
-                    task_run_id: None,
-                    job_run_id: None,
-                    job_id: None,
-                    task_id: None,
-                    stream: None,
+                    ..Default::default()
                 },
                 sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),
             },

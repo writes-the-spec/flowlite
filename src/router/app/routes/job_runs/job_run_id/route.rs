@@ -154,12 +154,7 @@ pub async fn job_run_id_route(
     let job_run = crud.select_job_run(conn, &SelectJobRunsData {
         filter: SelectJobRunsDataFilter {
             id: Some(job_run_id),
-            job_id: None,
-            status: None,
-            statuses: None,
-            schedule_id: None,
-            scheduled_at: None,
-            parent_job_run_id: None,
+            ..Default::default()
         },
         sort: None,
         limit: Some(1),
@@ -173,11 +168,8 @@ pub async fn job_run_id_route(
 
     let mut task_runs = crud.select_task_runs(conn, &SelectTaskRunsData {
         filter: SelectTaskRunsDataFilter {
-            id: None,
             job_run_id: Some(job_run.id),
-            job_id: None,
-            task_id: None,
-            status: None,
+            ..Default::default()
         },
         sort: None,
     }).await.unwrap_or_default();
@@ -213,7 +205,7 @@ pub async fn job_run_id_route(
     let job = crud.select_job(conn, &SelectJobsData {
         filter: SelectJobsDataFilter {
             job_id: Some(job_run.job_id.clone()),
-            name_like: None,
+            ..Default::default()
         },
         sort: None,
         limit: Some(1),
@@ -349,12 +341,7 @@ pub async fn stop_job_run_route(
     let job_run = crud.select_job_run(&*state.conn_pool, &SelectJobRunsData {
         filter: SelectJobRunsDataFilter {
             id: Some(job_run_id),
-            job_id: None,
-            status: None,
-            statuses: None,
-            schedule_id: None,
-            scheduled_at: None,
-            parent_job_run_id: None,
+            ..Default::default()
         },
         sort: None,
         limit: Some(1),

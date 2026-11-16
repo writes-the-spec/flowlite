@@ -48,7 +48,7 @@ pub async fn job_id_route(
     let job = crud.select_job(conn, &SelectJobsData {
         filter: SelectJobsDataFilter {
             job_id: Some(job_id.clone()),
-            name_like: None,
+            ..Default::default()
         },
         sort: Some(SelectJobsDataSort::RowId),
         limit: None,
@@ -77,8 +77,8 @@ pub async fn job_id_route(
 
     let tasks = crud.select_tasks(conn, &SelectTasksData {
         filter: SelectTasksDataFilter {
-            task_id: None,
             job_id: Some(job.job_id.clone()),
+            ..Default::default()
         },
         sort: Some(SelectTasksDataSort::RowId),
         limit: None,

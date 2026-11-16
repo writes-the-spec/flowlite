@@ -131,8 +131,7 @@ impl JobRunDispatcher {
                 },
                 input: UpdateTaskRunsDataInput {
                     status: Some(TaskRunStatus::Waiting),
-                    started_at: None,
-                    finished_at: None,
+                    ..Default::default()
                 },
             }
         ).await?;
@@ -144,7 +143,7 @@ impl JobRunDispatcher {
                 input: UpdateJobRunsDataInput {
                     status: Some(JobRunStatus::Running),
                     started_at: Some(Some(Utc::now())),
-                    finished_at: None,
+                    ..Default::default()
                 },
             }
         ).await?;
@@ -160,13 +159,8 @@ impl JobRunDispatcher {
             &*self.conn_pool,
             &SelectJobRunsData {
                 filter: SelectJobRunsDataFilter {
-                    id: None,
-                    job_id: None,
                     status: Some(JobRunStatus::Queued),
-                    statuses: None,
-                    schedule_id: None,
-                    scheduled_at: None,
-                    parent_job_run_id: None,
+                    ..Default::default()
                 },
                 sort: Some(SelectJobRunsDataSort::Id),
                 limit: None,

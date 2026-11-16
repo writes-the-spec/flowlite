@@ -109,13 +109,9 @@ impl JobRunListCmd {
 
         let job_runs = crud.select_job_runs(&mut conn, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
-                id: None,
                 job_id: self.job.clone(),
                 status: self.status,
-                statuses: None,
-                schedule_id: None,
-                scheduled_at: None,
-                parent_job_run_id: None,
+                ..Default::default()
             },
             sort: Some(SelectJobRunsDataSort::IdDesc),
             limit: Some(self.limit),

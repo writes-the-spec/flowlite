@@ -128,8 +128,8 @@ impl TaskRunDispatcher {
                 },
                 input: UpdateTaskRunsDataInput {
                     status: Some(TaskRunStatus::Invalid),
-                    started_at: None,
                     finished_at: Some(Some(Utc::now())),
+                    ..Default::default()
                 },
             }
         ).await?;
@@ -152,8 +152,8 @@ impl TaskRunDispatcher {
                 },
                 input: UpdateTaskRunsDataInput {
                     status: Some(TaskRunStatus::Skipped),
-                    started_at: None,
                     finished_at: Some(Some(Utc::now())),
+                    ..Default::default()
                 },
             }
         ).await?;
@@ -179,7 +179,7 @@ impl TaskRunDispatcher {
                 input: UpdateTaskRunsDataInput {
                     status: Some(TaskRunStatus::Running),
                     started_at: Some(Some(Utc::now())),
-                    finished_at: None,
+                    ..Default::default()
                 },
             }
         ).await?;
@@ -195,11 +195,8 @@ impl TaskRunDispatcher {
             &*self.conn_pool,
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
-                    id: None,
-                    job_run_id: None,
-                    job_id: None,
-                    task_id: None,
                     status: Some(TaskRunStatus::Waiting),
+                    ..Default::default()
                 },
                 sort: Some(SelectTaskRunsDataSort::Id),
             }
@@ -218,11 +215,10 @@ impl TaskRunDispatcher {
                 &*self.conn_pool,
                 &SelectTaskRunsData {
                     filter: SelectTaskRunsDataFilter {
-                        id: None,
                         job_run_id: Some(task_run.job_run_id),
                         job_id: Some(task_run.job_id.clone()),
                         task_id: Some(dependent_task_id.clone()),
-                        status: None,
+                        ..Default::default()
                     },
                     sort: None,
                 }

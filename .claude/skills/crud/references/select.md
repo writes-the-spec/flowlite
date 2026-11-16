@@ -6,7 +6,7 @@
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Select<Entity>sDataSort { Alphabetical, RowId }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Select<Entity>sDataFilter {
     pub <entity>_id: Option<String>, // every field optional
 }
@@ -75,7 +75,7 @@ where
 
 ### Adding a field to an existing filter
 
-`SelectJobRunsDataFilter` doesn't derive `Default`, so a new field breaks every literal building it (about 50). Intended: each site says `None` on purpose — let `cargo build` list them. (`SelectSchedulesDataFilter` and `SelectScheduleJobsDataFilter` do derive `Default`, and the router's schedule routes use `..Default::default()`.)
+Every `Select*DataFilter` derives `Default`, and a call site names only the fields it filters on, then `..Default::default()` (or `Select*DataFilter::default()` for none). A new field is therefore `None` everywhere without touching a caller; go looking for the callers that should set it. An empty select filter only reads too much. **Update and delete filters do not derive `Default`**: an empty one matches every row and rewrites or deletes the table, so each site keeps spelling out every field, `None` on purpose.
 
 With a shared clause-pusher, add the clause there only. `push_job_run_filter` in [src/crud/job_run.rs](../../../../src/crud/job_run.rs) serves `select_job_runs`, `count_job_runs` and `select_job_run_job_ids` — the one place redundancy is overruled, since a clause missing from the count widens retention's deletion window. `delete_job_runs` has its own filter type; a select-side field doesn't reach it.
 

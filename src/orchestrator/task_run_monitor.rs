@@ -159,11 +159,8 @@ impl TaskRunMonitor {
             &*self.conn_pool,
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
-                    id: None,
-                    job_run_id: None,
-                    job_id: None,
-                    task_id: None,
                     status: Some(TaskRunStatus::Running),
+                    ..Default::default()
                 },
                 sort: Some(SelectTaskRunsDataSort::Id),
             }
@@ -210,11 +207,8 @@ impl TaskRunMonitor {
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
-                    id: None,
                     task_run_id: Some(task_run.id),
-                    job_run_id: None,
-                    task_id: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: Some(SelectTaskRunAttemptsDataSort::Attempt),
             }
@@ -231,11 +225,9 @@ impl TaskRunMonitor {
             &*self.conn_pool,
             &SelectTaskRunAttemptsData {
                 filter: SelectTaskRunAttemptsDataFilter {
-                    id: None,
                     task_run_id: Some(task_run.id),
-                    job_run_id: None,
-                    task_id: None,
                     status: Some(TaskRunAttemptStatus::Failed),
+                    ..Default::default()
                 },
                 sort: None,
             }
@@ -256,8 +248,8 @@ impl TaskRunMonitor {
                 },
                 input: UpdateTaskRunsDataInput {
                     status: Some(status),
-                    started_at: None,
                     finished_at: Some(Some(Utc::now())),
+                    ..Default::default()
                 },
             }
         ).await?;

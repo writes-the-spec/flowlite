@@ -43,11 +43,9 @@ impl CRUD {
 
         let attempts = self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
             filter: SelectTaskRunAttemptsDataFilter {
-                id: None,
-                task_run_id: None,
                 job_run_id: Some(job_run_id),
-                task_id: None,
                 status: Some(TaskRunAttemptStatus::Succeeded),
+                ..Default::default()
             },
             sort: None,
         }).await?;
@@ -98,12 +96,8 @@ mod tests {
                     status: None,
                 },
                 input: UpdateTaskRunAttemptsDataInput {
-                    status: None,
-                    started_at: None,
-                    finished_at: None,
-                    process_group_id: None,
                     output: Some(output.to_string()),
-                    waiting_since: None,
+                    ..Default::default()
                 },
             },
         ).await.unwrap();

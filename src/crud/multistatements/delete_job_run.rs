@@ -36,12 +36,8 @@ impl CRUD {
         let scheduled = self.select_job_run(&mut *tx, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
                 id: Some(job_run_id),
-                job_id: None,
                 status: Some(JobRunStatus::Scheduled),
-                statuses: None,
-                schedule_id: None,
-                scheduled_at: None,
-                parent_job_run_id: None,
+                ..Default::default()
             },
             sort: None,
             limit: Some(1),
@@ -65,8 +61,8 @@ impl CRUD {
                 },
                 input: UpdateTaskRunsDataInput {
                     status: Some(TaskRunStatus::Skipped),
-                    started_at: None,
                     finished_at: Some(Some(now)),
+                    ..Default::default()
                 },
             }
         ).await?;
@@ -77,8 +73,8 @@ impl CRUD {
                 filter: UpdateJobRunsDataFilter { id: Some(job_run_id) },
                 input: UpdateJobRunsDataInput {
                     status: Some(JobRunStatus::Deleted),
-                    started_at: None,
                     finished_at: Some(Some(now)),
+                    ..Default::default()
                 },
             }
         ).await?;

@@ -34,7 +34,7 @@ impl CRUD {
         let installed = self.select_job(&mut *conn, &SelectJobsData {
             filter: SelectJobsDataFilter {
                 job_id: Some(job_id.clone()),
-                name_like: None,
+                ..Default::default()
             },
             sort: None,
             limit: Some(1),

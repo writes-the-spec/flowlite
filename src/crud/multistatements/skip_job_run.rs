@@ -39,8 +39,8 @@ impl CRUD {
                 },
                 input: UpdateTaskRunsDataInput {
                     status: Some(TaskRunStatus::Skipped),
-                    started_at: None,
                     finished_at: Some(Some(now)),
+                    ..Default::default()
                 },
             }
         ).await?;
@@ -51,8 +51,8 @@ impl CRUD {
                 filter: UpdateJobRunsDataFilter { id: Some(job_run_id) },
                 input: UpdateJobRunsDataInput {
                     status: Some(JobRunStatus::Skipped),
-                    started_at: None,
                     finished_at: Some(Some(now)),
+                    ..Default::default()
                 },
             }
         ).await?;

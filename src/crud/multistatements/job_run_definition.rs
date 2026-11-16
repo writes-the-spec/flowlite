@@ -199,10 +199,7 @@ impl CRUD {
         let attempts = self.select_task_run_attempts(&mut *conn, &SelectTaskRunAttemptsData {
             filter: SelectTaskRunAttemptsDataFilter {
                 id: Some(task_run_attempt_id),
-                task_run_id: None,
-                job_run_id: None,
-                task_id: None,
-                status: None,
+                ..Default::default()
             },
             sort: None,
         }).await?;
@@ -661,11 +658,8 @@ mod tests {
 
         let task_runs = db.crud.select_task_runs(&*db.conn_pool, &SelectTaskRunsData {
             filter: SelectTaskRunsDataFilter {
-                id: None,
                 job_run_id: Some(job_run_id),
-                job_id: None,
-                task_id: None,
-                status: None,
+                ..Default::default()
             },
             sort: None,
         }).await.unwrap();
@@ -708,13 +702,8 @@ mod tests {
 
         let job_runs = db.crud.select_job_runs(&*db.conn_pool, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
-                id: None,
                 job_id: Some("job".to_string()),
-                status: None,
-                statuses: None,
-                schedule_id: None,
-                scheduled_at: None,
-                parent_job_run_id: None,
+                ..Default::default()
             },
             sort: None,
             limit: None,
@@ -723,11 +712,8 @@ mod tests {
 
         let task_runs = db.crud.select_task_runs(&*db.conn_pool, &SelectTaskRunsData {
             filter: SelectTaskRunsDataFilter {
-                id: None,
-                job_run_id: None,
                 job_id: Some("job".to_string()),
-                task_id: None,
-                status: None,
+                ..Default::default()
             },
             sort: None,
         }).await.unwrap();
@@ -764,11 +750,8 @@ mod tests {
 
         let task_runs = db.crud.select_task_runs(&*db.conn_pool, &SelectTaskRunsData {
             filter: SelectTaskRunsDataFilter {
-                id: None,
                 job_run_id: Some(job_run_id),
-                job_id: None,
-                task_id: None,
-                status: None,
+                ..Default::default()
             },
             sort: None,
         }).await.unwrap();

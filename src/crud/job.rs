@@ -31,7 +31,7 @@ pub enum SelectJobsDataSort {
     RowId,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct SelectJobsDataFilter {
     pub job_id: Option<String>,
     pub name_like: Option<String>,

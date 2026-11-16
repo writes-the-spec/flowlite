@@ -131,12 +131,8 @@ async fn set_waiting_since(
 
     let updated = crud.update_task_run_attempts(&mut *conn, &UpdateTaskRunAttemptsData {
         input: UpdateTaskRunAttemptsDataInput {
-            status: None,
-            started_at: None,
-            finished_at: None,
-            process_group_id: None,
-            output: None,
             waiting_since: Some(waiting_since),
+            ..Default::default()
         },
         filter: UpdateTaskRunAttemptsDataFilter {
             id: Some(task_run_attempt_id),
@@ -255,8 +251,7 @@ mod tests {
             crud.update_job_runs(&*conn_pool, &UpdateJobRunsData {
                 input: UpdateJobRunsDataInput {
                     status: Some(JobRunStatus::Succeeded),
-                    started_at: None,
-                    finished_at: None,
+                    ..Default::default()
                 },
                 filter: UpdateJobRunsDataFilter { id: Some(job_run_id) },
             }).await.unwrap();
@@ -313,8 +308,7 @@ mod tests {
         db.crud.update_job_runs(&*db.conn_pool, &UpdateJobRunsData {
             input: UpdateJobRunsDataInput {
                 status: Some(JobRunStatus::Succeeded),
-                started_at: None,
-                finished_at: None,
+                ..Default::default()
             },
             filter: UpdateJobRunsDataFilter { id: Some(job_run_id) },
         }).await.unwrap();

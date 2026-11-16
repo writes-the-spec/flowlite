@@ -23,13 +23,8 @@ impl CRUD {
 
         let children = self.select_job_runs(&mut *conn, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
-                id: None,
-                job_id: None,
-                status: None,
-                statuses: None,
-                schedule_id: None,
-                scheduled_at: None,
                 parent_job_run_id: Some(task_run_attempt.job_run_id),
+                ..Default::default()
             },
             sort: Some(SelectJobRunsDataSort::Id),
             limit: None,

@@ -115,10 +115,7 @@ pub async fn home_route(
     let filter_job_id = query.job_id();
 
     let jobs = crud.select_jobs(&*state.conn_pool, &SelectJobsData {
-        filter: SelectJobsDataFilter {
-            job_id: None,
-            name_like: None,
-        },
+        filter: SelectJobsDataFilter::default(),
         sort: Some(SelectJobsDataSort::Alphabetical),
         limit: None,
         offset: None,

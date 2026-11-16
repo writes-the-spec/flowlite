@@ -11,7 +11,7 @@ pub(crate) async fn installed_job_id(
     let job = crud.select_job(&mut *conn, &SelectJobsData {
         filter: SelectJobsDataFilter {
             job_id: Some(job_name.to_string()),
-            name_like: None,
+            ..Default::default()
         },
         sort: None,
         limit: None,

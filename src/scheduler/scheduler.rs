@@ -98,13 +98,11 @@ impl Scheduler {
         // and UTC, encoded the same way on both sides.
         let existing = self.crud.select_job_run(&mut *conn, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
-                id: None,
                 job_id: Some(schedule_job.job_id.clone()),
-                status: None,
                 statuses: Some(occupying_statuses()),
                 schedule_id: Some(schedule.schedule_id.clone()),
                 scheduled_at: Some(occurrence),
-                parent_job_run_id: None,
+                ..Default::default()
             },
             sort: None,
             limit: Some(1),
@@ -147,11 +145,7 @@ impl Scheduler {
         self.crud.select_schedules(
             &*self.conn_pool,
             &SelectSchedulesData {
-                filter: SelectSchedulesDataFilter {
-                    schedule_id: None,
-                    name_like: None,
-                    disabled: None,
-                },
+                filter: SelectSchedulesDataFilter::default(),
                 sort: Some(SelectSchedulesDataSort::RowId),
                 limit: None,
                 offset: None,
@@ -168,7 +162,7 @@ impl Scheduler {
             &SelectScheduleJobsData {
                 filter: SelectScheduleJobsDataFilter {
                     schedule_id: Some(schedule.schedule_id.clone()),
-                    job_id: None,
+                    ..Default::default()
                 },
                 sort: Some(SelectScheduleJobsDataSort::RowId),
                 limit: None,
@@ -211,13 +205,9 @@ mod tests {
     async fn outstanding(db: &TestDb, schedule_id: &str) -> Vec<JobRun> {
         db.crud.select_job_runs(&*db.conn_pool, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
-                id: None,
-                job_id: None,
                 status: Some(JobRunStatus::Scheduled),
-                statuses: None,
                 schedule_id: Some(schedule_id.to_string()),
-                scheduled_at: None,
-                parent_job_run_id: None,
+                ..Default::default()
             },
             sort: Some(SelectJobRunsDataSort::Id),
             limit: None,
@@ -231,13 +221,8 @@ mod tests {
     async fn all_runs(db: &TestDb, schedule_id: &str) -> Vec<JobRun> {
         db.crud.select_job_runs(&*db.conn_pool, &SelectJobRunsData {
             filter: SelectJobRunsDataFilter {
-                id: None,
-                job_id: None,
-                status: None,
-                statuses: None,
                 schedule_id: Some(schedule_id.to_string()),
-                scheduled_at: None,
-                parent_job_run_id: None,
+                ..Default::default()
             },
             sort: Some(SelectJobRunsDataSort::Id),
             limit: None,
@@ -291,8 +276,7 @@ mod tests {
         db.crud.update_job_runs(&*db.conn_pool, &crate::crud::job_run::UpdateJobRunsData {
             input: crate::crud::job_run::UpdateJobRunsDataInput {
                 status: Some(JobRunStatus::Queued),
-                started_at: None,
-                finished_at: None,
+                ..Default::default()
             },
             filter: crate::crud::job_run::UpdateJobRunsDataFilter { id: Some(job_run_id) },
         }).await.unwrap();

@@ -537,8 +537,7 @@ mod tests {
         db.crud.update_job_runs(&*db.conn_pool, &crate::crud::job_run::UpdateJobRunsData {
             input: crate::crud::job_run::UpdateJobRunsDataInput {
                 status: Some(JobRunStatus::Succeeded),
-                started_at: None,
-                finished_at: None,
+                ..Default::default()
             },
             filter: crate::crud::job_run::UpdateJobRunsDataFilter { id: Some(child.id) },
         }).await.unwrap();

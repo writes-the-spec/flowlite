@@ -95,7 +95,7 @@ pub struct InsertTaskRunAttemptData {
     pub input: InsertTaskRunAttemptDataInput,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct SelectTaskRunAttemptsDataFilter {
     pub id: Option<i64>,
     pub task_run_id: Option<i64>,
@@ -129,7 +129,7 @@ pub struct DeleteTaskRunAttemptsData {
     pub filter: DeleteTaskRunAttemptsDataFilter,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct UpdateTaskRunAttemptsDataInput {
     pub status: Option<TaskRunAttemptStatus>,
     pub started_at: Option<Option<DateTime<Utc>>>,
@@ -393,12 +393,8 @@ mod tests {
                     status: None,
                 },
                 input: UpdateTaskRunAttemptsDataInput {
-                    status: None,
-                    started_at: None,
-                    finished_at: None,
                     process_group_id: Some(Some(4242)),
-                    output: None,
-                    waiting_since: None,
+                    ..Default::default()
                 },
             },
         ).await.unwrap();
@@ -475,12 +471,8 @@ mod tests {
         for attempt in [&running, &settled] {
             db.crud.update_task_run_attempts(&*db.conn_pool, &UpdateTaskRunAttemptsData {
                 input: UpdateTaskRunAttemptsDataInput {
-                    status: None,
-                    started_at: None,
-                    finished_at: None,
-                    process_group_id: None,
-                    output: None,
                     waiting_since: Some(Some(chrono::Utc::now())),
+                    ..Default::default()
                 },
                 filter: UpdateTaskRunAttemptsDataFilter {
                     id: Some(attempt.id),

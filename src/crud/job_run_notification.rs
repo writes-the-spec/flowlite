@@ -142,7 +142,7 @@ pub struct InsertJobRunNotificationData {
     pub input: InsertJobRunNotificationDataInput,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct SelectJobRunNotificationsDataFilter {
     pub id: Option<i64>,
     pub job_run_id: Option<i64>,
@@ -178,7 +178,7 @@ pub struct DeleteJobRunNotificationsData {
     pub filter: DeleteJobRunNotificationsDataFilter,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct UpdateJobRunNotificationsDataInput {
     pub status: Option<JobRunNotificationStatus>,
     pub error: Option<String>,

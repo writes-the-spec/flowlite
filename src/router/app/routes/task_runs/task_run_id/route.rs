@@ -115,10 +115,7 @@ pub async fn task_run_id_route(
     let task_run = crud.select_task_run(conn, &SelectTaskRunsData {
         filter: SelectTaskRunsDataFilter {
             id: Some(task_run_id),
-            job_run_id: None,
-            job_id: None,
-            task_id: None,
-            status: None,
+            ..Default::default()
         },
         sort: None,
     }).await.unwrap_or(None);
@@ -130,11 +127,8 @@ pub async fn task_run_id_route(
 
     let task_run_attempts = crud.select_task_run_attempts(conn, &SelectTaskRunAttemptsData {
         filter: SelectTaskRunAttemptsDataFilter {
-            id: None,
             task_run_id: Some(task_run.id),
-            job_run_id: None,
-            task_id: None,
-            status: None,
+            ..Default::default()
         },
         sort: Some(SelectTaskRunAttemptsDataSort::Id),
     }).await.unwrap_or_default();
@@ -143,13 +137,8 @@ pub async fn task_run_id_route(
     // Without `task_run_id` on the row this would be one query per attempt.
     let task_run_attempt_output = crud.select_task_run_attempt_outputs(conn, &SelectTaskRunAttemptOutputsData {
         filter: SelectTaskRunAttemptOutputsDataFilter {
-            id: None,
-            task_run_attempt_id: None,
             task_run_id: Some(task_run.id),
-            job_run_id: None,
-            job_id: None,
-            task_id: None,
-            stream: None,
+            ..Default::default()
         },
         sort: Some(SelectTaskRunAttemptOutputsDataSort::Id),
     }).await.unwrap_or_default();
@@ -183,7 +172,7 @@ pub async fn task_run_id_route(
     let job = crud.select_job(conn, &SelectJobsData {
         filter: SelectJobsDataFilter {
             job_id: Some(task_run.job_id.clone()),
-            name_like: None,
+            ..Default::default()
         },
         sort: None,
         limit: Some(1),

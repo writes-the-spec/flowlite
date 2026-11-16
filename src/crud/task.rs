@@ -32,7 +32,7 @@ pub enum SelectTasksDataSort {
     RowId,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct SelectTasksDataFilter {
     pub task_id: Option<String>,
     pub job_id: Option<String>,

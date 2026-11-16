@@ -39,12 +39,7 @@ impl CRUD {
             &SelectJobRunsData {
                 filter: SelectJobRunsDataFilter {
                     id: Some(job_run_id),
-                    job_id: None,
-                    status: None,
-                    statuses: None,
-                    schedule_id: None,
-                    scheduled_at: None,
-                    parent_job_run_id: None,
+                    ..Default::default()
                 },
                 sort: None,
                 limit: Some(1),
@@ -60,11 +55,8 @@ impl CRUD {
             &mut *conn,
             &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
-                    id: None,
                     job_run_id: Some(job_run_id),
-                    job_id: None,
-                    task_id: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: Some(SelectTaskRunsDataSort::Id),
             }
@@ -74,11 +66,8 @@ impl CRUD {
             &mut *conn,
             &SelectJobRunNotificationsData {
                 filter: SelectJobRunNotificationsDataFilter {
-                    id: None,
                     job_run_id: Some(job_run_id),
-                    notify_on: None,
-                    channel: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: Some(SelectJobRunNotificationsDataSort::Id),
                 limit: None,
@@ -220,11 +209,8 @@ mod tests {
             &*db.conn_pool,
             &crate::crud::task_run::SelectTaskRunsData {
                 filter: crate::crud::task_run::SelectTaskRunsDataFilter {
-                    id: None,
                     job_run_id: Some(rerun_id),
-                    job_id: None,
-                    task_id: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: None,
             },
@@ -264,11 +250,8 @@ mod tests {
             &*db.conn_pool,
             &crate::crud::task_run::SelectTaskRunsData {
                 filter: crate::crud::task_run::SelectTaskRunsDataFilter {
-                    id: None,
                     job_run_id: Some(rerun_id),
-                    job_id: None,
-                    task_id: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: None,
             },
@@ -345,11 +328,8 @@ mod tests {
             &*db.conn_pool,
             &crate::crud::task_run::SelectTaskRunsData {
                 filter: crate::crud::task_run::SelectTaskRunsDataFilter {
-                    id: None,
                     job_run_id: Some(rerun_id),
-                    job_id: None,
-                    task_id: None,
-                    status: None,
+                    ..Default::default()
                 },
                 sort: None,
             },

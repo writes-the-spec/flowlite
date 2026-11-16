@@ -62,8 +62,8 @@ pub async fn jobs_route(
 
     let jobs = crud.select_jobs(conn, &SelectJobsData {
         filter: SelectJobsDataFilter {
-            job_id: None,
             name_like: name_like.clone(),
+            ..Default::default()
         },
         sort: Some(SelectJobsDataSort::RowId),
         limit: Some(page_size + 1), // One extra row tells us whether a next page exists.
@@ -77,8 +77,8 @@ pub async fn jobs_route(
     for job in jobs.into_iter().take(page_size as usize) {
         let tasks = crud.select_tasks(conn, &SelectTasksData {
             filter: SelectTasksDataFilter {
-                task_id: None,
                 job_id: Some(job.job_id.clone()),
+                ..Default::default()
             },
             sort: None,
             limit: None,
