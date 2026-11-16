@@ -39,8 +39,8 @@ impl AppState {
         let auth = toolkit.app_config.auth.clone().map(|auth| {
             Arc::new(DashboardAuth {
                 cookie: SessionCookie::new(bound.port(), auth.cookie_secure),
+                sessions: SessionStore::new(auth.session_length()),
                 idp: IdpClient::new(auth),
-                sessions: SessionStore::new(),
             })
         });
 

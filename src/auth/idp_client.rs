@@ -1,24 +1,12 @@
-use chrono::{DateTime, TimeDelta, Utc};
 use serde::Deserialize;
 
 use crate::app_config::AppConfigAuth;
 
 
-/// What a token endpoint granted, kept to the part flowlite uses.
-///
-/// The access token itself is dropped. flowlite never sends it anywhere: it got it straight
-/// from the provider, so the grant already says the person is allowed in, and its expiry is
-/// only when to ask the provider again.
-#[derive(Debug, Clone)]
-pub struct TokenGrant {
-    pub refresh_token: Option<String>,
-    pub expires_at: DateTime<Utc>,
-}
-
 /// Why a token endpoint did not grant, split by what the dashboard does about it.
 #[derive(Debug)]
 pub enum IdpError {
-    /// The provider answered and said no - a wrong password, a revoked refresh token, a
+    /// The provider answered and said no - a wrong password, a disabled user, a
     /// misconfigured client. The person is not let in.
     Rejected(String),
     /// The provider did not answer in a form that says anything about the person: it was
@@ -35,17 +23,15 @@ impl std::fmt::Display for IdpError {
     }
 }
 
-/// The spec only recommends `expires_in`, and a grant has to run out some time.
-const EXPIRES_IN_SECONDS_WHEN_UNSAID: i64 = 300;
-
+/// Only checked for, never kept. flowlite sends the token nowhere: a grant straight from
+/// the provider already says the person is allowed in, and the session's length is
+/// flowlite's own.
 #[derive(Deserialize)]
 struct TokenResponse {
-    /// Never read, and required for exactly that reason: a `token_url` pointed at something
-    /// that answers 200 to anything would otherwise turn every password into a login.
+    /// Required so that a `token_url` pointed at something that answers 200 to anything
+    /// does not turn every password into a login.
     #[allow(dead_code)]
     access_token: String,
-    expires_in: Option<i64>,
-    refresh_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -53,8 +39,7 @@ struct OAuthErrorResponse {
     error: String,
 }
 
-/// The one place that talks to the identity provider's token endpoint. Each login flow is
-/// one method here, and every one of them ends in the same `TokenGrant`.
+/// The one place that talks to the identity provider. Each login flow is one method here.
 pub struct IdpClient {
     auth: AppConfigAuth,
 }
@@ -71,33 +56,17 @@ impl IdpClient {
         Self { auth }
     }
 
-    /// The OAuth2 password grant.
-    pub async fn password(&self, username: &str, password: &str, now: DateTime<Utc>) -> Result<TokenGrant, IdpError> {
-        self.request_token(
-            &[
-                ("grant_type", "password"),
-                ("username", username),
-                ("password", password),
-                ("scope", &self.auth.scope),
-            ],
-            now,
-        ).await
-    }
+    /// The OAuth2 password grant: Ok when the provider grants a token for this username
+    /// and password.
+    pub async fn password(&self, username: &str, password: &str) -> Result<(), IdpError> {
 
-    pub async fn refresh(&self, refresh_token: &str, now: DateTime<Utc>) -> Result<TokenGrant, IdpError> {
-        self.request_token(
-            &[
-                ("grant_type", "refresh_token"),
-                ("refresh_token", refresh_token),
-            ],
-            now,
-        ).await
-    }
-
-    async fn request_token(&self, grant: &[(&str, &str)], now: DateTime<Utc>) -> Result<TokenGrant, IdpError> {
-
-        let mut form = grant.to_vec();
-        form.push(("client_id", &self.auth.client_id));
+        let mut form = vec![
+            ("grant_type", "password"),
+            ("username", username),
+            ("password", password),
+            ("scope", self.auth.scope.as_str()),
+            ("client_id", self.auth.client_id.as_str()),
+        ];
 
         if let Some(client_secret) = &self.auth.client_secret {
             form.push(("client_secret", client_secret));
@@ -131,17 +100,12 @@ impl IdpClient {
             return Err(IdpError::Unavailable(format!("the token endpoint answered {status}")));
         }
 
-        let token: TokenResponse = response
-            .json()
+        response
+            .json::<TokenResponse>()
             .await
             .map_err(|e| IdpError::Unavailable(format!("the token endpoint did not answer with a token: {e}")))?;
 
-        let expires_in = token.expires_in.unwrap_or(EXPIRES_IN_SECONDS_WHEN_UNSAID);
-
-        Ok(TokenGrant {
-            refresh_token: token.refresh_token,
-            expires_at: now + TimeDelta::seconds(expires_in),
-        })
+        Ok(())
     }
 
 }

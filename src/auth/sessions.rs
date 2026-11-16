@@ -1,79 +1,52 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
-
-use crate::auth::idp_client::{IdpClient, IdpError, TokenGrant};
 
 
 struct Session {
     subject: String,
-    refresh_token: Option<String>,
     expires_at: DateTime<Utc>,
 }
-
-/// What a request's session says about the person making it.
-#[derive(Debug, PartialEq, Eq)]
-pub enum SessionCheck {
-    /// Signed in, as this subject.
-    SignedIn(String),
-    SignedOut,
-    /// The session ran out and the provider could not be asked whether it may go on. It is
-    /// kept, so the person is neither let in nor logged out by an outage.
-    IdpUnavailable,
-}
-
-/// A session expired this long ago is dropped at the next login, rather than kept until a
-/// restart. Sessions are small and one per login, so this only has to stop them piling up.
-const PRUNE_AFTER_HOURS: i64 = 24;
 
 /// The dashboard's signed-in sessions, by the id their cookie carries. In memory only: a
 /// restart signs everyone out, which costs a login and needs no table.
 pub struct SessionStore {
-    /// Each session has a lock of its own, held across a refresh. The dashboard's partials
-    /// poll beside the page, so two requests on one expired session are routine, and a
-    /// provider that rotates refresh tokens answers the second of two racing refreshes by
-    /// ending the session.
-    sessions: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<Session>>>>,
+    length: TimeDelta,
+    sessions: Mutex<HashMap<String, Session>>,
 }
 
-
-impl Default for SessionStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl SessionStore {
 
-    pub fn new() -> Self {
-        Self { sessions: std::sync::Mutex::new(HashMap::new()) }
+    /// Every session lasts `length` from its login.
+    pub fn new(length: Duration) -> Self {
+        Self {
+            length: TimeDelta::from_std(length).expect("a session length that fits in a TimeDelta"),
+            sessions: Mutex::new(HashMap::new()),
+        }
     }
 
-    /// Begins a session for what a login was granted, and returns its id. Always a new id,
-    /// never one the browser already had, so a session id planted before the login is not
-    /// the one that ends up signed in.
-    pub fn start(&self, subject: String, grant: TokenGrant, now: DateTime<Utc>) -> String {
+    /// Begins a session for `subject`, and returns its id. Always a new id, never one the
+    /// browser already had, so a session id planted before the login is not the one that
+    /// ends up signed in.
+    pub fn start(&self, subject: String, now: DateTime<Utc>) -> String {
 
         let id = uuid::Uuid::new_v4().simple().to_string();
 
         let session = Session {
             subject,
-            refresh_token: grant.refresh_token,
-            expires_at: grant.expires_at,
+            expires_at: now + self.length,
         };
 
         let mut sessions = self.sessions.lock().unwrap();
 
-        let prune_before = now - TimeDelta::hours(PRUNE_AFTER_HOURS);
+        // Dropped here rather than on a timer: logins are what add sessions, so this is
+        // enough to stop expired ones piling up.
+        sessions.retain(|_, session| session.expires_at > now);
 
-        // A session locked right now is one a request is using, so it is not stale.
-        sessions.retain(|_, session| match session.try_lock() {
-            Ok(session) => session.expires_at > prune_before,
-            Err(_) => true,
-        });
-
-        sessions.insert(id.clone(), Arc::new(tokio::sync::Mutex::new(session)));
+        sessions.insert(id.clone(), session);
 
         id
     }
@@ -82,53 +55,88 @@ impl SessionStore {
         self.sessions.lock().unwrap().remove(id);
     }
 
-    /// Whether `id` is a signed-in session at `now`, refreshing it with the provider first
-    /// if its grant has run out.
-    pub async fn check(&self, id: &str, idp: &IdpClient, now: DateTime<Utc>) -> SessionCheck {
+    /// Who `id` is signed in as at `now`, or None if it is not a session or has run out.
+    pub fn check(&self, id: &str, now: DateTime<Utc>) -> Option<String> {
 
-        let Some(session) = self.sessions.lock().unwrap().get(id).cloned() else {
-            return SessionCheck::SignedOut;
-        };
+        let mut sessions = self.sessions.lock().unwrap();
 
-        let mut session = session.lock().await;
+        let session = sessions.get(id)?;
 
-        if now < session.expires_at {
-            return SessionCheck::SignedIn(session.subject.clone());
+        if now >= session.expires_at {
+            sessions.remove(id);
+            return None;
         }
 
-        let Some(refresh_token) = session.refresh_token.clone() else {
-            self.end(id);
-            return SessionCheck::SignedOut;
-        };
-
-        match idp.refresh(&refresh_token, now).await {
-            Ok(grant) => {
-                session.expires_at = grant.expires_at;
-
-                // A provider may answer a refresh without a new refresh token, and the
-                // one already held is then still the one to use.
-                if grant.refresh_token.is_some() {
-                    session.refresh_token = grant.refresh_token;
-                }
-
-                SessionCheck::SignedIn(session.subject.clone())
-            }
-            Err(IdpError::Rejected(reason)) => {
-                eprintln!("Signed {} out: the identity provider refused to refresh the session ({reason}).", session.subject);
-
-                // Cleared as well as removed, so a request already waiting on this lock
-                // finds nothing to refresh rather than asking the provider a second time.
-                session.refresh_token = None;
-                self.end(id);
-
-                SessionCheck::SignedOut
-            }
-            Err(error @ IdpError::Unavailable(_)) => {
-                eprintln!("Could not refresh {}'s session: {error}.", session.subject);
-
-                SessionCheck::IdpUnavailable
-            }
-        }
+        Some(session.subject.clone())
     }
 
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn now() -> DateTime<Utc> {
+        "2026-10-09T12:00:00Z".parse().unwrap()
+    }
+
+    fn an_hour_long() -> SessionStore {
+        SessionStore::new(Duration::from_secs(3600))
+    }
+
+    #[test]
+    fn a_session_is_signed_in_until_its_length_runs_out() {
+        let sessions = an_hour_long();
+
+        let id = sessions.start("ada".to_string(), now());
+
+        let before = sessions.check(&id, now() + TimeDelta::seconds(3599));
+        let after = sessions.check(&id, now() + TimeDelta::seconds(3600));
+
+        assert_eq!(before, Some("ada".to_string()));
+        assert_eq!(after, None);
+    }
+
+    #[test]
+    fn an_ended_session_is_signed_out() {
+        let sessions = an_hour_long();
+
+        let id = sessions.start("ada".to_string(), now());
+        sessions.end(&id);
+
+        assert_eq!(sessions.check(&id, now()), None);
+    }
+
+    #[test]
+    fn a_session_id_nobody_was_given_is_signed_out() {
+        let sessions = an_hour_long();
+
+        assert_eq!(sessions.check("made-up", now()), None);
+    }
+
+    #[test]
+    fn every_login_gets_a_session_id_of_its_own() {
+        let sessions = an_hour_long();
+
+        let first = sessions.start("ada".to_string(), now());
+        let second = sessions.start("ada".to_string(), now());
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn a_login_drops_the_sessions_that_have_run_out() {
+        let sessions = an_hour_long();
+
+        let expired = sessions.start("ada".to_string(), now());
+        let current = sessions.start("bob".to_string(), now() + TimeDelta::minutes(30));
+
+        sessions.start("eve".to_string(), now() + TimeDelta::hours(1));
+
+        let remaining = sessions.sessions.lock().unwrap();
+
+        assert!(!remaining.contains_key(&expired));
+        assert!(remaining.contains_key(&current));
+    }
 }

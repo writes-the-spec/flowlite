@@ -384,6 +384,7 @@ mod tests {
         assert_eq!(auth.client_secret, None);
         assert_eq!(auth.scope, "openid");
         assert_eq!(auth.timeout(), Duration::from_secs(10));
+        assert_eq!(auth.session_length(), Duration::from_secs(12 * 60 * 60));
         assert!(auth.cookie_secure);
     }
 
@@ -433,6 +434,7 @@ mod tests {
                 client_secret: Some("hunter2".to_string()),
                 scope: "openid".to_string(),
                 timeout_seconds: 10,
+                session_seconds: 3600,
                 cookie_secure: true,
             }),
             ..AppConfig::default()

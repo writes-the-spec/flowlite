@@ -3,7 +3,6 @@ use axum::http::{Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 
-use crate::auth::SessionCheck;
 use crate::router::app::app_state::AppState;
 
 
@@ -26,12 +25,10 @@ pub async fn session_middleware(
         return next.run(req).await;
     };
 
-    let check = match auth.cookie.read(req.headers()) {
-        Some(session_id) => {
-            auth.sessions.check(&session_id, &auth.idp, state.toolkit.get_current_ts()).await
-        }
-        None => SessionCheck::SignedOut,
-    };
+    let signed_in_as = auth
+        .cookie
+        .read(req.headers())
+        .and_then(|session_id| auth.sessions.check(&session_id, state.toolkit.get_current_ts()));
 
     let htmx_current_url = req.headers().get("hx-request").map(|_| {
         req.headers()
@@ -48,7 +45,7 @@ pub async fn session_middleware(
         .unwrap_or("/")
         .to_string();
 
-    match outcome(check, req.method(), &path_and_query, htmx_current_url.as_deref()) {
+    match outcome(signed_in_as, req.method(), &path_and_query, htmx_current_url.as_deref()) {
         Outcome::Pass(subject) => {
             req.extensions_mut().insert(SignedIn { subject });
             next.run(req).await
@@ -57,11 +54,6 @@ pub async fn session_middleware(
         Outcome::HtmxRedirectToLogin(location) => (
             StatusCode::UNAUTHORIZED,
             [("hx-redirect", location)],
-        ).into_response(),
-        Outcome::IdpUnavailable => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "The identity provider cannot be reached, so your session cannot be checked. \
-             Try again in a moment.",
         ).into_response(),
     }
 }
@@ -74,15 +66,13 @@ enum Outcome {
     /// htmx follows `HX-Redirect` before it looks at the status, so a partial's request
     /// moves the whole page to the login form rather than swapping the form into a table.
     HtmxRedirectToLogin(String),
-    IdpUnavailable,
 }
 
-fn outcome(check: SessionCheck, method: &Method, path_and_query: &str, htmx_current_url: Option<&str>) -> Outcome {
+fn outcome(signed_in_as: Option<String>, method: &Method, path_and_query: &str, htmx_current_url: Option<&str>) -> Outcome {
 
-    match check {
-        SessionCheck::SignedIn(subject) => Outcome::Pass(subject),
-        SessionCheck::IdpUnavailable => Outcome::IdpUnavailable,
-        SessionCheck::SignedOut => match htmx_current_url {
+    match signed_in_as {
+        Some(subject) => Outcome::Pass(subject),
+        None => match htmx_current_url {
             // Back to the page the partial sits on, not to the partial.
             Some(current_url) => Outcome::HtmxRedirectToLogin(login_location(path_of(current_url))),
             None if method == Method::GET => Outcome::RedirectToLogin(login_location(path_and_query)),
@@ -192,14 +182,14 @@ mod tests {
 
     #[test]
     fn a_signed_in_request_passes_as_its_subject() {
-        let outcome = outcome(SessionCheck::SignedIn("ada".to_string()), &Method::GET, "/jobs", None);
+        let outcome = outcome(Some("ada".to_string()), &Method::GET, "/jobs", None);
 
         assert_eq!(outcome, Outcome::Pass("ada".to_string()));
     }
 
     #[test]
     fn a_signed_out_page_load_is_sent_to_login_and_back() {
-        let outcome = outcome(SessionCheck::SignedOut, &Method::GET, "/jobs?page=2", None);
+        let outcome = outcome(None, &Method::GET, "/jobs?page=2", None);
 
         assert_eq!(outcome, Outcome::RedirectToLogin("/login?next=%2Fjobs%3Fpage%3D2".to_string()));
     }
@@ -207,7 +197,7 @@ mod tests {
     /// A form post cannot be replayed by a redirect, so it is not offered as `next`.
     #[test]
     fn a_signed_out_form_post_is_sent_to_login_without_next() {
-        let outcome = outcome(SessionCheck::SignedOut, &Method::POST, "/job-runs/7/stop", None);
+        let outcome = outcome(None, &Method::POST, "/job-runs/7/stop", None);
 
         assert_eq!(outcome, Outcome::RedirectToLogin("/login".to_string()));
     }
@@ -217,7 +207,7 @@ mod tests {
     #[test]
     fn a_signed_out_htmx_partial_sends_the_whole_page_to_login() {
         let outcome = outcome(
-            SessionCheck::SignedOut,
+            None,
             &Method::GET,
             "/job-run-table?page=2",
             Some("https://flowlite.example/?page=2"),
@@ -228,17 +218,8 @@ mod tests {
 
     #[test]
     fn a_signed_out_htmx_partial_with_no_current_url_goes_back_home() {
-        let outcome = outcome(SessionCheck::SignedOut, &Method::GET, "/limits-panel", Some(""));
+        let outcome = outcome(None, &Method::GET, "/limits-panel", Some(""));
 
         assert_eq!(outcome, Outcome::HtmxRedirectToLogin("/login".to_string()));
-    }
-
-    #[test]
-    fn an_unreachable_provider_is_neither_a_pass_nor_a_login() {
-        let page = outcome(SessionCheck::IdpUnavailable, &Method::GET, "/jobs", None);
-        let partial = outcome(SessionCheck::IdpUnavailable, &Method::GET, "/limits-panel", Some("http://h/"));
-
-        assert_eq!(page, Outcome::IdpUnavailable);
-        assert_eq!(partial, Outcome::IdpUnavailable);
     }
 }

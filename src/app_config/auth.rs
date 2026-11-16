@@ -26,6 +26,11 @@ pub struct AppConfigAuth {
     /// hold every page that needs a session refreshed.
     #[serde(default = "default_auth_timeout_seconds")]
     pub timeout_seconds: u64,
+    /// How long a login lasts before the person is asked to log in again. Set here rather
+    /// than taken from the provider's token, which usually lasts minutes and would need
+    /// refreshing to keep anyone signed in.
+    #[serde(default = "default_auth_session_seconds")]
+    pub session_seconds: u64,
     /// Whether the session cookie is sent over HTTPS only. Turning auth on is what
     /// exposing the dashboard asks for, and that belongs behind TLS - off is for trying it
     /// out over plain HTTP.
@@ -51,6 +56,10 @@ fn default_auth_timeout_seconds() -> u64 {
     10
 }
 
+fn default_auth_session_seconds() -> u64 {
+    12 * 60 * 60
+}
+
 fn default_auth_cookie_secure() -> bool {
     true
 }
@@ -58,6 +67,10 @@ fn default_auth_cookie_secure() -> bool {
 impl AppConfigAuth {
     pub fn timeout(&self) -> Duration {
         Duration::from_secs(self.timeout_seconds)
+    }
+
+    pub fn session_length(&self) -> Duration {
+        Duration::from_secs(self.session_seconds)
     }
 }
 
@@ -72,6 +85,7 @@ impl std::fmt::Debug for AppConfigAuth {
             .field("client_secret", &self.client_secret.as_ref().map(|_| "<redacted>"))
             .field("scope", &self.scope)
             .field("timeout_seconds", &self.timeout_seconds)
+            .field("session_seconds", &self.session_seconds)
             .field("cookie_secure", &self.cookie_secure)
             .finish()
     }

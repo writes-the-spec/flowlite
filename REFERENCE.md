@@ -1030,18 +1030,18 @@ flow = "password"
 token_url = "https://idp.example.com/realms/ops/protocol/openid-connect/token"
 client_id = "flowlite"
 client_secret = "..."           # leave out for a public client
+session_seconds = 43200         # how long a login lasts; 12 hours by default
 ```
 
 `flow = "password"` is the OAuth2 password grant: flowlite's own form sends the username and
 password to `token_url`. Most providers ship it switched off for the client — Keycloak calls
 it *Direct access grants* — and it cannot do MFA or a login federated from another provider.
 
-A login lasts as long as the provider keeps renewing it. When the token it granted runs
-out, flowlite asks the provider again with the refresh token, so a user disabled or signed
-out at the provider is signed out of the dashboard at the next renewal. Sessions are held in
-memory, so restarting `flowlite serve` signs everyone out. While the provider cannot be
-reached, a page whose session needs renewing answers 503 rather than either letting the
-person in or signing them out.
+The provider is asked only at login. A login then lasts `session_seconds` (12 hours by
+default), after which the dashboard asks for the password again, so a user disabled at the
+provider keeps an open session until it runs out. Sessions are held in memory, so
+restarting `flowlite serve` signs everyone out. A provider that cannot be reached stops new
+logins, not sessions already open.
 
 The session cookie is sent over HTTPS only unless `cookie_secure = false`, so put the
 dashboard behind a TLS-terminating proxy, and bind it to that proxy rather than to

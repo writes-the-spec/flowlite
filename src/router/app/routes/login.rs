@@ -6,7 +6,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::Form;
 use serde::Deserialize;
 
-use crate::auth::{IdpError, SessionCheck};
+use crate::auth::IdpError;
 use crate::router::app::app_state::AppState;
 use crate::router::app::middlewares::session::safe_next;
 
@@ -46,12 +46,13 @@ pub async fn login_page_route(
 
     let next = safe_next(query.next.as_deref().unwrap_or("/")).to_string();
 
-    if let Some(session_id) = auth.cookie.read(&headers) {
-        let check = auth.sessions.check(&session_id, &auth.idp, state.toolkit.get_current_ts()).await;
+    let signed_in_as = auth
+        .cookie
+        .read(&headers)
+        .and_then(|session_id| auth.sessions.check(&session_id, state.toolkit.get_current_ts()));
 
-        if let SessionCheck::SignedIn(_) = check {
-            return Redirect::to(&next).into_response();
-        }
+    if signed_in_as.is_some() {
+        return Redirect::to(&next).into_response();
     }
 
     render(&state, StatusCode::OK, next, String::new(), None)
@@ -68,10 +69,9 @@ pub async fn login_route(
     };
 
     let next = safe_next(form.next.as_deref().unwrap_or("/")).to_string();
-    let now = state.toolkit.get_current_ts();
 
-    match auth.idp.password(&form.username, &form.password, now).await {
-        Ok(grant) => {
+    match auth.idp.password(&form.username, &form.password).await {
+        Ok(()) => {
             eprintln!("Signed {} in to the dashboard.", form.username);
 
             // Whatever session the browser arrived with is not carried over: the login
@@ -80,7 +80,7 @@ pub async fn login_route(
                 auth.sessions.end(&previous);
             }
 
-            let session_id = auth.sessions.start(form.username, grant, now);
+            let session_id = auth.sessions.start(form.username, state.toolkit.get_current_ts());
 
             (
                 [(SET_COOKIE, auth.cookie.set(&session_id))],

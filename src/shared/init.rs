@@ -141,6 +141,7 @@ const FLOWLITE_TOML: &str = r#"# flowlite configuration. Everything here has a d
 # token_url = "https://idp.example.com/realms/ops/protocol/openid-connect/token"   # required
 # client_id = "flowlite"          # required
 # client_secret = "..."           # leave out for a public client
+# session_seconds = 43200         # how long a login lasts before the next one
 # cookie_secure = true            # false only to try it over plain HTTP
 
 # What a job's secret_env: resolves its values against, by name. A name is [a-z0-9_]+ with
