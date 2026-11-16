@@ -75,4 +75,4 @@ The monitor never reads a stop row; a stop reaches the job run only through task
 - **This monitor never writes `Skipped`**: a `Running` run has started, and its logs may show output.
 - **Terminal statuses set `finished_at`** via `update_job_run_status`, which then publishes and does nothing else; `NotificationService` reads the status to act on the run's [`job_run_notification`](../../entities/references/job_run_notification.md) rows.
 - **A new terminal `TaskRunStatus` needs a return here at the right rank.** The compiler won't catch it; the final `None` settles the run `Invalid` with a bug log, and it can't leak out as `Succeeded`.
-- **A new `JobRunStatus` needs a badge** in `templates/routes/home/job_run_table/route.html` and `templates/routes/job_runs/job_run_id/route.html`, plus an entry in the home route's `all_statuses` filter list.
+- **A new `JobRunStatus` needs a badge** in `templates/routes/job_run_table.html` and `templates/routes/job_run.html`, plus an entry in the home route's `all_statuses` filter list.

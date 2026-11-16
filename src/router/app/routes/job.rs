@@ -8,14 +8,14 @@ use crate::crud::CRUD;
 use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
 use crate::crud::task::{Task, SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort};
 use crate::router::app::app_state::AppState;
-use crate::router::app::routes::jobs::job_id::dag::{self, Dag};
+use crate::router::app::routes::job_dag::{self as dag, Dag};
 use std::collections::BTreeMap;
 
 /// A job id with nothing behind it. Reachable two ways: a run submitted from a file, whose
 /// definition was never installed here, and a job deleted from the data directory while its
 /// runs remain. Both leave the id readable everywhere the runs are, so it needs a page.
 #[derive(Template)]
-#[template(path = "routes/jobs/job_id/missing.html")]
+#[template(path = "routes/job_missing.html")]
 struct JobMissingTemplate {
     current_route: &'static str,
     theme: &'static str,
@@ -25,7 +25,7 @@ struct JobMissingTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "routes/jobs/job_id/route.html")]
+#[template(path = "routes/job.html")]
 struct JobIdRouteTemplate {
     current_route: &'static str,
     theme: &'static str,

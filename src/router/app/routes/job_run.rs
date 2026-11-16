@@ -56,7 +56,7 @@ pub struct Tick {
 }
 
 #[derive(Template)]
-#[template(path = "routes/job_runs/job_run_id/route.html")]
+#[template(path = "routes/job_run.html")]
 struct JobRunIdRouteTemplate {
     current_route: &'static str,
     theme: &'static str,

@@ -32,7 +32,7 @@ fn limit_panel_rows(rows: Vec<limits::LimitRow>) -> Vec<LimitPanelRow> {
 }
 
 #[derive(Template)]
-#[template(path = "routes/home/limits_panel/route.html")]
+#[template(path = "routes/limits_panel.html")]
 struct LimitsPanelTemplate {
     limit_rows: Vec<LimitPanelRow>,
     waiting_note: Option<String>,

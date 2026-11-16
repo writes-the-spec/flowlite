@@ -10,7 +10,7 @@ A stop signal for a [`job_run`](job_run.md). **Insert-only** — no status colum
 
 ## Written by
 
-- The job-run detail web route ([src/router/app/routes/job_runs/job_run_id/route.rs](../../../../src/router/app/routes/job_runs/job_run_id/route.rs)).
+- The job-run detail web route ([src/router/app/routes/job_run.rs](../../../../src/router/app/routes/job_run.rs)).
 - `stop_job_run` ([src/shared/job_run.rs](../../../../src/shared/job_run.rs)), for `job-run stop` and the MCP `stop_job_run` tool.
 - `CRUD::stop_child_job_runs` ([src/crud/multistatements/stop_child_job_runs.rs](../../../../src/crud/multistatements/stop_child_job_runs.rs)) — one row for each unfinished run an attempt submitted that has none yet, called by `TaskRunAttemptMonitor` and crash recovery when they settle that attempt as anything but `Succeeded`.
 

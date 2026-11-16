@@ -64,7 +64,7 @@ fn stream_note(stream: &str) -> String {
 }
 
 #[derive(Template)]
-#[template(path = "routes/task_runs/task_run_id/route.html")]
+#[template(path = "routes/task_run.html")]
 struct TaskRunIdRouteTemplate {
     current_route: &'static str,
     theme: &'static str,

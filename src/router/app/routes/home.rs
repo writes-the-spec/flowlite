@@ -87,7 +87,7 @@ pub struct StatusChip {
 }
 
 #[derive(Template)]
-#[template(path = "routes/home/route.html")]
+#[template(path = "routes/home.html")]
 struct HomeRouteTemplate {
     current_route: &'static str,
     theme: &'static str,

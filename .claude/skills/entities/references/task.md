@@ -26,6 +26,6 @@ One row per task under a job YAML's `tasks:` — a *definition*, like [`job`](jo
 ## Read by
 
 - `CRUD::submit_job` — copies `command`, `stdin`, `depends_on`, `timeout`, `idle_timeout`, `max_retries`, `retry_delay`, `env`, `secret_env`, `working_dir` and `limits` onto every `task_run` (`env`, `secret_env` and `limits` merged with the job's). `description` is not copied: a run snapshots what it executes.
-- The jobs and job-detail web routes and DAG ([src/router/app/routes/jobs/job_id/dag.rs](../../../../src/router/app/routes/jobs/job_id/dag.rs)), showing the job **as defined now**; the job page lists `description`. Only the task page, `/jobs/{job_id}/tasks/{task_id}` ([src/router/app/routes/jobs/job_id/task_id/route.rs](../../../../src/router/app/routes/jobs/job_id/task_id/route.rs)), shows `command`, `stdin` (when declared), `env`, `secret_env` (the reference only; no secret is read) and `working_dir` as declared.
+- The jobs and job-detail web routes and DAG ([src/router/app/routes/job_dag.rs](../../../../src/router/app/routes/job_dag.rs)), showing the job **as defined now**; the job page lists `description`. Only the task page, `/jobs/{job_id}/tasks/{task_id}` ([src/router/app/routes/task.rs](../../../../src/router/app/routes/task.rs)), shows `command`, `stdin` (when declared), `env`, `secret_env` (the reference only; no secret is read) and `working_dir` as declared.
 
 **No orchestrator file reads this table.** A YAML edit affects future runs only; a wrong value stays frozen on runs submitted while it was there.

@@ -18,7 +18,7 @@ pub struct JobEntry {
 }
 
 #[derive(Template)]
-#[template(path = "routes/jobs/route.html")]
+#[template(path = "routes/jobs.html")]
 struct JobsRouteTemplate {
     current_route: &'static str,
     theme: &'static str,

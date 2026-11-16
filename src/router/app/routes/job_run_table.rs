@@ -11,7 +11,7 @@ use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
 use crate::router::app::app_state::AppState;
 use crate::shared::format;
-use crate::router::app::routes::home::route::{HomeQuery, Pagination, runs_href};
+use crate::router::app::routes::home::{HomeQuery, Pagination, runs_href};
 
 pub struct JobRunDisplay {
     pub id: i64,
@@ -28,7 +28,7 @@ pub struct JobRunDisplay {
 }
 
 #[derive(Template)]
-#[template(path = "routes/home/job_run_table/route.html")]
+#[template(path = "routes/job_run_table.html")]
 struct JobRunTableTemplate {
     job_runs: Vec<JobRunDisplay>,
     pagination: Pagination,

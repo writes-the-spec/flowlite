@@ -28,7 +28,7 @@ pub struct TaskDisplay {
 }
 
 #[derive(Template)]
-#[template(path = "routes/jobs/job_id/task_id/route.html")]
+#[template(path = "routes/task.html")]
 struct TaskIdRouteTemplate {
     current_route: &'static str,
     theme: &'static str,

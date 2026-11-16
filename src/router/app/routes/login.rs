@@ -12,7 +12,7 @@ use crate::router::app::middlewares::session::safe_next;
 
 
 #[derive(Template)]
-#[template(path = "routes/login/route.html")]
+#[template(path = "routes/login.html")]
 struct LoginRouteTemplate {
     current_route: &'static str,
     theme: &'static str,
