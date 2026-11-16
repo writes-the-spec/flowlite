@@ -8,6 +8,7 @@ use crate::cli::commands::status::StatusCmd;
 use crate::cli::commands::limits::LimitsCmd;
 use crate::cli::commands::mcp::McpCmd;
 use crate::cli::commands::init::InitCmd;
+use crate::cli::commands::validate::ValidateCmd;
 use crate::toolkit::Toolkit;
 
 
@@ -27,6 +28,9 @@ pub enum Command {
     /// Lay an example job, an example schedule and a commented flowlite.toml into this data
     /// directory, leaving any of the three that are already there untouched.
     Init(InitCmd),
+    /// Check flowlite.toml, the job and schedule YAML and every secret_env reference the
+    /// way serve does at startup, without opening the database or binding a port.
+    Validate(ValidateCmd),
     Serve(ServeCmd),
     Job(JobCmd),
     JobRun(JobRunCmd),
@@ -50,6 +54,7 @@ impl Cli {
 
         match &self.command {
             Command::Init(cmd) => cmd.run(toolkit).await?,
+            Command::Validate(cmd) => cmd.run(toolkit).await?,
             Command::Serve(cmd) => cmd.run(toolkit).await?,
             Command::Job(cmd) => cmd.run(toolkit).await?,
             Command::JobRun(cmd) => cmd.run(toolkit).await?,

@@ -239,7 +239,7 @@ fn initialize_names_the_server_and_its_version() {
 /// cut, is this cut's own: `stop_job_run` alongside the other five, and nothing else,
 /// named by `tools/list` - the full set the design promises.
 #[test]
-fn the_handshake_declares_tools_and_lists_the_ten_tools() {
+fn the_handshake_declares_tools_and_lists_the_eleven_tools() {
     let dir = data_dir("tools");
     let mut client = McpClient::start(&dir);
 
@@ -274,6 +274,7 @@ fn the_handshake_declares_tools_and_lists_the_ten_tools() {
             "list_limits",
             "stop_job_run",
             "submit_job",
+            "validate_data_dir",
         ],
     );
 }
@@ -657,6 +658,29 @@ fn an_inline_definition_colliding_with_an_installed_job_is_refused_by_name() {
     let text = tool_text(&result);
     assert!(text.contains("hello"), "{text}");
     assert!(text.contains(r#"{ "job": "hello" }"#), "{text}");
+}
+
+/// The tool reads the directory as it stands at the call, so a file the agent breaks after
+/// the server started is caught on the next call, with the file named.
+#[test]
+fn validate_data_dir_catches_a_file_broken_after_the_server_started() {
+    let dir = data_dir("validate");
+    install_job(&dir, "hello.yaml", HELLO);
+
+    let mut client = McpClient::start(&dir);
+    client.handshake();
+
+    let result = client.call_tool("validate_data_dir", json!({}));
+    assert_ne!(result["isError"], json!(true), "{result}");
+
+    let counts: Value = serde_json::from_str(tool_text(&result)).unwrap();
+    assert_eq!(counts, json!({ "jobs": 1, "schedules": 0 }));
+
+    install_job(&dir, "broken.yaml", "name: No Id\ntasks: []\n");
+
+    let result = client.call_tool("validate_data_dir", json!({}));
+    assert_eq!(result["isError"], json!(true), "{result}");
+    assert!(tool_text(&result).contains("broken.yaml"), "{}", tool_text(&result));
 }
 
 /// The text names the reason, exactly as `job submit -f` reports a parse failure - here, a

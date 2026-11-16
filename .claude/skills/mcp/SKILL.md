@@ -5,7 +5,7 @@ description: Add or modify MCP tools in src/mcp/ - flowlite as a set of tools an
 
 # MCP module conventions (src/mcp/)
 
-`flowlite mcp` speaks MCP over stdin/stdout. [src/mcp/mod.rs](../../../src/mcp/mod.rs) holds `McpServer` (an `Arc<Toolkit>` and a composed `ToolRouter`); each tool is one file under `src/mcp/tools/`. Nine of the ten tools are a CLI command's `--json` branch without the shell (same filters, sort and fields); `init_data_dir` has no twin (`init` prints prose), so its `InitResult` shape is its own, in `src/shared/`.
+`flowlite mcp` speaks MCP over stdin/stdout. [src/mcp/mod.rs](../../../src/mcp/mod.rs) holds `McpServer` (an `Arc<Toolkit>` and a composed `ToolRouter`); each tool is one file under `src/mcp/tools/`. Ten of the eleven tools are a CLI command's `--json` branch without the shell (same filters, sort and fields); `init_data_dir` has no twin (`init` prints prose), so its `InitResult` shape is its own, in `src/shared/`.
 
 ## Adding a tool (e.g. `list_schedules`)
 

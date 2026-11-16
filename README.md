@@ -51,6 +51,7 @@ Or clone and `cargo build --release`, which leaves the binary at `target/release
 
 ```bash
 flowlite init                           # an example job, schedule and commented flowlite.toml
+flowlite validate                       # the checks serve makes at startup, without starting it
 flowlite serve                          # scheduler, orchestrator and dashboard on :8000
 flowlite job submit hello-world --wait  # in a second shell; exits non-zero unless it succeeded
 ```
@@ -173,6 +174,7 @@ open and nothing to start first. Register it with any MCP client as a stdio serv
 | `delete_job_run` | Remove run 42 before it is due, so its schedule writes it again. |
 | `get_serve_status` | Is anything actually serving this directory? |
 | `list_limits` | What is a queued run waiting behind? |
+| `validate_data_dir` | Would `serve` start on the YAML and flowlite.toml I just edited? |
 
 Each tool returns the same fields its CLI twin prints with `--json`. `submit_job` accepts a
 pipeline an agent wrote itself as inline YAML, and runs it once without installing it.

@@ -110,6 +110,12 @@ yesterday, so editing that job's YAML this morning does not change it. The YAML 
 once, at startup, with no watcher, so every run a server submits carries the file as it
 stood when *that server* started.
 
+Check an edit with `flowlite validate` before restarting. It runs the checks `serve` makes at
+startup (`flowlite.toml`, every job and schedule file, and every `secret_env` reference)
+without opening the database or binding a port, and prints the first error with its file. A
+broken file is then caught while the old server is still up, not by a restart that fails.
+`--json` prints `{"jobs": 3, "schedules": 2}` on success.
+
 An edit therefore takes effect only for occurrences submitted after the restart. A run that
 was already written keeps the definition it was submitted with, and nothing replaces or
 deletes it, so an occurrence written under the old YAML runs under the old YAML.
@@ -1068,7 +1074,7 @@ over its stdio, and the process exits when the client closes stdin. Running
 `flowlite -D ./data init` first is optional, since an agent handed an empty directory can
 call `init_data_dir` itself.
 
-Ten tools, each a projection of a command that already exists:
+Eleven tools, each a projection of a command that already exists:
 
 | Tool | Answers |
 |---|---|
@@ -1082,6 +1088,7 @@ Ten tools, each a projection of a command that already exists:
 | `delete_job_run` | Remove run 42 before it is due, so its schedule writes it again. |
 | `get_serve_status` | Is anything actually serving this directory? |
 | `list_limits` | What is a run waiting behind? |
+| `validate_data_dir` | Would `serve` start on the YAML and flowlite.toml I just edited? |
 
 Each returns the JSON its `--json` twin prints, so an agent and a shell script reading one
 run read the same fields. Three differ, each for a stated reason.

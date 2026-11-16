@@ -6,7 +6,7 @@ use crate::router::app::app::create_router;
 use crate::router::app::app_state::AppState;
 use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
-use crate::declared::Declared;
+use crate::shared::validate::load_declared_for_serve;
 use crate::notifications::NotificationService;
 use crate::notifications::channel::NotificationChannels;
 use crate::orchestrator::Orchestrator;
@@ -49,17 +49,7 @@ impl ServeCmd {
         let conn_pool = toolkit.get_conn_pool().await?;
         let conn_pool = Arc::new(conn_pool);
 
-        let declared = Declared::load(&toolkit.app_config)?;
-
-        // Every job's and task's secret_env: must name a secret app_config.secrets actually
-        // defines. Checked here, and never inside `Declared::load`, because `job` commands
-        // load the very same YAML in their own process: `flowlite job list` must not refuse
-        // to run in a terminal that has not exported the production secrets. This is the one
-        // process that will spawn a command, so it is the one place this fails before the
-        // bind rather than at 03:00.
-        declared.check_secret_env_is_satisfied(&toolkit.app_config.secrets, None)?;
-
-        let declared = Arc::new(declared);
+        let declared = Arc::new(load_declared_for_serve(&toolkit.app_config)?);
 
         let signals = Arc::new(Signals::new());
 
