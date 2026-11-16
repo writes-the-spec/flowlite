@@ -28,7 +28,7 @@ Every table lives in one of two SQLite databases. **If the process restarts, sho
 
 ## How the two databases are wired ([src/toolkit.rs](../../../src/toolkit.rs))
 
-- Disk: `<data_dir>/flowlite.db`, opened `mode=rwc` by `Toolkit::create_db_if_not_exists`. Every connection runs `ATTACH DATABASE 'file:flowlite_mem?mode=memory&cache=shared' AS mem`; `cache=shared` makes every connection see the *same* `mem` for the life of the process.
+- Disk: `<data_dir>/flowlite.db`, opened by `Toolkit::disk_connect_options` (created if missing, WAL, `synchronous=NORMAL`, 5 s busy timeout), so `flowlite.db-wal` and `flowlite.db-shm` sit beside it while anything has it open. Every connection runs `ATTACH DATABASE 'file:flowlite_mem?mode=memory&cache=shared' AS mem`; `cache=shared` makes every connection see the *same* `mem` for the life of the process.
 - Use `Toolkit::get_conn_pool` / `get_conn` (disk opened, `mem` attached, disk migrations run). A connection opened otherwise has no `mem`, so config-table queries fail. `Toolkit::get_memory_conn` opens `mem` alone, for memory-schema setup only.
 - Two migration histories with separate checksums: `Toolkit::update_disk_schema` (`db/schemas/disk/migrations`) and `update_memory_schema` (`db/schemas/memory/migrations`). Editing an existing disk migration depends on what has applied it — see the [db-schema skill](../db-schema/SKILL.md). **A `mem` table never needs a new migration**: `mem` starts empty each process, so edit its `CREATE TABLE` and restart.
 

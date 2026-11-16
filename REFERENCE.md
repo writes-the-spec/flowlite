@@ -1276,6 +1276,6 @@ migration 20260703234500 was previously applied but has been modified
 ```
 
 The schema was edited in place until the first release, so there is no path forward from
-such a database. Copy `flowlite.db` aside if its history matters to you, then delete it and
-start again. Jobs and schedules come back, since they are read from the YAML on every
+such a database. Copy `flowlite.db` aside if its history matters to you, then delete it,
+along with `flowlite.db-wal` and `flowlite.db-shm` if they are there, and start again. Jobs and schedules come back, since they are read from the YAML on every
 start. The run history does not.

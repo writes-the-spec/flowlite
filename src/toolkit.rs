@@ -1,8 +1,9 @@
 use sqlx::{SqliteConnection, SqlitePool, Connection};
 use crate::app_config::AppConfig;
 use std::path::{Path};
+use std::time::Duration;
 use chrono::{DateTime, Utc};
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use uuid::Uuid;
 
 
@@ -42,6 +43,10 @@ pub struct Toolkit {
 /// only `serve` holds that lock.
 static MIGRATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// How long a connection waits for another process's write lock on `flowlite.db` before it
+/// fails with `SQLITE_BUSY`. `serve`, CLI commands and the MCP server all write the same file.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
 
 impl Toolkit {
 
@@ -60,7 +65,7 @@ impl Toolkit {
     }
 
     pub async fn get_conn_pool(&self) -> anyhow::Result<SqlitePool> {
-        let connection_string = self.create_db_if_not_exists().await?;
+        let connect_options = self.disk_connect_options()?;
         let mem_name = self.mem_name.clone();
         let conn_pool = SqlitePoolOptions::new()
             .after_connect(move |conn, _meta| {
@@ -75,7 +80,7 @@ impl Toolkit {
                     Ok(())
                 })
             })
-            .connect(&connection_string)
+            .connect_with(connect_options)
             .await?;
 
         let mut conn = conn_pool.acquire().await?;
@@ -85,8 +90,8 @@ impl Toolkit {
     }
 
     pub async fn get_conn(&self) -> anyhow::Result<SqliteConnection> {
-        let connection_string = self.create_db_if_not_exists().await?;
-        let mut conn = SqliteConnection::connect(&connection_string).await?;
+        let connect_options = self.disk_connect_options()?;
+        let mut conn = SqliteConnection::connect_with(&connect_options).await?;
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "ATTACH DATABASE 'file:{}?mode=memory&cache=shared' AS mem",
             self.mem_name,
@@ -106,15 +111,25 @@ impl Toolkit {
         Ok(conn)
     }
 
-    async fn create_db_if_not_exists(&self) -> anyhow::Result<String> {
+    /// Every connection to `flowlite.db` opens with these, so no two connections disagree on
+    /// pragmas. WAL lets the pollers, the dashboard and a CLI command read while another
+    /// process writes, where the default rollback journal blocks every reader for the length
+    /// of each write. `synchronous=NORMAL` is the setting WAL is designed for: a crash of
+    /// flowlite loses nothing, a power cut can lose the last commits but never corrupts.
+    fn disk_connect_options(&self) -> anyhow::Result<SqliteConnectOptions> {
         let data_dir = Path::new(&self.app_config.data_dir);
         if !data_dir.exists() {
             std::fs::create_dir_all(data_dir)?;
         }
-        let db_path = data_dir.join("flowlite.db");
-        let connection_string = format!("sqlite:{}?mode=rwc", db_path.to_string_lossy());
 
-        Ok(connection_string)
+        let connect_options = SqliteConnectOptions::new()
+            .filename(data_dir.join("flowlite.db"))
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(BUSY_TIMEOUT);
+
+        Ok(connect_options)
     }
 
     /// Migrates over a plain connection with `Migrator::run_direct`, sqlx's own documented
@@ -273,6 +288,44 @@ tasks:
             .to_string();
 
         assert!(error.contains("no such table: mem.job"), "{error}");
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    /// A single connection and a pool connection both carry the pragmas from
+    /// `disk_connect_options`, read back from SQLite rather than trusted from the builder.
+    #[tokio::test]
+    async fn disk_connections_use_wal_normal_sync_and_a_busy_timeout() {
+        let data_dir = std::env::temp_dir().join(format!("flowlite-toolkit-test-{}", Uuid::new_v4()));
+
+        let toolkit = Toolkit::new(AppConfig {
+            data_dir: data_dir.to_string_lossy().into_owned(),
+            ..AppConfig::default()
+        }).with_fresh_mem();
+
+        let mut conn = toolkit.get_conn().await.unwrap();
+        let conn_pool = toolkit.get_conn_pool().await.unwrap();
+        let mut pool_conn = conn_pool.acquire().await.unwrap();
+
+        for conn in [&mut conn, &mut *pool_conn] {
+            let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+            let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+            let busy_timeout_ms: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+
+            assert_eq!(journal_mode, "wal");
+            // 1 is NORMAL; the SQLite default is 2, FULL.
+            assert_eq!(synchronous, 1);
+            assert_eq!(busy_timeout_ms, 5000);
+        }
 
         let _ = std::fs::remove_dir_all(&data_dir);
     }
