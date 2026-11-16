@@ -1466,7 +1466,7 @@ mod tests {
     }
 
     /// Two runs of one job are two directories. This is the collision the run directory
-    /// exists to remove: `working_dir` is a fixed string on the task row, so before this
+    /// exists to remove: `working_dir` is a fixed string on the declared task, so before this
     /// every concurrent run of a job shared one.
     #[tokio::test]
     async fn two_runs_of_one_job_work_in_different_directories() {

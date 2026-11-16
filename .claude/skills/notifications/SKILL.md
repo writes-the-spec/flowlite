@@ -67,8 +67,8 @@ An ordinary [`Service`](../../../src/poller.rs):
 2. A module beside [slack.rs](../../../src/notifications/slack.rs) with `send` and `max_output_bytes`.
 3. Its config section on `AppConfig`, and a field on `NotificationChannels` built in `from_config`.
 4. The compiler-demanded arms in `send` and `max_output_bytes`.
-5. A field on `JobYamlNotify` and its line in `job_notify_recipients` ([crud.rs](../../../src/crud/crud.rs)), which is where the YAML's per-channel fields become the job row's `channel -> recipients` map, once per notify block. `job_run_notification_definitions` ([job_run_definition.rs](../../../src/crud/multistatements/job_run_definition.rs)) needs no change.
-6. The compiler-demanded arm in `CRUD::validate_job_notifications`, naming the config section the channel requires (checked once per block, not per ending).
+5. A field on `JobYamlNotify` and its line in `job_notify_recipients` ([declared.rs](../../../src/declared/declared.rs)), which is where the YAML's per-channel fields become the `Job`'s `channel -> recipients` map, once per notify block. `job_run_notification_definitions` ([job_run_definition.rs](../../../src/crud/multistatements/job_run_definition.rs)) needs no change.
+6. The compiler-demanded arm in `validate_job_notifications` ([validate.rs](../../../src/declared/validate.rs)), naming the config section the channel requires (checked once per block, not per ending).
 
 Steps 4 and 6 are why it's an enum: a channel can't compile without saying how to deliver it and what makes it deliverable.
 

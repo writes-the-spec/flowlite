@@ -65,5 +65,5 @@ impl AppConfigMetrics {
 | `[retention]` | `RetentionService`: `keep_runs_total` (cross-job ceiling, oldest first, after per-job `keep_runs`), `max_deletes_per_pass` |
 | `[smtp]`, `[slack]` | the channels ([notifications skill](../notifications/SKILL.md)) |
 | `[auth]` | the dashboard's login: `AppState::new` builds the `IdpClient` and session cookie from it ([router skill](../router/SKILL.md)). `client_secret` is redacted by `AppConfigAuth`'s own hand-written `Debug` |
-| `[secrets]` | `secret_env:`, checked at startup by `CRUD::check_secret_env_is_satisfied` |
-| `[concurrency_limits]` | `limits:`, names checked at startup by `CRUD::validate_job_limits`, gated by the attempt dispatcher |
+| `[secrets]` | `secret_env:`, checked at startup by `Declared::check_secret_env_is_satisfied` ([src/declared/secret_env.rs](../../../src/declared/secret_env.rs)) |
+| `[concurrency_limits]` | `limits:`, names checked at startup by `validate_job_limits` ([src/declared/validate.rs](../../../src/declared/validate.rs)), gated by the attempt dispatcher |

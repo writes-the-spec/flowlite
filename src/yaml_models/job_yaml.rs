@@ -61,8 +61,8 @@ pub struct JobYamlTask {
 /// One field per channel rather than a map keyed by channel name, for the reason
 /// `NotificationChannel` is an enum and not a registry: the channels are known at compile
 /// time, and adding one should be a field the compiler carries through rather than a
-/// string somebody has to spell right. `CRUD::job_notify_recipients` is what turns this
-/// into the channel-to-recipients map the job row carries.
+/// string somebody has to spell right. `job_notify_recipients` in `src/declared/` is what
+/// turns this into the channel-to-recipients map a `Job` carries.
 ///
 /// Each is a block rather than a bare `notify_email:` so the action to run on a failure
 /// can join it later without the two ways of reacting reading as unrelated keys.
@@ -109,7 +109,7 @@ pub struct JobYaml {
     pub limits: Vec<String>,
     /// Who to tell when a run of this job fails or times out. Naming a recipient of a
     /// channel flowlite.toml does not configure is a startup error — see
-    /// `CRUD::validate_job_notifications`.
+    /// `validate_job_notifications` in `src/declared/validate.rs`.
     #[serde(default)]
     pub on_failure: JobYamlNotify,
     /// Who to tell when a run of this job succeeds. Separate from `on_failure` rather
