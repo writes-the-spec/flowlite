@@ -7,7 +7,7 @@
 | `Queued` | Inserted, waiting for the dispatcher. |
 | `Running` | Command spawned; the monitor owns the process. |
 | `Succeeded` | Exited 0 and its result (if any) was recorded. |
-| `Failed` | Exited non-zero, or exited 0 with a result that couldn't be recorded. |
+| `Failed` | Exited non-zero, exited 0 with a result that couldn't be recorded, or could not be started at all (a secret nothing defines, a spawn the OS refused). |
 | `TimedOut` | Ran past `task_run.timeout` and was killed. |
 | `Aborted` | Killed because the job run was stopped. |
 | `Skipped` | Job run stopped before dispatch; the command never started. |
@@ -15,7 +15,7 @@
 
 A separate enum from `TaskRunStatus` (which has `Planned`/`Waiting` where this has `Queued`); `TaskRunMonitor` maps one onto the other explicitly. `Queued` is what makes an attempt skippable: a stop arriving before dispatch has nothing to kill.
 
-## Dispatcher: Queued → Running / Skipped
+## Dispatcher: Queued → Running / Skipped / Failed
 
 `TaskRunAttemptDispatcher` ([src/orchestrator/task_run_attempt_dispatcher.rs](../../../../src/orchestrator/task_run_attempt_dispatcher.rs)) polls all `Queued` attempts. `derive_next_status`, in order:
 
@@ -27,7 +27,8 @@ A separate enum from `TaskRunStatus` (which has `Planned`/`Waiting` where this h
 
 `set_to_running` write order, each step there for a crash or race:
 
-- `started_at` is written **before** the spawn (that is what step 1 reads), and cleared again if the spawn fails so the attempt can be retried. A spawn failure is the row's error for `Poller::run` to log.
+- `started_at` is written **before** the spawn (that is what step 1 reads), and cleared again if the spawn fails, before anything else: a failure to record the reason then leaves the attempt `Queued` for the next pass, not `Invalid`.
+- **An attempt that cannot be started settles `Failed`** (`set_to_failed_to_start`): a secret in `task_run.secret_env` nothing defines (the env build) or a spawn error such as a missing `working_dir`. The reason goes onto the attempt's stderr as one `flowlite:` line, before the status; `started_at` stays NULL. Left `Queued`, it would fail the same way every pass while its job run held a `max_parallel_runs` slot. `Failed`, not `Invalid`: flowlite knows what happened, so `TaskRunMonitor` retries it under `max_retries` and a permanent cause fails the run and notifies. DB reads and the previous-attempt log write still return `Err` and leave the attempt `Queued`: a failed read is not a verdict.
 - One reader task per stream is spawned, the child goes **into `TaskRunAttemptChildren` before** `Running` and `process_group_id` are written — the other order lets the monitor see a `Running` attempt with no process and settle it `Invalid`.
 
 **Every attempt gets its own process group** (`process_group(0)`; id = pid of the `sh`). `sh -c` forks for anything with `;`, a pipe or a background job, so only a group kill reaches all of it. Keep the group and `kill_process_group` together.
@@ -76,5 +77,5 @@ Each pass writes at most one [`task_run_attempt_output`](../../entities/referenc
 
 - **A command is spawned at most once per attempt row.** A `Running` attempt without a child, or a `Queued` one with `started_at` set, is settled `Invalid`, never respawned; a retry is a new row from `TaskRunMonitor`.
 - **Attempt 1 comes from `TaskRunMonitor`**, inserted on its first pass over a `Running` task run with no attempts.
-- **Terminal statuses set `finished_at`** via `finish_task_run_attempt` (or the dispatcher's `set_to_skipped` / `set_to_invalid*`).
+- **Terminal statuses set `finished_at`** via `finish_task_run_attempt` (or the dispatcher's `set_to_skipped` / `set_to_failed_to_start` / `set_to_invalid*`).
 - **A new `TaskRunAttemptStatus` needs a return in `TaskRunMonitor`** — see [task_run.md](task_run.md).

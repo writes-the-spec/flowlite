@@ -14,7 +14,7 @@ Seven background services, all spawned by `Orchestrator::start` ([src/orchestrat
 | `JobRunMonitor` | `Running` job runs | finishes them from their task runs |
 | `TaskRunDispatcher` | `Waiting` task runs | starts them once dependencies succeeded, holds them while one is unfinished, or skips them |
 | `TaskRunMonitor` | `Running` task runs | makes every attempt (first and retries), finishes them |
-| `TaskRunAttemptDispatcher` | `Queued` attempts | spawns the command, holds a retry until `retry_delay` passes or a cap frees, or skips |
+| `TaskRunAttemptDispatcher` | `Queued` attempts | spawns the command (or fails the attempt if it cannot be started), holds a retry until `retry_delay` passes or a cap frees, or skips |
 | `TaskRunAttemptMonitor` | `Running` attempts | waits on the process and finishes the attempt |
 
 Job run path: `Scheduled → Queued → Running → <terminal>`, plus `Scheduled → Skipped` for a run stopped before release. Only the releaser writes `Scheduled → Queued`. It is not a dispatcher: releasing only makes a run eligible. Its skip is the same outcome `JobRunDispatcher` owns one status later, both written through `CRUD::skip_job_run`; they select disjoint statuses, so a run is only ever skipped by one of them.
@@ -25,7 +25,7 @@ Job run path: `Scheduled → Queued → Running → <terminal>`, plus `Scheduled
 
 Each level — [job run](references/job_run.md), [task run](references/task_run.md), [task run attempt](references/task_run_attempt.md) — has one **dispatcher** and one **monitor**:
 
-- **Dispatcher: held → `Running` or `Skipped`.** Held is `Queued` for a job run and an attempt, `Waiting` for a task run.
+- **Dispatcher: held → `Running` or `Skipped`.** Held is `Queued` for a job run and an attempt, `Waiting` for a task run. One exception: `TaskRunAttemptDispatcher` settles an attempt whose command cannot be started `Failed`, since there is no process for the monitor to finish.
 - **Monitor: `Running` → a finished status.** Never touches a held row.
 
 **Nothing else writes a run status**, with one exception: `CRUD::delete_job_run` (`job-run delete`, the MCP tool and the web route) tombstones a still-`Scheduled` run as `Deleted`, which no service ever selects.

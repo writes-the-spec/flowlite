@@ -8,8 +8,8 @@ use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilt
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRun};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus, UpdateTaskRunAttemptsData, UpdateTaskRunAttemptsDataFilter, UpdateTaskRunAttemptsDataInput};
 use crate::crud::task_run_attempt_output::{
-    SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort,
-    TaskRunAttemptOutputStream,
+    InsertTaskRunAttemptOutputData, InsertTaskRunAttemptOutputDataInput, SelectTaskRunAttemptOutputsData,
+    SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort, TaskRunAttemptOutputStream,
 };
 use crate::orchestrator::task_run_attempt_children::{TaskRunAttemptChild, TaskRunAttemptChildren};
 use crate::orchestrator::task_run_attempt_env::{build_task_run_attempt_env, PreviousAttemptFiles};
@@ -302,7 +302,7 @@ impl TaskRunAttemptDispatcher {
         let inputs = self.get_inputs(&task_run, &job_run_dir).await?;
         let previous_attempt = self.write_previous_attempt_files(task_run_attempt, &job_run_dir).await?;
 
-        let env = build_task_run_attempt_env(
+        let env = match build_task_run_attempt_env(
             &task_run,
             &job_run,
             task_run_attempt,
@@ -311,7 +311,10 @@ impl TaskRunAttemptDispatcher {
             &inputs,
             previous_attempt.as_ref(),
             &self.app_config.secrets,
-        )?;
+        ) {
+            Ok(env) => env,
+            Err(error) => return self.set_to_failed_to_start(task_run_attempt, &error).await,
+        };
 
         let mut command = tokio::process::Command::new("sh");
 
@@ -395,8 +398,9 @@ impl TaskRunAttemptDispatcher {
                 working_dir_description,
             ));
 
-        // Nothing was started, so the intent has to go: left behind it would settle this
-        // attempt invalid on the next pass instead of letting it be tried again.
+        // Nothing was started, so the intent goes first, before the failure is recorded:
+        // if recording it fails, the attempt is left Queued for the next pass to try again,
+        // where an intent left behind would settle it Invalid and cost it its retries.
         let mut child = match spawned {
             Ok(child) => child,
             Err(error) => {
@@ -419,7 +423,7 @@ impl TaskRunAttemptDispatcher {
                     },
                 ).await?;
 
-                return Err(error);
+                return self.set_to_failed_to_start(task_run_attempt, &error).await;
             },
         };
 
@@ -517,6 +521,71 @@ impl TaskRunAttemptDispatcher {
         Ok(())
     }
 
+    /// Fails an attempt whose command could not be started: a secret its task run names
+    /// that nothing defines, or a spawn the OS refused, such as a working_dir that does
+    /// not exist.
+    ///
+    /// Settled rather than left Queued. Queued is re-selected every pass, so the attempt
+    /// failed the same way once a second, and its job run stayed Running and held its
+    /// `max_parallel_runs` slot until somebody read the log. `Failed` hands it to
+    /// TaskRunMonitor like any other failed attempt: a refusal that passes gets the task's
+    /// `max_retries`, and one that does not fails the run, which notifies. Not `Invalid`:
+    /// flowlite knows exactly what happened.
+    ///
+    /// The reason goes onto the attempt's own stderr, the way TaskRunAttemptMonitor
+    /// records a result it refused, and before the status, so the failure always comes
+    /// with its explanation. A retry is handed it in `FLOWLITE_PREVIOUS_ATTEMPT_LOG`.
+    async fn set_to_failed_to_start(
+        &self,
+        task_run_attempt: &TaskRunAttempt,
+        error: &anyhow::Error,
+    ) -> anyhow::Result<()> {
+
+        eprintln!(
+            "Task run attempt {} could not be started and has been settled failed: {:#}",
+            task_run_attempt.id,
+            error,
+        );
+
+        self.crud.insert_task_run_attempt_output(
+            &*self.conn_pool,
+            &InsertTaskRunAttemptOutputData {
+                input: InsertTaskRunAttemptOutputDataInput {
+                    task_run_attempt_id: task_run_attempt.id,
+                    task_run_id: task_run_attempt.task_run_id,
+                    job_run_id: task_run_attempt.job_run_id,
+                    job_id: task_run_attempt.job_id.clone(),
+                    task_id: task_run_attempt.task_id.clone(),
+                    stream: TaskRunAttemptOutputStream::Stderr,
+                    content: format!("flowlite: {:#}\n", error),
+                },
+            },
+        ).await?;
+
+        self.crud.update_task_run_attempts(
+            &*self.conn_pool,
+            &UpdateTaskRunAttemptsData {
+                filter: UpdateTaskRunAttemptsDataFilter {
+                    id: Some(task_run_attempt.id),
+                    task_run_id: None,
+                    status: None,
+                },
+                input: UpdateTaskRunAttemptsDataInput {
+                    status: Some(TaskRunAttemptStatus::Failed),
+                    started_at: None,
+                    finished_at: Some(Some(Utc::now())),
+                    process_group_id: None,
+                    output: None,
+                    waiting_since: None,
+                },
+            },
+        ).await?;
+
+        self.signals.publish();
+
+        Ok(())
+    }
+
     async fn get_queued_task_run_attempts(&self) -> anyhow::Result<Vec<TaskRunAttempt>> {
 
         self.crud.select_task_run_attempts(
@@ -596,7 +665,7 @@ impl TaskRunAttemptDispatcher {
     /// here as a log, and the result it left, if any. `None` for a first attempt.
     ///
     /// Written before `started_at`, so a failed write leaves the attempt `Queued` for the
-    /// next pass to try again, the way a missing secret does.
+    /// next pass to try again.
     async fn write_previous_attempt_files(
         &self,
         task_run_attempt: &TaskRunAttempt,
@@ -741,7 +810,6 @@ mod tests {
     use super::*;
     use crate::crud::job_run::JobRunStatus;
     use crate::crud::task_run::TaskRunStatus;
-    use crate::crud::task_run_attempt_output::{InsertTaskRunAttemptOutputData, InsertTaskRunAttemptOutputDataInput};
     use crate::test_support::TestDb;
     use crate::test_support::{a_stdin_nothing_writes_to, read_command_file};
     use crate::test_support::{reading_the_environment, writing_the_environment};
@@ -1658,9 +1726,32 @@ mod tests {
         );
     }
 
-    /// A spawn failure's message has to name the task and the directory itself - otherwise
-    /// it reads identically to `sh` being missing, and a bad working_dir is left to spin
-    /// forever with no way to tell which task or path is at fault.
+    /// The stderr recorded for the attempt, which is where a reason it could not be started
+    /// goes.
+    async fn stderr_of(db: &TestDb, task_run_attempt: &TaskRunAttempt) -> String {
+
+        let outputs = db.crud.select_task_run_attempt_outputs(
+            &*db.conn_pool,
+            &SelectTaskRunAttemptOutputsData {
+                filter: SelectTaskRunAttemptOutputsDataFilter {
+                    id: None,
+                    task_run_attempt_id: Some(task_run_attempt.id),
+                    task_run_id: None,
+                    job_run_id: None,
+                    job_id: None,
+                    task_id: None,
+                    stream: Some(TaskRunAttemptOutputStream::Stderr),
+                },
+                sort: None,
+            },
+        ).await.unwrap();
+
+        outputs.iter().map(|output| output.content.clone()).collect()
+    }
+
+    /// A spawn failure's reason has to name the task and the directory itself - otherwise
+    /// it reads identically to `sh` being missing, with no way to tell which task or path
+    /// is at fault. It goes onto the attempt's stderr, where the dashboard shows it.
     #[tokio::test]
     async fn a_spawn_failure_names_the_task_and_the_working_dir() {
 
@@ -1683,14 +1774,16 @@ mod tests {
             TaskRunAttemptStatus::Queued,
         ).await;
 
-        let error = db.task_run_attempt_dispatcher()
+        db.task_run_attempt_dispatcher()
             .handle(&task_run_attempt)
             .await
-            .unwrap_err()
-            .to_string();
+            .unwrap();
 
-        assert!(error.contains(&task_run.task_id), "{error}");
-        assert!(error.contains("/nope/does/not/exist"), "{error}");
+        let stderr = stderr_of(&db, &task_run_attempt).await;
+
+        assert!(stderr.starts_with("flowlite: "), "{stderr}");
+        assert!(stderr.contains(&task_run.task_id), "{stderr}");
+        assert!(stderr.contains("/nope/does/not/exist"), "{stderr}");
     }
 
     /// Unreachable while `derive_next_status` covers every case, so it is called directly.
@@ -1789,10 +1882,12 @@ mod tests {
         );
     }
 
-    /// A command that cannot be spawned at all must not look like one that was: the
-    /// intent is cleared, so the next pass tries again rather than settling it Invalid.
+    /// A command that cannot be spawned fails its attempt rather than staying Queued,
+    /// where it was re-selected and failed again every pass while its job run held a
+    /// `max_parallel_runs` slot. Failed, so TaskRunMonitor can still retry it, and with no
+    /// `started_at`, since nothing was started.
     #[tokio::test]
-    async fn an_attempt_whose_spawn_fails_is_left_startable() {
+    async fn an_attempt_whose_spawn_fails_is_settled_failed() {
 
         let _environment = reading_the_environment();
 
@@ -1807,12 +1902,44 @@ mod tests {
         ).await;
         let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
 
-        assert!(db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.is_err());
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
 
         let after = db.task_run_attempt(task_run_attempt.id).await;
 
-        assert_eq!(after.status, TaskRunAttemptStatus::Queued);
+        assert_eq!(after.status, TaskRunAttemptStatus::Failed);
         assert!(after.started_at.is_none(), "a failed spawn left the attempt looking spawned");
+        assert!(after.finished_at.is_some());
+        assert!(db.children.remove(task_run_attempt.id).await.is_none());
+    }
+
+    /// A secret nothing defines - a rerun of a row whose YAML has since dropped it, or a
+    /// run submitted by a process that read a newer YAML - fails the attempt the same way,
+    /// with the remedy on its stderr rather than in a log line repeated every second.
+    #[tokio::test]
+    async fn an_attempt_whose_secret_is_not_defined_is_settled_failed() {
+
+        let _environment = reading_the_environment();
+
+        let db = TestDb::new().await;
+
+        let job_run = db.insert_job_run(JobRunStatus::Running).await;
+        let task_run = db.insert_task_run_for_command_with_secret_env(
+            job_run.id,
+            "echo hi",
+            [("WAREHOUSE_PW".to_string(), "warehouse_pw".to_string())].into_iter().collect(),
+        ).await;
+        let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Queued).await;
+
+        db.task_run_attempt_dispatcher().handle(&task_run_attempt).await.unwrap();
+
+        let after = db.task_run_attempt(task_run_attempt.id).await;
+
+        assert_eq!(after.status, TaskRunAttemptStatus::Failed);
+        assert!(after.started_at.is_none());
+
+        let stderr = stderr_of(&db, &task_run_attempt).await;
+
+        assert!(stderr.contains("FLOWLITE_SECRETS__WAREHOUSE_PW"), "{stderr}");
     }
 
     /// Spawned under a stdin nothing ever writes to - a terminal, in production - where a

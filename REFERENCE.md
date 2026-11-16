@@ -312,7 +312,8 @@ templating language to learn.
 [Configuration](#configuration). The name is what travels: it is what a run stores, what
 the dashboard and the task pages show (`PGPASSWORD ← warehouse_pw`), and what `--json`
 returns. The value is looked up once, when the command is spawned, and exists nowhere but
-that one process's environment.
+that one process's environment. A name nothing defines at that moment fails the attempt,
+with the remedy on its stderr; the same goes for a `working_dir` that does not exist.
 
 That makes `env:` the right place for a value you are willing to commit and see on a page —
 a hostname, a flag, a timezone — since merged `env:` values are shown as written on the run

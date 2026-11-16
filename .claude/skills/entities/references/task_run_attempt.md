@@ -9,7 +9,7 @@ One execution of a [`task_run`](task_run.md)'s command — **the only level that
 | `job_run_id` | Foreign key to [`job_run`](job_run.md), carried so the stop check and log views need no join through `task_run`. |
 | `job_id`, `task_id` | Denormalized for the same reason. |
 | `created_at` | Bound from `Toolkit`. **`retry_delay` is measured from this** — when `TaskRunMonitor` decided to retry. |
-| `started_at` | Nullable. Set at spawn, so `NULL` on a `Skipped` attempt says the command never ran. |
+| `started_at` | Nullable. Set at spawn, so `NULL` on a `Skipped` attempt, or a `Failed` one that could not be started, says the command never ran. |
 | `finished_at` | Nullable. Written with every terminal status. |
 | `attempt` | 1 for the first, `last.attempt + 1` for each retry. |
 | `status` | `TaskRunAttemptStatus` — same variants as `TaskRunStatus` but a separate enum; see the [orchestrator skill](../../orchestrator/references/task_run_attempt.md). |
@@ -22,7 +22,7 @@ One execution of a [`task_run`](task_run.md)'s command — **the only level that
 ## Written by
 
 - **Inserted** by `TaskRunMonitor` alone ([src/orchestrator/task_run_monitor.rs](../../../../src/orchestrator/task_run_monitor.rs)), `Queued`: attempt 1 by `get_or_start_task_run_attempt` for a `Running` task run with none, retries by `insert_next_attempt` — one file owning the unique index.
-- **Updated** by `TaskRunAttemptDispatcher` (`Queued` → `Running`/`Skipped`) and `TaskRunAttemptMonitor` (`Running` → terminal). Both can write `Invalid`, reachable from `Queued` and `Running` alike — see [Rows flowlite cannot read](../../orchestrator/SKILL.md#rows-flowlite-cannot-read). `Orchestrator::recover` settles an attempt left `Running` by an earlier process as `Invalid`. When the monitor or recovery settles one as anything but `Succeeded`, it calls `CRUD::stop_child_job_runs` *before* the status write, so a failure is retried next pass.
+- **Updated** by `TaskRunAttemptDispatcher` (`Queued` → `Running`/`Skipped`, or `Failed` with `started_at` NULL when the command cannot be started) and `TaskRunAttemptMonitor` (`Running` → terminal). Both can write `Invalid`, reachable from `Queued` and `Running` alike — see [Rows flowlite cannot read](../../orchestrator/SKILL.md#rows-flowlite-cannot-read). `Orchestrator::recover` settles an attempt left `Running` by an earlier process as `Invalid`. When the monitor or recovery settles one as anything but `Succeeded`, it calls `CRUD::stop_child_job_runs` *before* the status write, so a failure is retried next pass.
 - **`waiting_since`** is written by the waiting process itself — `wait_for_job_run` ([src/shared/wait.rs](../../../../src/shared/wait.rs)), behind `job submit --wait` or an MCP tool's wait run inside the task, via `FLOWLITE_TASK_RUN_ATTEMPT_ID`. Stamped every poll, cleared when the wait returns, only on a `Running` attempt. Never by the orchestrator, which cannot see inside a command.
 
 **Streams do not live here**; stdout/stderr go to [`task_run_attempt_output`](task_run_attempt_output.md). A stream arrives while the command works and is bounded by dropping its middle; `output` is a result, arriving once at the end, refused rather than trimmed. It is per attempt because its file is, so a retry never inherits old bytes; a task's result is the succeeding attempt's `output`, read by `CRUD::select_task_run_outputs` ([src/crud/multistatements/task_run_inputs.rs](../../../../src/crud/multistatements/task_run_inputs.rs)).
