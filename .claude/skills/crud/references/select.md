@@ -4,7 +4,7 @@
 
 ```rust
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Select<Entity>sDataSort { Alphabetical, RowId }
+pub enum Select<Entity>sDataSort { Id, IdDesc }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Select<Entity>sDataFilter {
@@ -21,7 +21,7 @@ pub struct Select<Entity>sData {
 ```
 
 - Filter fields are additive; an empty filter returns everything.
-- `limit`/`offset` are `Option<u32>` on config tables, `Option<i64>` on disk ones (`job_run`, `job_run_stop`, `job_run_notification`) — match the neighbours; the bind casts to `i64` either way. Omit them for tables always read in full for a key (`task_run`, `task_run_attempt`) until a caller paginates.
+- `limit`/`offset` are `Option<i64>` (`job_run`, `job_run_stop`, `job_run_notification`) — match the neighbours; the bind casts to `i64` either way. Omit them for tables always read in full for a key (`task_run`, `task_run_attempt`) until a caller paginates.
 
 ## Query building
 
@@ -33,7 +33,7 @@ where
     E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
 {
     let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> =
-        sqlx::QueryBuilder::new("SELECT widget_id, ... FROM mem.widget WHERE 1=1");
+        sqlx::QueryBuilder::new("SELECT id, ... FROM widget WHERE 1=1");
 
     if let Some(widget_id) = &data.filter.widget_id {
         query_builder.push(" AND widget_id = ");
@@ -42,8 +42,8 @@ where
 
     if let Some(sort) = &data.sort {
         match sort {
-            SelectWidgetsDataSort::Alphabetical => query_builder.push(" ORDER BY widget_id ASC"),
-            SelectWidgetsDataSort::RowId => query_builder.push(" ORDER BY row_id ASC"),
+            SelectWidgetsDataSort::Id => query_builder.push(" ORDER BY id ASC"),
+            SelectWidgetsDataSort::IdDesc => query_builder.push(" ORDER BY id DESC"),
         };
     }
 
@@ -58,14 +58,13 @@ where
 ```
 
 - Explicit column list, never `SELECT *`: it must match the row struct's `FromRow` field names and order.
-- Sort: support at least creation order — `RowId` for config tables, `Id`/`IdDesc` for autoincrement run tables.
+- Sort: support at least creation order — `Id`/`IdDesc`.
 
 ### Filter kinds
 
 | Kind | Shape |
 |---|---|
 | Equality | `AND col = <bind>` when `Some` |
-| Substring | `name_like` binds `format!("%{}%", name)` to `LIKE` (`SelectJobsDataFilter` in [src/crud/job.rs](../../../../src/crud/job.rs), `SelectSchedulesDataFilter`) |
 | Comparison | name the operator: `scheduled_at_gt` → `AND scheduled_at > <bind>` (`DeleteJobRunsDataFilter` in [src/crud/job_run.rs](../../../../src/crud/job_run.rs)); an unsuffixed name is equality |
 | Bool | bind `if v { 1 } else { 0 }` |
 | Enum | bind directly |
@@ -91,7 +90,7 @@ pub struct CountJobRunsData {
 
 ### Joins
 
-**No `select_*` joins today.** First ask whether the column belongs on the row: joining disk to `mem` ties durable rows to config re-seeded every start (why `job_run` carries `job_name`, written by `CRUD::submit_job`, instead of joining `mem.job`). A justified join goes in the base query, with every table aliased and every column prefixed (`FROM job_run jr JOIN mem.job j ON j.job_id = jr.job_id`), not a second round-trip.
+**No `select_*` joins today.** First ask whether the column belongs on the row (why `job_run` carries `job_name`, written by `CRUD::submit_job`: the job's YAML may be gone by the time anyone reads the run). A justified join goes in the base query, with every table aliased and every column prefixed (`FROM task_run tr JOIN job_run jr ON jr.id = tr.job_run_id`), not a second round-trip.
 
 ## Singular helper
 
@@ -106,7 +105,7 @@ where
 }
 ```
 
-It doesn't add `LIMIT 1`; callers pass `limit: Some(1)` if they want. `task_run_attempt` (read in full) has none. `schedule_job`'s is misnamed `select_schedule_job_internal` ([src/crud/schedule_job.rs](../../../../src/crud/schedule_job.rs)) — copy the shape, not the name.
+It doesn't add `LIMIT 1`; callers pass `limit: Some(1)` if they want. `task_run_attempt` (read in full) has none.
 
 ## Row struct
 

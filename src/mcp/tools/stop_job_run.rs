@@ -72,10 +72,9 @@ async fn stop_job_run_and_wait(
             .map_err(describe_unserved_data_dir)?;
     }
 
-    let toolkit = toolkit.with_fresh_mem();
     let mut conn = toolkit.get_conn().await?;
 
-    let crud = CRUD::new(Arc::new(toolkit));
+    let crud = CRUD::new(Arc::new(toolkit.clone()));
 
     request_job_run_stop(&crud, &mut conn, args.job_run_id).await?;
 

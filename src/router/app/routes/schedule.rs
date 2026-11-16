@@ -5,9 +5,7 @@ use axum::Extension;
 
 use crate::router::app::middlewares::session::SignedIn;
 use crate::cron_trigger::CronTrigger;
-use crate::crud::CRUD;
-use crate::crud::schedule::{SelectSchedulesData, SelectSchedulesDataFilter, SelectSchedulesDataSort};
-use crate::crud::schedule_job::{ScheduleJob, SelectScheduleJobsData, SelectScheduleJobsDataFilter, SelectScheduleJobsDataSort};
+use crate::declared::ScheduleJob;
 use crate::router::app::app_state::AppState;
 use crate::shared::format;
 
@@ -37,52 +35,33 @@ struct ScheduleIdRouteTemplate {
 
 pub async fn schedule_id_route(
     State(state): State<AppState>,
-    Extension(crud): Extension<CRUD>,
     Path(schedule_id): Path<String>,
     signed_in: Option<Extension<SignedIn>>,
 ) -> impl IntoResponse {
-    let conn = &*state.conn_pool;
-
-    let schedule = crud.select_schedule(conn, &SelectSchedulesData {
-        filter: SelectSchedulesDataFilter {
-            schedule_id: Some(schedule_id.clone()),
-            name_like: None,
-            ..Default::default()
-        },
-        sort: Some(SelectSchedulesDataSort::RowId),
-        limit: None,
-        offset: None,
-    }).await.unwrap_or_default();
-
-    let schedule = match schedule {
-        Some(schedule) => schedule,
-        None => return Html("Schedule not found".to_string()).into_response(),
+    let Some(schedule) = state.declared.schedule(&schedule_id) else {
+        return Html("Schedule not found".to_string()).into_response();
     };
 
-    let schedule_jobs = crud.select_schedule_jobs(conn, &SelectScheduleJobsData {
-        filter: SelectScheduleJobsDataFilter {
-            schedule_id: Some(schedule.schedule_id.clone()),
-            ..Default::default()
-        },
-        sort: Some(SelectScheduleJobsDataSort::RowId),
-        limit: None,
-        offset: None,
-    }).await.unwrap_or_default();
+    let schedule_jobs: Vec<ScheduleJob> = state.declared
+        .jobs_of_schedule(&schedule.schedule_id)
+        .into_iter()
+        .cloned()
+        .collect();
 
-    // Derived here rather than stored on the row: it is the next occurrence after now,
-    // which is a different answer every time it is asked and nothing else reads.
-    let next_run = CronTrigger::from_schedule(&schedule).get_next_run(None);
+    // Derived here rather than stored: it is the next occurrence after now, which is a
+    // different answer every time it is asked and nothing else reads.
+    let next_run = CronTrigger::from_schedule(schedule).get_next_run(None);
 
     let template = ScheduleIdRouteTemplate {
         current_route: "schedules",
         theme: state.toolkit.app_config.ui.theme.as_attribute(),
         signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         schedule: ScheduleDisplay {
-            schedule_id: schedule.schedule_id,
-            name: schedule.name,
-            description: schedule.description,
-            cron: schedule.cron,
-            timezone: schedule.timezone,
+            schedule_id: schedule.schedule_id.clone(),
+            name: schedule.name.clone(),
+            description: schedule.description.clone(),
+            cron: schedule.cron.clone(),
+            timezone: schedule.timezone.clone(),
             start_date: schedule.start_date.map(|date| date.to_string()),
             end_date: schedule.end_date.map(|date| date.to_string()),
             next_run: next_run.map(format::timestamp),

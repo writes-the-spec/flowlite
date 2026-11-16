@@ -2,9 +2,8 @@
 //!
 //! A task that waits on another run held a concurrency slot for the length of the wait, so
 //! with the global cap at 1 the child could never be dispatched and the parent waited until
-//! its attempt timed out. Driven through the built binary rather than as a unit test for the
-//! reason `tests/adhoc_submit.rs` gives: the run goes through `mem`, and `mem` is one
-//! shared-cache database per process.
+//! its attempt timed out. Driven through the built binary, since the deadlock only shows
+//! with a real server dispatching a real child run.
 
 use std::path::PathBuf;
 use std::time::Duration;

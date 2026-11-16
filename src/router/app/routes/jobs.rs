@@ -5,9 +5,7 @@ use axum::Extension;
 use serde::Deserialize;
 
 use crate::router::app::middlewares::session::SignedIn;
-use crate::crud::CRUD;
-use crate::crud::job::{SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
-use crate::crud::task::{SelectTasksData, SelectTasksDataFilter};
+use crate::declared::Job;
 use crate::router::app::app_state::AppState;
 
 pub struct JobEntry {
@@ -45,12 +43,9 @@ fn jobs_href(page: u32, name_like: Option<&str>) -> String {
 
 pub async fn jobs_route(
     State(state): State<AppState>,
-    Extension(crud): Extension<CRUD>,
     Query(query): Query<JobsRouteQuery>,
     signed_in: Option<Extension<SignedIn>>,
 ) -> impl IntoResponse {
-    let conn = &*state.conn_pool;
-
     let page_size = state.toolkit.app_config.ui.page_size;
 
     let page = query.page.unwrap_or(1).max(1);
@@ -60,38 +55,33 @@ pub async fn jobs_route(
     // filter on the empty name.
     let name_like = query.job_name_like.filter(|name| !name.is_empty());
 
-    let jobs = crud.select_jobs(conn, &SelectJobsData {
-        filter: SelectJobsDataFilter {
-            name_like: name_like.clone(),
-            ..Default::default()
-        },
-        sort: Some(SelectJobsDataSort::RowId),
-        limit: Some(page_size + 1), // One extra row tells us whether a next page exists.
-        offset: Some(offset),
-    }).await.unwrap_or_default();
+    let name_like_lowercase = name_like.as_deref().map(str::to_lowercase);
 
-    let has_next_page = jobs.len() > page_size as usize;
+    let matching: Vec<&Job> = state.declared.jobs
+        .iter()
+        .filter(|job| match &name_like_lowercase {
+            Some(name) => job.name.to_lowercase().contains(name),
+            None => true,
+        })
+        .collect();
 
-    let mut entries = Vec::new();
+    let has_next_page = matching.len() > (offset + page_size) as usize;
 
-    for job in jobs.into_iter().take(page_size as usize) {
-        let tasks = crud.select_tasks(conn, &SelectTasksData {
-            filter: SelectTasksDataFilter {
-                job_id: Some(job.job_id.clone()),
-                ..Default::default()
-            },
-            sort: None,
-            limit: None,
-            offset: None,
-        }).await.unwrap_or_default();
+    let entries = matching
+        .into_iter()
+        .skip(offset as usize)
+        .take(page_size as usize)
+        .map(|job| {
+            let task_count = state.declared.tasks_of(&job.job_id).len();
 
-        entries.push(JobEntry {
-            job_id: job.job_id,
-            name: job.name,
-            description: job.description,
-            task_count: format!("{} task{}", tasks.len(), if tasks.len() == 1 { "" } else { "s" }),
-        });
-    }
+            JobEntry {
+                job_id: job.job_id.clone(),
+                name: job.name.clone(),
+                description: job.description.clone(),
+                task_count: format!("{} task{}", task_count, if task_count == 1 { "" } else { "s" }),
+            }
+        })
+        .collect();
 
     let prev_href = if page > 1 {
         Some(jobs_href(page - 1, name_like.as_deref()))

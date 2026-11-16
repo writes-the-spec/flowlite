@@ -3,8 +3,7 @@ use chrono::{DateTime, Utc};
 use crate::cron_trigger::CronTrigger;
 use crate::crud::CRUD;
 use crate::crud::job_run::{JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
-use crate::crud::schedule::{Schedule, SelectSchedulesData, SelectSchedulesDataFilter, SelectSchedulesDataSort};
-use crate::crud::schedule_job::{ScheduleJob, SelectScheduleJobsData, SelectScheduleJobsDataFilter, SelectScheduleJobsDataSort};
+use crate::declared::{Declared, Schedule, ScheduleJob};
 use crate::poller::Service;
 use crate::signals::Signals;
 use crate::toolkit::Toolkit;
@@ -16,6 +15,7 @@ use crate::toolkit::Toolkit;
 pub struct Scheduler {
     pub toolkit: Arc<Toolkit>,
     pub crud: Arc<CRUD>,
+    pub declared: Arc<Declared>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
     pub signals: Arc<Signals>,
 }
@@ -36,12 +36,14 @@ impl Scheduler {
     pub fn new(
         toolkit: Arc<Toolkit>,
         crud: Arc<CRUD>,
+        declared: Arc<Declared>,
         conn_pool: Arc<sqlx::SqlitePool>,
         signals: Arc<Signals>,
     ) -> Self {
         Self {
             toolkit,
             crud,
+            declared,
             conn_pool,
             signals,
         }
@@ -60,7 +62,7 @@ impl Scheduler {
         let desired = CronTrigger::from_schedule(schedule)
             .get_next_runs(Some(now), schedule.submit_ahead);
 
-        let schedule_jobs = self.schedule_jobs(schedule).await?;
+        let schedule_jobs = self.declared.jobs_of_schedule(&schedule.schedule_id);
 
         for occurrence in &desired {
             for schedule_job in &schedule_jobs {
@@ -118,8 +120,9 @@ impl Scheduler {
         // anyway.
         if let Err(e) = self.crud.submit_job(
             &mut conn,
+            &self.declared,
             &schedule_job.job_id,
-            &schedule_job.parameters.0,
+            &schedule_job.parameters,
             occurrence,
             Some(&schedule.schedule_id),
             None,
@@ -137,40 +140,6 @@ impl Scheduler {
 
         Ok(())
     }
-
-    /// Every schedule, not only the due ones: "due" is not a question this service asks at
-    /// all.
-    async fn get_schedules(&self) -> anyhow::Result<Vec<Schedule>> {
-
-        self.crud.select_schedules(
-            &*self.conn_pool,
-            &SelectSchedulesData {
-                filter: SelectSchedulesDataFilter::default(),
-                sort: Some(SelectSchedulesDataSort::RowId),
-                limit: None,
-                offset: None,
-            },
-        ).await
-    }
-
-    /// Read once per pass, so "which jobs does this schedule name?" is one answer for every
-    /// occurrence of the pass.
-    async fn schedule_jobs(&self, schedule: &Schedule) -> anyhow::Result<Vec<ScheduleJob>> {
-
-        self.crud.select_schedule_jobs(
-            &*self.conn_pool,
-            &SelectScheduleJobsData {
-                filter: SelectScheduleJobsDataFilter {
-                    schedule_id: Some(schedule.schedule_id.clone()),
-                    ..Default::default()
-                },
-                sort: Some(SelectScheduleJobsDataSort::RowId),
-                limit: None,
-                offset: None,
-            }
-        ).await
-    }
-
 }
 
 
@@ -185,8 +154,10 @@ impl Service for Scheduler {
         format!("schedule {}", schedule.schedule_id)
     }
 
+    /// Every schedule, not only the due ones: "due" is not a question this service asks at
+    /// all.
     async fn select(&self) -> anyhow::Result<Vec<Schedule>> {
-        self.get_schedules().await
+        Ok(self.declared.schedules.clone())
     }
 
     async fn handle(&self, schedule: &Schedule) -> anyhow::Result<()> {
@@ -230,17 +201,11 @@ mod tests {
         }).await.unwrap()
     }
 
-    /// `new_with_migrated_mem`, not `new`: a schedule lives in `mem`, which the plain
-    /// constructor leaves unmigrated on purpose - see `TestDb`'s own doc comment.
-    async fn scheduled_db() -> (TestDb, sqlx::SqliteConnection) {
-        TestDb::new_with_migrated_mem().await
-    }
-
     #[tokio::test]
     async fn a_schedule_submits_its_next_occurrence_before_it_is_due() {
 
-        let (db, _mem_conn) = scheduled_db().await;
-        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
+        let db = TestDb::new().await;
+        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1);
 
         db.scheduler().handle(&schedule).await.unwrap();
 
@@ -255,8 +220,8 @@ mod tests {
     #[tokio::test]
     async fn a_second_pass_submits_nothing_new() {
 
-        let (db, _mem_conn) = scheduled_db().await;
-        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
+        let db = TestDb::new().await;
+        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1);
 
         db.scheduler().handle(&schedule).await.unwrap();
         let first = outstanding(&db, "nightly").await;
@@ -288,8 +253,8 @@ mod tests {
     #[tokio::test]
     async fn a_released_occurrence_is_topped_up_on_the_next_pass() {
 
-        let (db, _mem_conn) = scheduled_db().await;
-        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
+        let db = TestDb::new().await;
+        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1);
 
         let past_due = db.insert_job_run_at(
             JobRunStatus::Scheduled,
@@ -316,8 +281,8 @@ mod tests {
     #[tokio::test]
     async fn a_stopped_future_occurrence_is_not_submitted_again() {
 
-        let (db, _mem_conn) = scheduled_db().await;
-        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
+        let db = TestDb::new().await;
+        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1);
 
         db.scheduler().handle(&schedule).await.unwrap();
 
@@ -348,8 +313,8 @@ mod tests {
     #[tokio::test]
     async fn a_deleted_occurrence_is_submitted_again() {
 
-        let (db, _mem_conn) = scheduled_db().await;
-        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
+        let db = TestDb::new().await;
+        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1);
 
         db.scheduler().handle(&schedule).await.unwrap();
 
@@ -378,13 +343,13 @@ mod tests {
     #[tokio::test]
     async fn an_occurrence_already_submitted_is_not_submitted_again_after_a_restart() {
 
-        let (db, _mem_conn) = scheduled_db().await;
-        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
+        let db = TestDb::new().await;
+        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1);
 
         db.scheduler().handle(&schedule).await.unwrap();
 
         // Exactly what a restart does: the row is seeded fresh from the YAML.
-        let reseeded = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
+        let reseeded = db.seed_schedule("nightly", "0 0 3 * * *", 1);
 
         db.scheduler().handle(&reseeded).await.unwrap();
 
@@ -396,9 +361,9 @@ mod tests {
     #[tokio::test]
     async fn every_job_of_a_schedule_gets_its_own_run() {
 
-        let (db, _mem_conn) = scheduled_db().await;
+        let db = TestDb::new().await;
 
-        let both = db.seed_schedule_with_jobs("nightly", "0 0 3 * * *", 1, &["job", "second-job"]).await;
+        let both = db.seed_schedule_with_jobs("nightly", "0 0 3 * * *", 1, &["job", "second-job"]);
 
         db.scheduler().handle(&both).await.unwrap();
         db.scheduler().handle(&both).await.unwrap();
@@ -412,12 +377,12 @@ mod tests {
     #[tokio::test]
     async fn raising_submit_ahead_submits_the_extra_occurrences() {
 
-        let (db, _mem_conn) = scheduled_db().await;
+        let db = TestDb::new().await;
 
-        let one = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
+        let one = db.seed_schedule("nightly", "0 0 3 * * *", 1);
         db.scheduler().handle(&one).await.unwrap();
 
-        let three = db.seed_schedule("nightly", "0 0 3 * * *", 3).await;
+        let three = db.seed_schedule("nightly", "0 0 3 * * *", 3);
         db.scheduler().handle(&three).await.unwrap();
 
         assert_eq!(outstanding(&db, "nightly").await.len(), 3);
@@ -429,12 +394,12 @@ mod tests {
     #[tokio::test]
     async fn lowering_submit_ahead_leaves_the_runs_already_submitted() {
 
-        let (db, _mem_conn) = scheduled_db().await;
+        let db = TestDb::new().await;
 
-        let three = db.seed_schedule("nightly", "0 0 3 * * *", 3).await;
+        let three = db.seed_schedule("nightly", "0 0 3 * * *", 3);
         db.scheduler().handle(&three).await.unwrap();
 
-        let one = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
+        let one = db.seed_schedule("nightly", "0 0 3 * * *", 1);
         db.scheduler().handle(&one).await.unwrap();
 
         assert_eq!(outstanding(&db, "nightly").await.len(), 3);
@@ -445,8 +410,8 @@ mod tests {
     #[tokio::test]
     async fn a_run_nobody_scheduled_does_not_stand_in_for_an_occurrence() {
 
-        let (db, _mem_conn) = scheduled_db().await;
-        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1).await;
+        let db = TestDb::new().await;
+        let schedule = db.seed_schedule("nightly", "0 0 3 * * *", 1);
 
         let manual = db.insert_job_run_at(
             JobRunStatus::Scheduled,

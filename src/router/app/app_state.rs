@@ -1,9 +1,9 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use sqlx::{SqlitePool, SqliteConnection};
+use sqlx::SqlitePool;
+use crate::declared::Declared;
 use crate::signals::Signals;
 use crate::toolkit::Toolkit;
-use tokio::sync::Mutex;
 use crate::auth::{IdpClient, SessionStore};
 use crate::router::app::session_cookie::SessionCookie;
 
@@ -12,17 +12,15 @@ use crate::router::app::session_cookie::SessionCookie;
 pub struct AppState {
     pub toolkit: Arc<Toolkit>,
     pub conn_pool: Arc<SqlitePool>,
+    /// The jobs and schedules `serve` loaded at startup. The dashboard shows these, not
+    /// whatever the YAML says now.
+    pub declared: Arc<Declared>,
     pub signals: Arc<Signals>,
     /// None when flowlite.toml has no `[auth]`, and the dashboard has no login.
     pub auth: Option<Arc<DashboardAuth>>,
     /// Bound to loopback with no `[auth]`, where `loopback_host_middleware` refuses a
     /// request naming any other host.
     pub host_must_be_loopback: bool,
-    /// Never read, and held for exactly that reason: a `mode=memory` SQLite database
-    /// exists only while something has it open, so dropping this would take `mem`'s schema
-    /// and every seeded job with it while the pool went on attaching an empty one.
-    #[allow(dead_code)]
-    memory_conn: Arc<Mutex<SqliteConnection>>,
 }
 
 
@@ -33,7 +31,7 @@ impl AppState {
     pub fn new(
         toolkit: Arc<Toolkit>,
         conn_pool: Arc<SqlitePool>,
-        memory_conn: Arc<Mutex<SqliteConnection>>,
+        declared: Arc<Declared>,
         signals: Arc<Signals>,
         bound: SocketAddr,
     ) -> Self {
@@ -51,10 +49,10 @@ impl AppState {
         Self {
             toolkit,
             conn_pool,
+            declared,
             signals,
             auth,
             host_must_be_loopback,
-            memory_conn,
         }
     }
 

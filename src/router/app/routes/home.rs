@@ -6,8 +6,7 @@ use serde::Deserialize;
 
 use crate::router::app::middlewares::session::SignedIn;
 use crate::app_config::AppConfig;
-use crate::crud::CRUD;
-use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
+use crate::declared::Job;
 use crate::crud::job_run::JobRunStatus;
 use crate::router::app::app_state::AppState;
 use crate::shared::format;
@@ -103,7 +102,6 @@ struct HomeRouteTemplate {
 }
 
 pub async fn home_route(
-    Extension(crud): Extension<CRUD>,
     State(state): State<AppState>,
     Query(query): Query<HomeQuery>,
     signed_in: Option<Extension<SignedIn>>,
@@ -114,12 +112,8 @@ pub async fn home_route(
     let page_size = query.page_size(app_config);
     let filter_job_id = query.job_id();
 
-    let jobs = crud.select_jobs(&*state.conn_pool, &SelectJobsData {
-        filter: SelectJobsDataFilter::default(),
-        sort: Some(SelectJobsDataSort::Alphabetical),
-        limit: None,
-        offset: None,
-    }).await.unwrap_or_default();
+    let mut jobs: Vec<Job> = state.declared.jobs.clone();
+    jobs.sort_by(|a, b| a.name.cmp(&b.name));
 
     let mut status_chips = vec![StatusChip {
         label: "all",

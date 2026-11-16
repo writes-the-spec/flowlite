@@ -33,7 +33,7 @@ File names mirror `src/crud/` and the `entities` skill. It is not a layer every 
 
 ## What does NOT go in src/shared/
 
-- **Wording.** Shared raises a typed value, never a finished sentence, because the frontends disagree on the remedy. `ensure_data_dir_is_served` raises `DataDirNotServed`; the CLI's `describe_unserved_data_dir` ([src/cli/commands/job.rs](../../../src/cli/commands/job.rs)) says "drop `--wait`", the MCP one in [src/mcp/tools/result.rs](../../../src/mcp/tools/result.rs) names no flag. Same pattern one layer down: `JobIdAlreadyInstalled` in [src/crud/multistatements/ad_hoc_job.rs](../../../src/crud/multistatements/ad_hoc_job.rs).
+- **Wording.** Shared raises a typed value, never a finished sentence, because the frontends disagree on the remedy. `ensure_data_dir_is_served` raises `DataDirNotServed`; the CLI's `describe_unserved_data_dir` ([src/cli/commands/job.rs](../../../src/cli/commands/job.rs)) says "drop `--wait`", the MCP one in [src/mcp/tools/result.rs](../../../src/mcp/tools/result.rs) names no flag. Same pattern one layer down: `JobIdAlreadyInstalled` in [src/declared/ad_hoc_job.rs](../../../src/declared/ad_hoc_job.rs).
 - **One frontend's policy.** `clamp_wait_seconds`'s 300-second ceiling stays in [src/mcp/wait.rs](../../../src/mcp/wait.rs): it is about MCP client timeouts, and `--wait` has none.
 - **Anything one frontend uses.** The bar is callers in two frontends.
 

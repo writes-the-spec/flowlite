@@ -55,15 +55,14 @@ struct Limits {
 
 /// Reads `flowlite.toml` for the maxima and the disk tables for the counts, which is all
 /// `flowlite limits` reads too - so it answers for a directory whose server is down, and
-/// neither seeds `mem` nor holds a memory connection, exactly as that command does not.
+/// loads no job YAML, exactly as that command does not.
 async fn limits_rows(toolkit: &Toolkit) -> anyhow::Result<Limits> {
-    let toolkit = toolkit.with_fresh_mem();
 
     let max_running_attempts = toolkit.app_config.orchestrator.max_running_attempts;
     let concurrency_limits = toolkit.app_config.concurrency_limits.clone();
 
     let mut conn = toolkit.get_conn().await?;
-    let crud = CRUD::new(Arc::new(toolkit));
+    let crud = CRUD::new(Arc::new(toolkit.clone()));
 
     let running_attempts = crud.count_running_attempts(&mut conn).await?;
     let claimed_limit_slots = crud.claimed_limit_slots(&mut conn).await?;

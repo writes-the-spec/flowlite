@@ -16,11 +16,11 @@
     "should_trigger": true
   },
   {
-    "query": "new table for storing resolved dag edges, seeded from the job yaml on startup. what do i use as the primary key - autoincrement id or something else",
+    "query": "new table for storing resolved dag edges per run. what do i use as the primary key - autoincrement id or something else",
     "should_trigger": true
   },
   {
-    "query": "can task_run_attempt_output have a foreign key to mem.task? i want the db to enforce that the task still exists",
+    "query": "can task_run_attempt_output have a foreign key to job_run? i want the db to enforce that the run still exists",
     "should_trigger": true
   },
   {
@@ -36,11 +36,11 @@
     "should_trigger": true
   },
   {
-    "query": "writing the migration for a new task_run_label table. where does the file go, whats the filename format, and does it need the mem. prefix inside",
+    "query": "writing the migration for a new task_run_label table. where does the file go and whats the filename format",
     "should_trigger": true
   },
   {
-    "query": "adding a task_run_log table for structured logs. does that belong in the mem schema or on disk?",
+    "query": "adding a task_run_log entity for structured logs. does it belong in Declared or in flowlite.db?",
     "should_trigger": false
   },
   {
@@ -52,7 +52,7 @@
     "should_trigger": false
   },
   {
-    "query": "why is mem.job empty when i query it from a second connection inside my new background task? the pool one sees the rows fine",
+    "query": "why does my new background task see no jobs in Declared when serve's dashboard shows them?",
     "should_trigger": false
   },
   {

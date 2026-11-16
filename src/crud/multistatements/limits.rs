@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use sqlx::SqliteConnection;
 
 use crate::crud::CRUD;
-use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
+use crate::declared::Declared;
 use crate::crud::job_run::{JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter};
 use crate::crud::task_run_attempt::{
@@ -33,24 +33,16 @@ impl CRUD {
 
     /// Whether the job already has as many runs in flight as it allows. Only a running
     /// job run holds a slot — a queued one is waiting for exactly this answer — and a
-    /// max_parallel_runs of 0 means the job has no limit at all.
+    /// max_parallel_runs of 0 means the job has no limit at all. So does a job `declared`
+    /// does not hold: an ad-hoc run, or one whose YAML has since been deleted.
     pub async fn is_job_at_max_parallel_runs(
         &self,
         conn: &mut SqliteConnection,
+        declared: &Declared,
         job_id: &str,
     ) -> anyhow::Result<bool> {
 
-        let job = self.select_job(&mut *conn, &SelectJobsData {
-            filter: SelectJobsDataFilter {
-                job_id: Some(job_id.to_string()),
-                ..Default::default()
-            },
-            sort: None,
-            limit: Some(1),
-            offset: None,
-        }).await?;
-
-        let Some(job) = job else {
+        let Some(job) = declared.job(job_id) else {
             return Ok(false);
         };
 

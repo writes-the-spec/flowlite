@@ -2,11 +2,8 @@
 //! the pure policy underneath it.
 
 use std::collections::BTreeMap;
-use sqlx::SqliteConnection;
 
-use crate::crud::CRUD;
-use crate::crud::job::{SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
-use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort};
+use super::declared::Declared;
 
 /// One `secret_env:` entry a job or a task declared — the unit
 /// `first_unsatisfied_secret_reference` checks against the secrets `serve` was actually
@@ -22,14 +19,8 @@ struct SecretEnvReference<'a> {
 
 /// The first reference the given secrets do not satisfy, in the order the caller collected
 /// them - `check_secret_env_is_satisfied` collects every job's declaration before any
-/// task's, and each in the row_id order `CRUD::init` assigned, so "first" means the first
-/// one a person reading the YAML top to bottom would reach.
-///
-/// Pure and database-free on purpose: `check_secret_env_is_satisfied` reads real
-/// `mem.job`/`mem.task` rows, and seeding `mem` inside a test to exercise this logic would
-/// race every other test's pooled connection over `mem`'s shared-cache schema lock - the
-/// "database schema is locked: mem" hazard `TestDb`'s doc comment documents and Task 3
-/// already hit. So every case of the policy belongs here, where it needs no seeding at all.
+/// task's, and each in reading order, so "first" means the first one a person reading the
+/// YAML top to bottom would reach.
 fn first_unsatisfied_secret_reference<'a, 'b>(
     references: &'b [SecretEnvReference<'a>],
     secrets: &BTreeMap<String, String>,
@@ -43,10 +34,8 @@ fn first_unsatisfied_secret_reference<'a, 'b>(
 /// itself is the cause: a task's own declaration reads as "task '<id>'", and a job-level one
 /// with no task of its own reads as "job '<id>'" rather than naming a task that isn't there.
 ///
-/// The job's YAML path is not on the `mem.job` row `check_secret_env_is_satisfied` reads
-/// this from, so unlike the design's own example this message names only the job and the
-/// task, not the file - carrying the path through would mean putting it onto that row for a
-/// check that only ever runs once, at startup.
+/// The job's YAML path is not on `Job`, so this message names only the job and the task,
+/// not the file.
 fn unsatisfied_secret_reference_error(reference: &SecretEnvReference) -> anyhow::Error {
 
     let declarer = match reference.task_id {
@@ -64,74 +53,37 @@ fn unsatisfied_secret_reference_error(reference: &SecretEnvReference) -> anyhow:
     ).context(format!("Job '{}'", reference.job_id))
 }
 
-impl CRUD {
+impl Declared {
 
     /// Refuses when a job's or a task's `secret_env:` names a secret `secrets` does not
     /// define - the check that keeps the spawn-time bail in `build_task_run_attempt_env`
-    /// off the path of anything this process serves. Not off it entirely: this reads the
-    /// declarations `init` seeded into `mem` at startup, so a rerun replaying a row whose
-    /// YAML has since changed, or a run `job submit` created in another process from a
-    /// YAML this server never read, still reaches that bail - which is why it names the
-    /// job and the task and carries this message's remedy rather than deferring to it.
-    /// Called from `serve.rs` alone, after `init` and before the bind: see the comment at
-    /// that call site for why it cannot live in `init` itself.
+    /// off the path of anything `serve` runs. Not off it entirely: a rerun replaying a row
+    /// whose YAML has since changed, or a run `job submit` created in another process from
+    /// a YAML this server never read, still reaches that bail - which is why that bail
+    /// names the job and the task and carries this message's remedy too.
     ///
-    /// Deliberately conservative about the other thing `submit_job` knows and this does
-    /// not: `job_run_task_definition` evicts a job-level `secret_env` name from the merged
-    /// map when a task declares that same name in its own `env`, so a job whose every task
-    /// overrides `secret_env: {PW: x}` that way submits no row referencing `x` at all -
-    /// and this still refuses to start over it. That asymmetry is chosen, not overlooked.
-    /// Modelling the eviction would mean duplicating the merge here, so the two places
-    /// that reason about these declarations could then disagree about which references are
-    /// live - and the failure mode of disagreeing is a job that starts and bails at 03:00,
-    /// which is the outcome this check exists to prevent. Refusing a declaration nothing
-    /// would have read costs one YAML edit, at startup, with the job and the name in the
-    /// message; the remedy is to drop the `secret_env` entry no task uses.
+    /// Deliberately conservative: `job_run_task_definition` evicts a job-level
+    /// `secret_env` name from the merged map when a task declares that same name in its
+    /// own `env`, and this still refuses over it. Modelling the eviction would duplicate
+    /// the merge, and two places disagreeing about which references are live fails as a
+    /// job that starts and bails at 03:00. Refusing costs one YAML edit, at startup.
     ///
-    /// Its own coverage is the integration test in `tests/serve_secret_check.rs`, not a
-    /// unit test: collecting real declarations here means reading real `mem.job`/
-    /// `mem.task` rows, which needs `init` to have seeded `mem` first, and `mem` is one
-    /// shared-cache name for the whole test binary (see `TestDb`) - seeding
-    /// it from a test races every other test's pooled connection over its schema lock. The
-    /// policy this delegates to, `first_unsatisfied_secret_reference`, carries the
-    /// exhaustive unit coverage instead; this function does only a query each, a collect,
-    /// and the delegate.
     /// `job_id` scopes the check. `serve` passes `None` and asks about the whole data
     /// directory, which is what it is about to run. `job submit -f` passes its own id and
-    /// must not ask about anything else: by then this same `mem` also holds every installed
-    /// job, and an installed job's unsatisfied secret is no reason to refuse a submit that
-    /// has nothing to do with it.
-    pub async fn check_secret_env_is_satisfied(
+    /// must not ask about anything else: an installed job's unsatisfied secret is no reason
+    /// to refuse a submit that has nothing to do with it.
+    pub fn check_secret_env_is_satisfied(
         &self,
-        conn: &mut SqliteConnection,
         secrets: &BTreeMap<String, String>,
         job_id: Option<&str>,
     ) -> anyhow::Result<()> {
 
-        let jobs = self.select_jobs(&mut *conn, &SelectJobsData {
-            filter: SelectJobsDataFilter {
-                job_id: job_id.map(str::to_string),
-                ..Default::default()
-            },
-            sort: Some(SelectJobsDataSort::RowId),
-            limit: None,
-            offset: None,
-        }).await?;
-
-        let tasks = self.select_tasks(&mut *conn, &SelectTasksData {
-            filter: SelectTasksDataFilter {
-                job_id: job_id.map(str::to_string),
-                ..Default::default()
-            },
-            sort: Some(SelectTasksDataSort::RowId),
-            limit: None,
-            offset: None,
-        }).await?;
+        let in_scope = |declared_by: &str| job_id.is_none_or(|job_id| job_id == declared_by);
 
         let mut references: Vec<SecretEnvReference> = Vec::new();
 
-        for job in jobs.iter() {
-            for (variable_name, secret_name) in job.secret_env.0.iter() {
+        for job in self.jobs.iter().filter(|job| in_scope(&job.job_id)) {
+            for (variable_name, secret_name) in job.secret_env.iter() {
                 references.push(SecretEnvReference {
                     job_id: &job.job_id,
                     task_id: None,
@@ -141,8 +93,8 @@ impl CRUD {
             }
         }
 
-        for task in tasks.iter() {
-            for (variable_name, secret_name) in task.secret_env.0.iter() {
+        for task in self.tasks.iter().filter(|task| in_scope(&task.job_id)) {
+            for (variable_name, secret_name) in task.secret_env.iter() {
                 references.push(SecretEnvReference {
                     job_id: &task.job_id,
                     task_id: Some(&task.task_id),
@@ -285,5 +237,43 @@ mod tests {
         let error = format!("{:?}", unsatisfied_secret_reference_error(&reference));
 
         assert!(error.contains("FLOWLITE_SECRETS__WAREHOUSE_READ_ONLY_PW"), "{error}");
+    }
+
+    fn declared_with_secret_env(job_id: &str, task_id: &str, secret_name: &str) -> Declared {
+        let yaml = format!("
+id: {job_id}
+name: Job
+tasks:
+  - id: {task_id}
+    command: ./run.sh
+    secret_env:
+      PGPASSWORD: {secret_name}
+");
+        let mut declared = Declared::default();
+        declared.add_job(
+            &crate::app_config::AppConfig::default(),
+            serde_yaml::from_str(&yaml).unwrap(),
+            std::path::Path::new("job.yaml"),
+        ).unwrap();
+        declared
+    }
+
+    #[test]
+    fn the_whole_data_directory_is_checked_when_no_job_is_named() {
+        let declared = declared_with_secret_env("nightly-sync", "load", "warehouse_pw");
+
+        let error = format!("{:?}", declared.check_secret_env_is_satisfied(&map(&[]), None).unwrap_err());
+
+        assert!(error.contains("task 'load'"), "{error}");
+    }
+
+    /// `job submit -f` names its own job, and another job's missing secret is not its
+    /// problem.
+    #[test]
+    fn a_job_named_in_scope_ignores_every_other_job() {
+        let declared = declared_with_secret_env("nightly-sync", "load", "warehouse_pw");
+
+        assert!(declared.check_secret_env_is_satisfied(&map(&[]), Some("ad-hoc")).is_ok());
+        assert!(declared.check_secret_env_is_satisfied(&map(&[]), Some("nightly-sync")).is_err());
     }
 }

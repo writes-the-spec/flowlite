@@ -59,8 +59,8 @@ pub fn build_task_run_attempt_env(
         // declaration that check saw. Two ordinary paths still reach it. A rerun replays
         // the old row's secret_env, so a `secret_env:` entry dropped from the YAML - and
         // its secret from the config - leaves a row naming a secret the startup check no
-        // longer reads at all. And `job submit` from a separate process seeds its own
-        // `mem` from the current YAML, so an entry added without restarting `serve` is
+        // longer reads at all. And `job submit` from a separate process loads the current
+        // YAML itself, so an entry added without restarting `serve` is
         // unknown to the running server's app_config.
         //
         // Nothing leaks either way: this returns before the spawn, and `set_to_running`

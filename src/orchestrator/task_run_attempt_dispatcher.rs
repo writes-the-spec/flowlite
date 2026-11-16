@@ -602,7 +602,7 @@ impl TaskRunAttemptDispatcher {
     }
 
     /// Loads the task run the attempt belongs to, for the command and timeout it was
-    /// submitted with. The config is read off the run rather than out of mem.task, so an
+    /// submitted with. The config is read off the run rather than out of `Declared`, so an
     /// attempt spawns what its run was submitted with however the YAML has moved since.
     async fn get_task_run(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<TaskRun> {
 

@@ -3,12 +3,9 @@
 //!
 //! Each tool mirrors one CLI command's `--json` branch exactly - same filters, same sort,
 //! same shape - so an agent reading a run through MCP and a person reading it through the
-//! CLI read the same fields. Every call opens its own connection through a freshly named
-//! `mem`, never `self.toolkit`'s own: `list_jobs` and `submit_job` seed it, and the other
-//! four never read it at all, but taking a fresh name uniformly is one rule instead of
-//! two, and it is what lets a file written into `jobs/` after this process started still
-//! reach `list_jobs`, and what lets `submit_job` seed the same inline id twice in one
-//! session without the second call colliding with the first's rows.
+//! CLI read the same fields. Every call opens its own connection, and `list_jobs` and
+//! `submit_job` load the YAML afresh each call, so a file written into `jobs/` after this
+//! process started is seen without a restart.
 //!
 //! Every argument struct carries `deny_unknown_fields`: a key the struct does not declare
 //! is a typo or a guess, and serde's default is to ignore it silently. rmcp adds nothing

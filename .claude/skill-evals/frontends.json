@@ -52,7 +52,7 @@
     "should_trigger": false
   },
   {
-    "query": "write me a select_widgets with a name_like filter and a row_id sort",
+    "query": "write me a select_widgets with a status filter and an id sort",
     "should_trigger": false
   },
   {

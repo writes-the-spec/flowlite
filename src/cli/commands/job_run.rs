@@ -360,9 +360,7 @@ async fn rerun_job_run(
 }
 
 impl JobRunRerunCmd {
-    /// Reads no config on purpose - a rerun replays the original run's own snapshot, so
-    /// this process never seeds mem. Anything added here that reads a config table would
-    /// see it empty, not merely stale.
+    /// Reads no YAML on purpose - a rerun replays the original run's own snapshot.
     pub async fn run(&self, toolkit: Toolkit, json: bool) -> anyhow::Result<()> {
 
         let mut conn = toolkit.get_conn().await?;

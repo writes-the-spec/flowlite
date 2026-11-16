@@ -1,13 +1,10 @@
 # Declaring a table
 
-Four rules constrain this repo's DDL and shape the entity structs in `src/crud/`. The middle two are why [`ALTER TABLE` gets you less far here](altering-a-table.md): a new column on a populated table must force a decision about what existing rows say, not let `DEFAULT ''` decide silently. Which database the table is in decides most of it — the restart question in the [entities skill](../../entities/SKILL.md).
+Four rules constrain this repo's DDL and shape the entity structs in `src/crud/`. The middle two are why [`ALTER TABLE` gets you less far here](altering-a-table.md): a new column on a populated table must force a decision about what existing rows say, not let `DEFAULT ''` decide silently. Config is not a table at all — the restart question in the [entities skill](../../entities/SKILL.md).
 
-## Keys split by database
+## Keys
 
-- **`mem`**: a caller-assigned `row_id INTEGER NOT NULL` with `UNIQUE (row_id)`, only to preserve YAML declaration order for `RowId` sorts, plus a natural primary key from the config (`job_id`, `(task_id, job_id)`, `schedule_id`) — or none, for `schedule_job`.
-- **Disk**: `id INTEGER PRIMARY KEY AUTOINCREMENT`, returned via `last_insert_rowid()`.
-
-Why: config is re-seeded every startup, so a generated id would change run to run and nothing could reference it; the natural key is the only stable one. A disk row is created once by something that then needs to refer to it. This also sets the insert's return type (`()` vs `i64`) — see the [crud skill](../../crud/SKILL.md).
+`id INTEGER PRIMARY KEY AUTOINCREMENT`, returned via `last_insert_rowid()`: a row is created once by something that then needs to refer to it. See the [crud skill](../../crud/SKILL.md).
 
 ## `NOT NULL` whenever there is a logical null value
 
@@ -25,6 +22,6 @@ Why: a row's value should be readable from the insert, not from old DDL; and `DE
 
 ## Foreign keys are enforced
 
-sqlx turns `PRAGMA foreign_keys` on by default, so a bad reference is an error: in config it aborts `CRUD::init`'s transaction and the process exits — see [schedule_job.md](../../entities/references/schedule_job.md).
+sqlx turns `PRAGMA foreign_keys` on by default, so a bad reference between tables is an error.
 
-**A disk table cannot have a foreign key to a config table**: SQLite doesn't support foreign keys across attached databases. So `job_run.job_id` and `task_run.task_id` are unconstrained and the code checks instead. That's intended: a run carries a snapshot of what it was submitted with and must stay valid after its YAML is edited or deleted, which a foreign key would forbid. Declare keys within one database; check in Rust across them.
+**Nothing can reference config**: jobs and tasks are YAML in `Declared`, not tables. So `job_run.job_id` and `task_run.task_id` are unconstrained and the code checks instead. That's intended: a run carries a snapshot of what it was submitted with and must stay valid after its YAML is edited or deleted, which a foreign key would forbid.

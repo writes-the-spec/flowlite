@@ -52,7 +52,7 @@ impl AppConfigMetrics {
 - **Durations: a `*_seconds` field plus a method returning `Duration`** (`poll_interval_seconds` / `poll_interval()`).
 - **`secrets` is redacted; `concurrency_limits` isn't.** `secrets` is `#[serde(skip_serializing)]` and `Debug` prints its names against `<redacted>`, so a stray `{app_config:?}` can't dump credentials. A wrong limit should be visible.
 - **`AppConfig`'s `Debug` is hand-written — add every new field.** Deriving would undo the redaction. Known exception: `smtp.password`, `slack.token` print via their sections' derived `Debug`.
-- **A default a YAML file can override lives in `[job_defaults]` / `[schedule_defaults]`**; the YAML field is `Option<T>` and `CRUD::init` fills it. No `#[serde(default = ...)]` fallback on the YAML model.
+- **A default a YAML file can override lives in `[job_defaults]` / `[schedule_defaults]`**; the YAML field is `Option<T>` and `Declared::load` fills it. No `#[serde(default = ...)]` fallback on the YAML model.
 - **A setting that "does nothing" is usually an undeclared key** — figment drops unknown keys silently.
 
 ## Who reads what
@@ -61,7 +61,7 @@ impl AppConfigMetrics {
 |---|---|
 | `[orchestrator]` | [src/poller.rs](../../../src/poller.rs) and the services ([orchestrator skill](../orchestrator/SKILL.md)) |
 | `[ui]` | dashboard paging, refresh, palette ([router skill](../router/SKILL.md)) |
-| `[job_defaults]`, `[schedule_defaults]` | `CRUD::init`, for what a YAML omits; `keep_runs` also by `RetentionService` ([src/retention/service.rs](../../../src/retention/service.rs)) for a job id with no `mem.job` row |
+| `[job_defaults]`, `[schedule_defaults]` | `Declared::load`, for what a YAML omits; `keep_runs` also by `RetentionService` ([src/retention/service.rs](../../../src/retention/service.rs)) for a job id nothing declares |
 | `[retention]` | `RetentionService`: `keep_runs_total` (cross-job ceiling, oldest first, after per-job `keep_runs`), `max_deletes_per_pass` |
 | `[smtp]`, `[slack]` | the channels ([notifications skill](../notifications/SKILL.md)) |
 | `[auth]` | the dashboard's login: `AppState::new` builds the `IdpClient` and session cookie from it ([router skill](../router/SKILL.md)). `client_secret` is redacted by `AppConfigAuth`'s own hand-written `Debug` |

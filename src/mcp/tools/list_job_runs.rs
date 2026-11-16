@@ -71,19 +71,16 @@ fn clamp_job_run_limit(limit: Option<i64>) -> i64 {
     }
 }
 
-/// `list_job_runs`'s own connection. Reads the disk `job_run` table only, but still takes
-/// a fresh `mem` name rather than `toolkit`'s own: one rule - every call gets a fresh name
-/// - is easier to hold than a rule with an exception for the read-only tools.
+/// `list_job_runs`'s own connection. Reads the `job_run` table only.
 async fn list_job_runs_rows(
     toolkit: &Toolkit,
     job: Option<String>,
     status: Option<JobRunStatus>,
     limit: i64,
 ) -> anyhow::Result<Vec<JobRun>> {
-    let toolkit = toolkit.with_fresh_mem();
     let mut conn = toolkit.get_conn().await?;
 
-    let crud = CRUD::new(Arc::new(toolkit));
+    let crud = CRUD::new(Arc::new(toolkit.clone()));
 
     crud.select_job_runs(&mut conn, &SelectJobRunsData {
         filter: SelectJobRunsDataFilter { id: None, job_id: job, status, statuses: None, schedule_id: None, scheduled_at: None, parent_job_run_id: None },

@@ -38,13 +38,9 @@ impl McpServer {
 }
 
 async fn list_schedules_rows(toolkit: &Toolkit, args: ListSchedules) -> anyhow::Result<Vec<Schedule>> {
-    let toolkit = toolkit.with_fresh_mem();
-    let _memory_conn = toolkit.get_memory_conn().await?;
-    let mut conn = toolkit.get_conn().await?;
-    let crud = CRUD::new(Arc::new(toolkit));
-    crud.init(&mut conn).await?;
+    let declared = Declared::load(&toolkit.app_config)?;
 
-    crud.select_schedules(&mut conn, &SelectSchedulesData { /* filter from args, sort, limit, offset */ }).await
+    Ok(declared.schedules /* filtered from args */)
 }
 ```
 
@@ -60,9 +56,9 @@ The example mirrors nothing because there is no `schedule` command; where one ex
 - **A tool matching a CLI command returns its `--json` shape** via `src/shared/` (`JobRunDetail`, `TaskRunAttemptLog`, `serve_status::status_json`, `LimitRow`), never a shape of its own. Wording (`status_line`, `limits_table`) stays in the CLI. Fields must agree, not whitespace: `limits --json` is one compact line, `list_limits` pretty-prints.
 - **The `#[tool]` fn's `///` is the tool description, paid for on every model turn.** Only what a caller needs to choose the tool and read its result; rationale goes in a `//` above it, which ships nowhere (see [stop_job_run.rs](../../../src/mcp/tools/stop_job_run.rs)).
 - **Arguments: a `#[derive(Debug, Deserialize, JsonSchema)]` struct with `#[serde(deny_unknown_fields)]`,** taken as `Parameters(args)`; each field's `///` is its schema description. An undeclared key is a typo or guess serde would silently ignore (rmcp adds none of its own). A tool with no arguments still declares an empty struct (`init_data_dir`, `get_serve_status`, `list_limits`), so a caller naming its own data directory is refused instead of quietly served the one `-D` named.
-- **A call opens its own connection via `toolkit.with_fresh_mem()`,** never `self.toolkit`'s `mem`: rmcp runs calls concurrently, and a fresh `mem` lets `list_jobs` see a job file written after startup and `submit_job` seed the same inline id twice in a session. Otherwise follow the matching CLI command (`cli` skill):
-  - reads config: hold `toolkit.get_memory_conn()` and run `crud.init` (`list_jobs`, `submit_job`);
-  - reads only run history or disk tables: neither (`get_job_run`, `list_limits`);
+- **A call opens its own connection and, if it reads config, loads its own `Declared`:** rmcp runs calls concurrently, and a per-call load lets `list_jobs` see a job file written after startup and `submit_job` add the same inline id twice in a session. Otherwise follow the matching CLI command (`cli` skill):
+  - reads config: `Declared::load` per call (`list_jobs`, `submit_job`);
+  - reads only run history: a connection, no YAML (`get_job_run`, `list_limits`);
   - reads no database: opens nothing (`init_data_dir`, `get_serve_status`), so it works before a database exists.
 - **A failure is a tool result, not a protocol error:** `error_result(&err)` carries the anyhow chain verbatim (`{:#}`) so the model can fix its input.
 - **Results go through [tools/result.rs](../../../src/mcp/tools/result.rs):** `success_json` (text as `--json` prints it, plus the same value as `structured_content`), or `job_run_result` for a run that may carry the unserved-directory warning (a warned result drops `structured_content`). Serialize the struct, not a `serde_json::Value`, whose `BTreeMap` alphabetizes fields away from the CLI's order - unless the CLI prints that same `Value` (`status_json`).

@@ -16,7 +16,7 @@ pub struct ScheduleYaml {
     #[serde(default)]
     pub description: String,
     pub cron: Schedule,
-    /// `None` is "not declared", which `CRUD::init` resolves against
+    /// `None` is "not declared", which `Declared::load` resolves against
     /// `[schedule_defaults]` in flowlite.toml rather than a zone written here.
     #[serde(default)]
     pub timezone: Option<Tz>,
@@ -146,7 +146,7 @@ mod tests {
         assert!(format!("{error:#}").contains("Failed to parse Schedule YAML"), "{error:#}");
     }
 
-    /// None is "not declared", which `CRUD::init` resolves against `[schedule_defaults]`.
+    /// None is "not declared", which `Declared::load` resolves against `[schedule_defaults]`.
     /// A zone defaulted here instead would be a second place the fallback lives.
     #[test]
     fn a_schedule_naming_no_zone_leaves_it_for_config_to_fill() {

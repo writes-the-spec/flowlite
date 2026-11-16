@@ -333,8 +333,8 @@ impl CRUD {
     /// database for the same reason `count_job_runs` counts there: the rows behind a
     /// handful of job ids can be the whole table.
     ///
-    /// Nothing is joined against `mem.job`, so a job id whose YAML has since been deleted,
-    /// or which never had a row at all, still comes back.
+    /// A job id whose YAML has since been deleted, or which was never installed at all,
+    /// still comes back.
     pub async fn select_job_run_job_ids<'e, E>(&self, executor: E, data: &SelectJobRunJobIdsData) -> anyhow::Result<Vec<String>>
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,

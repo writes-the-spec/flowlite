@@ -6,8 +6,7 @@ use chrono::{DateTime, Utc};
 use sqlx::SqliteConnection;
 
 use crate::crud::CRUD;
-use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
-use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort};
+use crate::declared::Declared;
 
 use super::job_run_definition::{job_run_notification_definitions, job_run_task_definition, JobRunDefinition};
 
@@ -109,11 +108,16 @@ impl CRUD {
     /// None for a submission nobody scheduled. `parent_task_run_attempt_id` is the attempt
     /// whose command is submitting this run, if a task's command is.
     ///
-    /// A job with no config is an error rather than an empty run: the caller asked for a
-    /// job that isn't there.
+    /// A job `declared` does not hold is an error rather than an empty run: the caller
+    /// asked for a job that isn't there.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each is an independent input a caller has for one submission",
+    )]
     pub async fn submit_job(
         &self,
         conn: &mut SqliteConnection,
+        declared: &Declared,
         job_id: &str,
         overrides: &BTreeMap<String, String>,
         scheduled_at: DateTime<Utc>,
@@ -125,35 +129,15 @@ impl CRUD {
             .resolve_parent_task_run_attempt(&mut *conn, parent_task_run_attempt_id)
             .await?;
 
-        let job = self.select_job(&mut *conn, &SelectJobsData {
-            filter: SelectJobsDataFilter {
-                job_id: Some(job_id.to_string()),
-                ..Default::default()
-            },
-            sort: None,
-            limit: Some(1),
-            offset: None,
-        }).await?;
-
-        let Some(job) = job else {
+        let Some(job) = declared.job(job_id) else {
             anyhow::bail!("Job '{}' not found", job_id);
         };
 
-        let parameters = resolve_job_parameters(job_id, &job.parameters.0, overrides)?;
+        let parameters = resolve_job_parameters(job_id, &job.parameters, overrides)?;
 
-        let tasks = self.select_tasks(&mut *conn, &SelectTasksData {
-            filter: SelectTasksDataFilter {
-                job_id: Some(job_id.to_string()),
-                ..Default::default()
-            },
-            sort: Some(SelectTasksDataSort::RowId),
-            limit: None,
-            offset: None,
-        }).await?;
+        let tasks = declared.tasks_of(job_id);
 
         let definition = JobRunDefinition {
-            // Cloned rather than moved so the whole row is still borrowable below: each
-            // task's definition is built against the job's own `env` and `secret_env`.
             job_id: job.job_id.clone(),
             job_name: job.name.clone(),
             job_description: job.description.clone(),
@@ -163,11 +147,11 @@ impl CRUD {
             parent_task_run_attempt_id,
             tasks: tasks
                 .iter()
-                .map(|task| job_run_task_definition(task, &job))
+                .map(|task| job_run_task_definition(task, job))
                 .collect(),
             notifications: job_run_notification_definitions(
-                &job.on_failure_recipients.0,
-                &job.on_success_recipients.0,
+                &job.on_failure_recipients,
+                &job.on_success_recipients,
             ),
         };
 
@@ -190,18 +174,15 @@ mod tests {
     #[tokio::test]
     async fn a_new_run_starts_as_scheduled_and_keeps_its_due_time() {
 
-        // `new_with_migrated_mem`, not `new`: `submit_job` reads the job's config out of
-        // `mem.job`, and `mem` is one shared-cache name for the whole test binary - seeding
-        // it under the plain `new` would race every other test's pooled connection over its
-        // schema lock.
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
-        db.insert_job("hello", 0).await;
+        let db = TestDb::new().await;
+        db.insert_job("hello", 0);
         let mut conn = db.conn_pool.acquire().await.unwrap();
 
         let due = chrono::Utc::now() + chrono::TimeDelta::hours(3);
 
         let job_run_id = db.crud.submit_job(
             &mut conn,
+            &db.declared(),
             "hello",
             &map(&[]),
             due,
@@ -216,14 +197,14 @@ mod tests {
         assert_eq!(job_run.schedule_id, None);
     }
 
-    /// `new_with_migrated_mem` for the reason the test above gives.
     async fn submit_from(db: &TestDb, parent_task_run_attempt_id: Option<i64>) -> anyhow::Result<i64> {
 
-        db.insert_job("hello", 0).await;
+        db.insert_job("hello", 0);
         let mut conn = db.conn_pool.acquire().await.unwrap();
 
         db.crud.submit_job(
             &mut conn,
+            &db.declared(),
             "hello",
             &map(&[]),
             chrono::Utc::now(),
@@ -235,7 +216,7 @@ mod tests {
     #[tokio::test]
     async fn a_run_submitted_from_a_task_is_linked_to_its_attempt() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+        let db = TestDb::new().await;
 
         let parent = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run(parent.id, TaskRunStatus::Running).await;
@@ -251,7 +232,7 @@ mod tests {
     #[tokio::test]
     async fn a_run_submitted_by_an_attempt_that_is_gone_is_not_linked() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+        let db = TestDb::new().await;
 
         let child_id = submit_from(&db, Some(404)).await.unwrap();
 
@@ -261,7 +242,7 @@ mod tests {
     #[tokio::test]
     async fn a_task_of_a_run_being_stopped_cannot_submit() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+        let db = TestDb::new().await;
 
         let parent = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run(parent.id, TaskRunStatus::Running).await;
@@ -276,7 +257,7 @@ mod tests {
     #[tokio::test]
     async fn an_attempt_that_ended_without_succeeding_cannot_submit() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+        let db = TestDb::new().await;
 
         let parent = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run(parent.id, TaskRunStatus::Running).await;

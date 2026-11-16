@@ -19,6 +19,7 @@ pub(crate) mod router;
 pub(crate) mod shared;
 pub mod toolkit;
 pub mod crud;
+pub(crate) mod declared;
 pub(crate) mod yaml_models;
 pub(crate) mod cron_trigger;
 pub(crate) mod orchestrator;

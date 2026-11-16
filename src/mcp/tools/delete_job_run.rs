@@ -52,10 +52,9 @@ async fn delete_scheduled_run(
     args: DeleteJobRun,
 ) -> anyhow::Result<(JobRun, Option<String>)> {
 
-    let toolkit = toolkit.with_fresh_mem();
     let mut conn = toolkit.get_conn().await?;
 
-    let crud = CRUD::new(Arc::new(toolkit));
+    let crud = CRUD::new(Arc::new(toolkit.clone()));
 
     let job_run = delete_scheduled_job_run(&crud, &mut conn, args.job_run_id).await?;
 

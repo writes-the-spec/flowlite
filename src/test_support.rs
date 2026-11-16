@@ -7,7 +7,6 @@ use axum::routing::post;
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use crate::app_config::{AppConfig, AppConfigOrchestrator, AppConfigSlack};
 use crate::crud::CRUD;
-use crate::crud::job::{InsertJobData, InsertJobDataInput, Job, SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
 use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotification, JobRunNotificationStatus, NotificationChannel, NotifyOn, SelectJobRunNotificationsData, SelectJobRunNotificationsDataFilter, SelectJobRunNotificationsDataSort};
@@ -29,8 +28,7 @@ use crate::poller::Service;
 use crate::scheduler::Scheduler;
 use crate::signals::Signals;
 use crate::toolkit::Toolkit;
-use crate::crud::schedule::{InsertScheduleData, InsertScheduleDataInput, Schedule, SelectSchedulesData, SelectSchedulesDataFilter};
-use crate::crud::schedule_job::{InsertScheduleJobData, InsertScheduleJobDataInput};
+use crate::declared::{Declared, Job, Schedule, ScheduleJob};
 
 
 /// The process environment, which no test owns alone.
@@ -135,11 +133,11 @@ impl Drop for ServerStdin {
 /// read it from — which is the only channel the services have between them, and the one
 /// thing a hand-built struct cannot stand in for.
 ///
-/// The `mem` schema is left unmigrated on purpose: no monitor reads a definition, and the
-/// memory database is one shared-cache name for the whole process, so seeding it would
-/// leak between tests running in parallel.
+/// It starts declaring nothing. A test that needs a job or a schedule adds it with
+/// `insert_job` or `seed_schedule`, and every service built after that sees it.
 pub struct TestDb {
     data_dir: PathBuf,
+    declared: Mutex<Declared>,
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
     pub signals: Arc<Signals>,
@@ -167,6 +165,7 @@ impl TestDb {
 
         Self {
             data_dir,
+            declared: Mutex::new(Declared::default()),
             crud: Arc::new(CRUD::new(toolkit)),
             conn_pool: Arc::new(conn_pool),
             signals: Arc::new(Signals::new()),
@@ -174,122 +173,67 @@ impl TestDb {
         }
     }
 
-    /// The same as `new`, but with `mem` migrated under a private name nothing else in the
-    /// process shares — for the retention tests, the first to need a `mem.job` row
-    /// alongside `job_run` rows. `new` leaves `mem` unmigrated on purpose (see this
-    /// struct's own doc comment): a shared, unmigrated `flowlite_mem` is what keeps every
-    /// other TestDb-based test from racing every other one over that one process-wide
-    /// name, and this constructor opts a caller who genuinely needs `mem.job` back into
-    /// paying for a migration, under a name only it holds.
-    ///
-    /// Returns the connection that keeps the private memory database alive — a
-    /// `mode=memory` database is dropped the instant nothing has it open — so the caller
-    /// must hold it for as long as the returned `TestDb` is used.
-    pub async fn new_with_migrated_mem() -> (Self, sqlx::SqliteConnection) {
-
-        let data_dir = std::env::temp_dir().join(format!("flowlite-test-{}", uuid::Uuid::new_v4()));
-
-        let app_config = AppConfig {
-            data_dir: data_dir.to_string_lossy().into_owned(),
-            ..AppConfig::default()
-        };
-
-        let toolkit = Toolkit::new(app_config).with_fresh_mem();
-
-        let mem_conn = toolkit.get_memory_conn().await
-            .expect("failed to migrate the test mem schema");
-
-        let conn_pool = toolkit.get_conn_pool().await
-            .expect("failed to open the test database");
-
-        let test_db = Self {
-            data_dir,
-            crud: Arc::new(CRUD::new(Arc::new(toolkit))),
-            conn_pool: Arc::new(conn_pool),
-            signals: Arc::new(Signals::new()),
-            children: Arc::new(TaskRunAttemptChildren::new()),
-        };
-
-        (test_db, mem_conn)
+    /// What this test declares so far, as a service built now would be given it.
+    pub fn declared(&self) -> Declared {
+        self.declared.lock().unwrap().clone()
     }
 
-    /// A `mem.job` row carrying the given `keep_runs`, for a `TestDb` built with
-    /// `new_with_migrated_mem` — every other field is a value nothing in the retention
-    /// tests reads.
-    pub async fn insert_job(&self, job_id: &str, keep_runs: u32) -> Job {
+    /// A job carrying the given `keep_runs`, with no tasks - every other field is a value
+    /// nothing reading it here cares about.
+    pub fn insert_job(&self, job_id: &str, keep_runs: u32) -> Job {
 
-        static NEXT_ROW_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let job = Job {
+            job_id: job_id.to_string(),
+            name: "Job".to_string(),
+            description: String::new(),
+            max_parallel_runs: 1,
+            keep_runs,
+            parameters: BTreeMap::new(),
+            env: BTreeMap::new(),
+            secret_env: BTreeMap::new(),
+            on_failure_recipients: BTreeMap::new(),
+            on_success_recipients: BTreeMap::new(),
+            limits: Vec::new(),
+        };
 
-        self.crud.insert_job(
-            &*self.conn_pool,
-            &InsertJobData {
-                input: InsertJobDataInput {
-                    row_id: NEXT_ROW_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                    job_id: job_id.to_string(),
-                    name: "Job".to_string(),
-                    description: String::new(),
-                    max_parallel_runs: 1,
-                    keep_runs,
-                    parameters: BTreeMap::new(),
-                    env: BTreeMap::new(),
-                    secret_env: BTreeMap::new(),
-                    on_failure_recipients: BTreeMap::new(),
-                    on_success_recipients: BTreeMap::new(),
-                    limits: Vec::new(),
-                },
-            },
-        ).await.unwrap();
+        self.declared.lock().unwrap().jobs.push(job.clone());
 
-        self.crud.select_job(
-            &*self.conn_pool,
-            &SelectJobsData {
-                filter: SelectJobsDataFilter { job_id: Some(job_id.to_string()), name_like: None },
-                sort: None,
-                limit: None,
-                offset: None,
-            },
-        ).await.unwrap().unwrap()
+        job
     }
 
-    /// A schedule in `mem`, with one job attached, as `CRUD::init` would have seeded it
-    /// from a YAML file. Needs a `TestDb` built with `new_with_migrated_mem`, since `mem`
-    /// is left unmigrated under the plain `new` — see this struct's own doc comment.
-    pub async fn seed_schedule(&self, schedule_id: &str, cron: &str, submit_ahead: u32) -> Schedule {
-        self.seed_schedule_with(schedule_id, cron, submit_ahead, false, None, &["job"]).await
+    /// A schedule with one job attached, as `Declared::load` would have read it from a
+    /// YAML file.
+    pub fn seed_schedule(&self, schedule_id: &str, cron: &str, submit_ahead: u32) -> Schedule {
+        self.seed_schedule_with(schedule_id, cron, submit_ahead, false, None, &["job"])
     }
 
     /// The same schedule naming the jobs given, for the cases that turn on *which* jobs a
-    /// schedule lists — a job dropped from `jobs:` between two passes, above all. Each id is
-    /// given a `mem.job` row if it does not have one, since `schedule_job.job_id` is a
-    /// foreign key.
-    pub async fn seed_schedule_with_jobs(
+    /// schedule lists - a job dropped from `jobs:` between two passes, above all. Each id is
+    /// declared as a job if it is not one yet, as loading would insist.
+    pub fn seed_schedule_with_jobs(
         &self,
         schedule_id: &str,
         cron: &str,
         submit_ahead: u32,
         job_ids: &[&str],
     ) -> Schedule {
-        self.seed_schedule_with(schedule_id, cron, submit_ahead, false, None, job_ids).await
+        self.seed_schedule_with(schedule_id, cron, submit_ahead, false, None, job_ids)
     }
 
-    pub async fn seed_disabled_schedule(&self, schedule_id: &str, cron: &str, submit_ahead: u32) -> Schedule {
-        self.seed_schedule_with(schedule_id, cron, submit_ahead, true, None, &["job"]).await
+    pub fn seed_disabled_schedule(&self, schedule_id: &str, cron: &str, submit_ahead: u32) -> Schedule {
+        self.seed_schedule_with(schedule_id, cron, submit_ahead, true, None, &["job"])
     }
 
-    /// The same schedule, retired on the given day — for the case where the cron runs out
+    /// The same schedule, retired on the given day - for the case where the cron runs out
     /// of occurrences and there is nothing left to keep scheduled.
-    pub async fn seed_schedule_ending(&self, schedule_id: &str, cron: &str, submit_ahead: u32, end_date: NaiveDate) -> Schedule {
-        self.seed_schedule_with(schedule_id, cron, submit_ahead, false, Some(end_date), &["job"]).await
+    pub fn seed_schedule_ending(&self, schedule_id: &str, cron: &str, submit_ahead: u32, end_date: NaiveDate) -> Schedule {
+        self.seed_schedule_with(schedule_id, cron, submit_ahead, false, Some(end_date), &["job"])
     }
 
-    /// Re-seeding the same id replaces the row rather than colliding on its primary key,
-    /// because that is what a restart does: `CRUD::init` rebuilds `mem` from the YAML, and
-    /// the reconcile's restart case is exactly "the same schedule, seeded again, with its
+    /// Re-seeding the same id replaces the schedule, because that is what a restart does:
+    /// the reconcile's restart case is exactly "the same schedule, read again, with its
     /// occurrences recomputed from now".
-    ///
-    /// The delete is raw SQL rather than a CRUD method because nothing in the program
-    /// deletes a schedule — `mem` is dropped wholesale at shutdown instead.
-    async fn seed_schedule_with(
+    fn seed_schedule_with(
         &self,
         schedule_id: &str,
         cron: &str,
@@ -299,86 +243,42 @@ impl TestDb {
         job_ids: &[&str],
     ) -> Schedule {
 
-        // `insert_job` is unconditional and `mem.job` is keyed on `job_id`, so a second
-        // seeding of the same schedule would fail on the primary key rather than on the
-        // behaviour under test — and re-seeding is the whole point of this helper.
         for job_id in job_ids {
-
-            let existing = self.crud.select_job(
-                &*self.conn_pool,
-                &SelectJobsData {
-                    filter: SelectJobsDataFilter { job_id: Some(job_id.to_string()), name_like: None },
-                    sort: None,
-                    limit: Some(1),
-                    offset: None,
-                },
-            ).await.unwrap();
-
-            if existing.is_none() {
-                self.insert_job(job_id, 0).await;
+            if self.declared.lock().unwrap().job(job_id).is_none() {
+                self.insert_job(job_id, 0);
             }
         }
 
-        sqlx::query("DELETE FROM mem.schedule_job WHERE schedule_id = ?")
-            .bind(schedule_id)
-            .execute(&*self.conn_pool)
-            .await
-            .unwrap();
-
-        sqlx::query("DELETE FROM mem.schedule WHERE schedule_id = ?")
-            .bind(schedule_id)
-            .execute(&*self.conn_pool)
-            .await
-            .unwrap();
-
         let cron_schedule = <cron::Schedule as std::str::FromStr>::from_str(cron).unwrap();
 
-        // row_id is unique per row across the seeded mem schema. Same static-counter shape
-        // insert_job uses, offset well past its range so the two cannot collide, and taking
-        // one id per row this call writes - the schedule, plus one per schedule_job.
-        static NEXT_SCHEDULE_ROW_ID: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(9_000);
+        let schedule = Schedule {
+            schedule_id: schedule_id.to_string(),
+            name: schedule_id.to_string(),
+            description: String::new(),
+            cron: cron_schedule.to_string(),
+            timezone: chrono_tz::Tz::UTC.to_string(),
+            start_date: None,
+            end_date,
+            disabled,
+            submit_ahead,
+        };
 
-        let row_id = NEXT_SCHEDULE_ROW_ID.fetch_add(
-            job_ids.len() as u64 + 1,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        let mut declared = self.declared.lock().unwrap();
 
-        self.crud.insert_schedule(&*self.conn_pool, &InsertScheduleData {
-            input: InsertScheduleDataInput {
-                row_id,
+        declared.schedules.retain(|schedule| schedule.schedule_id != schedule_id);
+        declared.schedule_jobs.retain(|schedule_job| schedule_job.schedule_id != schedule_id);
+
+        declared.schedules.push(schedule.clone());
+
+        for job_id in job_ids {
+            declared.schedule_jobs.push(ScheduleJob {
                 schedule_id: schedule_id.to_string(),
-                name: schedule_id.to_string(),
-                description: String::new(),
-                cron: cron_schedule,
-                timezone: chrono_tz::Tz::UTC,
-                start_date: None,
-                end_date,
-                disabled,
-                submit_ahead,
-            },
-        }).await.unwrap();
-
-        for (offset, job_id) in job_ids.iter().enumerate() {
-            self.crud.insert_schedule_job(&*self.conn_pool, &InsertScheduleJobData {
-                input: InsertScheduleJobDataInput {
-                    row_id: row_id + 1 + offset as u64,
-                    schedule_id: schedule_id.to_string(),
-                    job_id: job_id.to_string(),
-                    parameters: BTreeMap::new(),
-                },
-            }).await.unwrap();
+                job_id: job_id.to_string(),
+                parameters: BTreeMap::new(),
+            });
         }
 
-        self.crud.select_schedule(&*self.conn_pool, &SelectSchedulesData {
-            filter: SelectSchedulesDataFilter {
-                schedule_id: Some(schedule_id.to_string()),
-                ..Default::default()
-            },
-            sort: None,
-            limit: Some(1),
-            offset: None,
-        }).await.unwrap().unwrap()
+        schedule
     }
 
     /// The temp directory this test owns, for a command that needs somewhere to write.
@@ -398,6 +298,7 @@ impl TestDb {
         Scheduler::new(
             self.crud.toolkit.clone(),
             self.crud.clone(),
+            Arc::new(self.declared()),
             self.conn_pool.clone(),
             self.signals.clone(),
         )
@@ -406,6 +307,7 @@ impl TestDb {
     pub fn job_run_dispatcher(&self) -> JobRunDispatcher {
         JobRunDispatcher::new(
             self.crud.clone(),
+            Arc::new(self.declared()),
             self.conn_pool.clone(),
             self.signals.clone(),
             self.app_config(),

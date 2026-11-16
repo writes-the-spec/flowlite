@@ -11,10 +11,9 @@ use chrono::{DateTime, Utc};
 use sqlx::{Connection, SqliteConnection};
 
 use crate::crud::CRUD;
-use crate::crud::job::Job;
+use crate::declared::{Job, Task};
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRunStatus};
 use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotificationStatus, NotificationChannel, NotifyOn};
-use crate::crud::task::Task;
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, TaskRunStatus};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, TaskRunAttemptStatus};
 
@@ -122,14 +121,14 @@ pub(super) fn job_run_task_definition(
     job: &Job,
 ) -> JobRunTaskDefinition {
 
-    let mut env = merge_job_and_task_maps(&job.env.0, &task.env.0);
-    let mut secret_env = merge_job_and_task_maps(&job.secret_env.0, &task.secret_env.0);
+    let mut env = merge_job_and_task_maps(&job.env, &task.env);
+    let mut secret_env = merge_job_and_task_maps(&job.secret_env, &task.secret_env);
 
-    for name in task.env.0.keys() {
+    for name in task.env.keys() {
         secret_env.remove(name);
     }
 
-    for name in task.secret_env.0.keys() {
+    for name in task.secret_env.keys() {
         env.remove(name);
     }
 
@@ -137,8 +136,8 @@ pub(super) fn job_run_task_definition(
         task_id: task.task_id.clone(),
         command: task.command.clone(),
         stdin: task.stdin.clone(),
-        depends_on: task.depends_on.0.clone(),
-        limits: union_job_and_task_limits(&job.limits.0, &task.limits.0),
+        depends_on: task.depends_on.clone(),
+        limits: union_job_and_task_limits(&job.limits, &task.limits),
         timeout: task.timeout,
         max_retries: task.max_retries,
         retry_delay: task.retry_delay,
@@ -235,9 +234,7 @@ impl CRUD {
     /// run what it has and report success. The transaction covers the inserts only, not
     /// the callers' reads before them. A deferred transaction whose first statement is a
     /// write waits out a busy lock; one that reads first fails on the upgrade if another
-    /// process wrote in between. `BEGIN IMMEDIATE` would avoid that but also takes a
-    /// write lock on the attached shared-cache `mem`, where a second submit fails at once
-    /// instead of waiting.
+    /// process wrote in between.
     pub(super) async fn insert_job_run_definition(
         &self,
         conn: &mut SqliteConnection,
@@ -453,7 +450,7 @@ mod tests {
         assert!(merge_job_and_task_maps(&map(&[]), &map(&[])).is_empty());
     }
 
-    /// A `mem.task` row with the given `env`/`secret_env`/`limits` - everything else is
+    /// A `Task` with the given `env`/`secret_env`/`limits` - everything else is
     /// filler a `Task` needs to exist at all.
     fn task_row(env: BTreeMap<String, String>, secret_env: BTreeMap<String, String>, limits: Vec<String>) -> Task {
         Task {
@@ -461,20 +458,20 @@ mod tests {
             job_id: "job".to_string(),
             description: String::new(),
             command: "true".to_string(),
-            depends_on: sqlx::types::Json(Vec::new()),
-            limits: sqlx::types::Json(limits),
+            depends_on: Vec::new(),
+            limits,
             timeout: 60,
             max_retries: 0,
             retry_delay: 60,
-            env: sqlx::types::Json(env),
-            secret_env: sqlx::types::Json(secret_env),
+            env,
+            secret_env,
             stdin: String::new(),
             working_dir: String::new(),
             idle_timeout: 0,
         }
     }
 
-    /// The `mem.job` row a task's definition is merged against - the same filler idea as
+    /// The `Job` a task's definition is merged against - the same filler idea as
     /// `task_row`, for the other side of the merge.
     fn job_row(env: BTreeMap<String, String>, secret_env: BTreeMap<String, String>, limits: Vec<String>) -> Job {
         Job {
@@ -483,22 +480,18 @@ mod tests {
             description: String::new(),
             max_parallel_runs: 0,
             keep_runs: 0,
-            parameters: sqlx::types::Json(BTreeMap::new()),
-            env: sqlx::types::Json(env),
-            secret_env: sqlx::types::Json(secret_env),
-            on_failure_recipients: sqlx::types::Json(BTreeMap::new()),
-            on_success_recipients: sqlx::types::Json(BTreeMap::new()),
-            limits: sqlx::types::Json(limits),
+            parameters: BTreeMap::new(),
+            env,
+            secret_env,
+            on_failure_recipients: BTreeMap::new(),
+            on_success_recipients: BTreeMap::new(),
+            limits,
         }
     }
 
     /// `job_run_task_definition` is what `submit_job` itself calls to build each task's
     /// definition, so exercising it directly - rather than through `submit_job` - covers
-    /// that line for real, with no `mem.job`/`mem.task` rows needed at all: `mem` is one
-    /// shared-cache database for the whole test binary, and seeding it from a test races
-    /// any other test's pooled connection over its schema lock, confirmed by running
-    /// exactly that here, which broke two unrelated tests with "database schema is locked:
-    /// mem".
+    /// that line for real.
     #[test]
     fn a_tasks_secret_env_is_merged_with_the_jobs_the_task_winning_a_shared_name() {
 

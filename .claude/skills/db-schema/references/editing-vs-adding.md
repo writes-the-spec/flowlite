@@ -24,8 +24,6 @@ Also check the default location, where a dev instance lands without `-D`:
 - macOS — `~/Library/Application Support/flowlite/flowlite.db`
 - Linux — `~/.local/share/flowlite/flowlite.db`
 
-**`mem` is exempt.** The memory schema is rebuilt from nothing every startup, so there is no checksum to break and no `_sqlx_migrations` to check — edit the `CREATE TABLE` and restart.
-
 ## The call
 
 **A disk migration that shipped in a release tag is applied, always.** `v0.1.0` shipped every `create_*` file under `db/schemas/disk/migrations/`, and any install of a release has run them. Never edit one; a change to a disk table after that is a new migration. `git tag --contains $(git log -1 --format=%H -- <file>)` prints a tag if the file shipped.
@@ -35,7 +33,6 @@ Also check the default location, where a dev instance lands without `-D`:
 | **Nothing has applied it** — added since the last release tag, on no database yet | **Edit the original** | One migration describing the table beats a create plus an alter undoing half of it. |
 | **Something has applied it** — a dev database, a deployed instance, CI with a persisted volume | **Add a new migration.** Never edit | The checksum stops their process and they can't fix it without losing data. |
 | **Unsure** | **Add a new one** | An extra migration costs one file; a broken checksum costs a database. |
-| **A `mem` table** | **Edit the `CREATE TABLE`.** Never add a migration | Nothing but the running process has applied it. |
 
 When an edit is right and only a stale dev database is in the way, deleting that database is the fix — config comes back from YAML on startup, but it holds somebody's run history, so **say so rather than doing it silently**.
 

@@ -5,8 +5,7 @@ use axum::{Extension, Form};
 
 use crate::router::app::middlewares::session::SignedIn;
 use crate::crud::CRUD;
-use crate::crud::job::{Job, SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
-use crate::crud::task::{Task, SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort};
+use crate::declared::{Job, Task};
 use crate::router::app::app_state::AppState;
 use crate::router::app::routes::job_dag::{self as dag, Dag};
 use std::collections::BTreeMap;
@@ -39,24 +38,11 @@ struct JobIdRouteTemplate {
 
 pub async fn job_id_route(
     State(state): State<AppState>,
-    Extension(crud): Extension<CRUD>,
     Path(job_id): Path<String>,
     signed_in: Option<Extension<SignedIn>>,
 ) -> impl IntoResponse {
-    let conn = &*state.conn_pool;
-
-    let job = crud.select_job(conn, &SelectJobsData {
-        filter: SelectJobsDataFilter {
-            job_id: Some(job_id.clone()),
-            ..Default::default()
-        },
-        sort: Some(SelectJobsDataSort::RowId),
-        limit: None,
-        offset: None,
-    }).await.unwrap_or_default();
-
-    let job = match job {
-        Some(job) => job,
+    let job = match state.declared.job(&job_id) {
+        Some(job) => job.clone(),
         None => {
             let template = JobMissingTemplate {
                 current_route: "jobs",
@@ -75,15 +61,11 @@ pub async fn job_id_route(
         },
     };
 
-    let tasks = crud.select_tasks(conn, &SelectTasksData {
-        filter: SelectTasksDataFilter {
-            job_id: Some(job.job_id.clone()),
-            ..Default::default()
-        },
-        sort: Some(SelectTasksDataSort::RowId),
-        limit: None,
-        offset: None,
-    }).await.unwrap_or_default();
+    let tasks: Vec<Task> = state.declared
+        .tasks_of(&job.job_id)
+        .into_iter()
+        .cloned()
+        .collect();
 
     let dag = dag::build(&tasks);
 
@@ -146,7 +128,7 @@ pub async fn submit_job_route(
         }
     };
 
-    match crud.submit_job(&mut conn, &job_id, &overrides, chrono::Utc::now(), None, None).await {
+    match crud.submit_job(&mut conn, &state.declared, &job_id, &overrides, chrono::Utc::now(), None, None).await {
         Ok(job_run_id) => {
             state.signals.publish();
             Redirect::to(&format!("/job-runs/{}", job_run_id)).into_response()

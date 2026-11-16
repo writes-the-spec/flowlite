@@ -1,6 +1,6 @@
 # JobYaml
 
-[src/yaml_models/job_yaml.rs](../../../../src/yaml_models/job_yaml.rs) — one file per job under `<data_dir>/jobs/*.yml`, seeding `mem.job` and `mem.task`.
+[src/yaml_models/job_yaml.rs](../../../../src/yaml_models/job_yaml.rs) — one file per job under `<data_dir>/jobs/*.yml`, loaded as a `Job` and its `Task`s.
 
 ```yaml
 id: my-job
@@ -22,11 +22,11 @@ on_success:
 
 ## `JobYaml`
 
-"`[job_defaults]`, N": `Option` on the model, filled by `CRUD::init` from flowlite.toml, else N.
+"`[job_defaults]`, N": `Option` on the model, filled by `Declared::load` from flowlite.toml, else N.
 
 | Field | Default | Notes |
 |---|---|---|
-| `id` | required | `mem.job` primary key; what lookups filter on — **not** `name`. |
+| `id` | required | Unique across files; what lookups use — **not** `name`. |
 | `name` | required | Display label, not unique. |
 | `description` | `""` | |
 | `max_parallel_runs` | `[job_defaults]`, `1` | **`0` = no limit.** Enforced only by `JobRunDispatcher::is_job_at_max_parallel_runs` holding the run `Queued`; submit never rejects. |
@@ -43,7 +43,7 @@ on_success:
 
 | Field | Default | Notes |
 |---|---|---|
-| `id` | required | Unique within the job (`mem.task` key `(task_id, job_id)`); ASCII letters, digits, `-`, `_`. |
+| `id` | required | Unique within the job; ASCII letters, digits, `-`, `_`. |
 | `description` | `""` | Shown in the job page's task table instead of the command. |
 | `command` | required | Run as `sh -c <command>`. |
 | `stdin` | `""` | Fed to stdin verbatim, no shell expansion; empty means null stdin. |
@@ -81,7 +81,7 @@ Job and task maps merge at submit into `task_run.env` / `task_run.secret_env`, s
 
 ## What one task becomes
 
-`CRUD::init` writes `depends_on` as JSON on `task.depends_on`, its only copy in `mem`. `submit_job` copies it onto the run, and `TaskRunDispatcher::get_dependent_task_runs` resolves `task_run.depends_on` ([task](../../entities/references/task.md)).
+`Declared::load` keeps `depends_on` on `Task::depends_on`. `submit_job` copies it onto the run, and `TaskRunDispatcher::get_dependent_task_runs` resolves `task_run.depends_on` ([task](../../entities/references/task.md)).
 
 Submit creates one `Queued` `task_run` per task, snapshotting `command`, `stdin`, `depends_on`, `timeout`, `idle_timeout`, retry settings, `env`, `secret_env`, `working_dir` — later YAML edits don't affect it. Parameters resolve once per job run. Dependency order is enforced at dispatch ([orchestrator skill](../../orchestrator/references/task_run.md)).
 
@@ -98,7 +98,7 @@ At parse, in `from_yaml_str` (file-only fields, so checked once here rather than
 | Secret name: lowercase, digits, `_`, no `__` | `FLOWLITE_SECRETS__*` can't carry others; `__` splits into nested keys. |
 | A name not in both `env` and `secret_env` at one level | Per level, so a task may still override a job's name across blocks. |
 
-In `CRUD::seed_job`, before any insert, `validate_job_tasks` fails startup on:
+In `Declared::add_job`, before the job is added, `validate_job_tasks` fails startup on:
 
 | Case | Message |
 |---|---|
@@ -109,4 +109,4 @@ In `CRUD::seed_job`, before any insert, `validate_job_tasks` fails startup on:
 
 Each would leave task runs `Queued` and the job run `Running` forever, since `TaskRunDispatcher` waits for every dependency to succeed.
 
-Not checked: the same job `id` in two files fails only on the `mem.job` primary key (`UNIQUE constraint failed`, wrapped with the file name).
+The same job `id` in two files is refused too, naming the second file.

@@ -14,8 +14,8 @@ use serde::Deserialize;
 use chrono::Utc;
 
 use crate::crud::job_run::JobRun;
-use crate::crud::multistatements::ad_hoc_job::JobIdAlreadyInstalled;
 use crate::crud::CRUD;
+use crate::declared::{Declared, JobIdAlreadyInstalled};
 use crate::mcp::wait::{clamp_wait_seconds, wait_for_settled_job_run};
 use crate::mcp::McpServer;
 use crate::shared::job::installed_job_id;
@@ -114,7 +114,7 @@ fn resolve_definition(args: &SubmitJob) -> anyhow::Result<SubmitJobDefinition> {
     }
 }
 
-/// Turns `seed_ad_hoc_job`'s typed collision into this tool's own words for "submit it by
+/// Turns `add_ad_hoc_job`'s typed collision into this tool's own words for "submit it by
 /// name instead": unlike the CLI's `-f`, nothing here was a flag to drop, so the remedy is
 /// the shape this tool itself takes for an installed job. Any other error passes through
 /// unchanged.
@@ -129,9 +129,8 @@ fn describe_ad_hoc_job_collision(err: anyhow::Error) -> anyhow::Error {
     }
 }
 
-/// `submit_job`'s own connection: a fresh `mem`, seeded exactly as `job submit` seeds its
-/// own, so the same inline id can be submitted twice in one session without the second
-/// call colliding with the first's rows, and a job file just written into `jobs/` is
+/// `Declared` is loaded per call, exactly as `job submit` loads it, so the same inline id
+/// can be submitted twice in one session, and a job file just written into `jobs/` is
 /// visible without a restart.
 async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(JobRun, Option<String>)> {
     let definition = resolve_definition(&args)?;
@@ -158,34 +157,34 @@ async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(J
             .map_err(describe_unserved_data_dir)?;
     }
 
-    let toolkit = toolkit.with_fresh_mem();
-    let _memory_conn = toolkit.get_memory_conn().await?;
-    let mut conn = toolkit.get_conn().await?;
-
-    let crud = CRUD::new(Arc::new(toolkit));
-    let row_id = crud.init(&mut conn).await?;
+    let app_config = &toolkit.app_config;
+    let mut declared = Declared::load(app_config)?;
 
     let job_id = match definition {
-        SubmitJobDefinition::Job(job_name) => installed_job_id(&crud, &mut conn, &job_name).await?,
+        SubmitJobDefinition::Job(job_name) => installed_job_id(&declared, &job_name)?,
 
         SubmitJobDefinition::File(file) => {
             let path = PathBuf::from(file);
             let job_yaml = JobYaml::from_yaml(&path)?;
 
-            crud.seed_ad_hoc_job(&mut conn, job_yaml, &path, row_id).await
+            declared.add_ad_hoc_job(app_config, job_yaml, &path)
                 .map_err(describe_ad_hoc_job_collision)?
         }
 
         SubmitJobDefinition::Yaml(yaml) => {
             let job_yaml = JobYaml::from_yaml_str(&yaml, INLINE_YAML_LABEL)?;
 
-            crud.seed_ad_hoc_job(&mut conn, job_yaml, Path::new(INLINE_YAML_LABEL), row_id).await
+            declared.add_ad_hoc_job(app_config, job_yaml, Path::new(INLINE_YAML_LABEL))
                 .map_err(describe_ad_hoc_job_collision)?
         }
     };
 
+    let mut conn = toolkit.get_conn().await?;
+    let crud = CRUD::new(Arc::new(toolkit.clone()));
+
     let job_run_id = crud.submit_job(
         &mut conn,
+        &declared,
         &job_id,
         &overrides,
         scheduled_at,
@@ -209,17 +208,9 @@ mod tests {
     use super::*;
     use crate::app_config::AppConfig;
 
-    /// The regression test for the whole fresh-mem mechanism this cut exists for: two
-    /// `submit_job_run` calls seeding the same inline id, joined so they genuinely run
-    /// concurrently over one `Toolkit` - not one after the other, which would prove nothing:
-    /// `mem` is a shared-cache database that SQLite drops the instant nothing has it open
-    /// (`src/toolkit.rs`), so a sequential first call's rows are already gone by the time a
-    /// later, second call starts, and there would be nothing left to collide with.
-    ///
-    /// Relies on `src/toolkit.rs`'s `MIGRATION_LOCK` to keep the two calls' own disk-schema
-    /// migrations (each call's `get_conn` runs one) from racing each other on the file both
-    /// calls share - a real hazard, but a separate one from the `mem` collision this test
-    /// exists to catch, and not one either call here is supposed to be exercising.
+    /// Two calls submitting the same inline id at once, over one fresh data directory -
+    /// each call's `Declared` is its own, and `OPEN_LOCK` keeps their first opens of
+    /// `flowlite.db` from colliding.
     #[tokio::test]
     async fn two_joined_submits_of_the_same_inline_id_do_not_collide() {
         let data_dir = std::env::temp_dir().join(format!("flowlite-mcp-concurrent-{}", uuid::Uuid::new_v4()));

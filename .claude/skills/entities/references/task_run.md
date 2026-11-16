@@ -6,8 +6,8 @@ One [`task`](task.md) within one [`job_run`](job_run.md), and **the config it wa
 |---|---|
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`. |
 | `job_run_id` | Foreign key to [`job_run`](job_run.md). |
-| `job_id`, `task_id` | Which task. No foreign key — the task is in `mem`. |
-| `command`, `stdin`, `depends_on`, `timeout`, `idle_timeout`, `max_retries`, `retry_delay`, `working_dir` | **The snapshot**, copied off `mem.task` by `submit_job`. `stdin` is snapshotted like `command`: a reworded prompt is not what this run asked. |
+| `job_id`, `task_id` | Which task. No foreign key — the task is in `Declared`, not a table. |
+| `command`, `stdin`, `depends_on`, `timeout`, `idle_timeout`, `max_retries`, `retry_delay`, `working_dir` | **The snapshot**, copied off the declared [`Task`](task.md) by `submit_job`. `stdin` is snapshotted like `command`: a reworded prompt is not what this run asked. |
 | `env`, `secret_env` | From `job_run_task_definition`: the job's layered under the task's, task winning. `secret_env` maps variable → secret name, never a value. A task's name in one block evicts the job's from the *other*, so the two never share a name (the YAML layer only rejects both blocks at the same level). |
 | `limits` | From `job_run_task_definition`: job's and task's **unioned**, deduplicated, sorted — claims have no precedence. `'[]'` if none. |
 | `created_at` | Bound from `Toolkit`. |
@@ -19,7 +19,7 @@ One [`task`](task.md) within one [`job_run`](job_run.md), and **the config it wa
 
 ## The snapshot is the point of this table
 
-The orchestrator reads config only here. **No orchestrator file imports `crate::crud::task` or `crate::crud::job`**; `TaskRunDispatcher::get_dependent_task_runs` resolves the copied `depends_on`. Sole exception: `mem.job.max_parallel_runs`, read live. Nothing enforces this — `mem` is one query away on every pooled connection.
+The orchestrator reads config only here; `TaskRunDispatcher::get_dependent_task_runs` resolves the copied `depends_on`. Sole exception: the `Job`'s `max_parallel_runs`, read live by `JobRunDispatcher` - the only orchestrator service handed `Declared` at all.
 
 ## Written by
 

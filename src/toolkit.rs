@@ -4,44 +4,28 @@ use std::path::{Path};
 use std::time::Duration;
 use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use uuid::Uuid;
 
 
 #[derive(Clone)]
 pub struct Toolkit {
     pub app_config: AppConfig,
-    /// The shared-cache name `mem` is attached under. One process, one name: two
-    /// `Toolkit`s sharing a name would seed the same `mem.job` rows into each other, which
-    /// is exactly what `with_fresh_mem` exists to avoid.
-    pub mem_name: String,
 }
 
-/// Serializes every schema migration this process runs, disk or memory.
+/// Serializes opening and migrating `flowlite.db` within this process, for two reasons a
+/// fresh database has and an established one does not:
 ///
-/// Discovered while building the MCP `submit_job` tool's concurrency test (the regression
-/// test for `with_fresh_mem` itself, in `src/mcp/tools/submit_job.rs`). `with_fresh_mem`
-/// gives each call a `mem` name nothing else has, so on that path no two concurrent calls
-/// share a cache and the one object they still share is the `flowlite.db` *file* - which
-/// is what races there. `serve` is the other path and shares more: its pool attaches one
-/// `cache=shared` `mem` for the whole process, so two of its connections genuinely do
-/// share a cache, and migrating one database while a racing connection holds the other
-/// open is where `SQLITE_LOCKED_SHAREDCACHE` ("database schema is locked") was observed.
+/// - Switching a database into WAL takes an exclusive lock that `busy_timeout` cannot wait
+///   on, so a second connection opening the file mid-switch fails at once with "database
+///   is locked". Once the file is in WAL, asking for WAL again changes nothing.
+/// - sqlx-sqlite implements `Migrate::lock` and `unlock` as no-ops, so two connections
+///   migrating the same fresh database both read zero applied migrations and both run the
+///   same `CREATE TABLE`s.
 ///
-/// sqlx-sqlite implements `Migrate::lock` and `unlock` as no-ops, so nothing serializes two
-/// connections migrating the same fresh database: both read zero applied migrations and
-/// both run the same `CREATE TABLE`s. A CLI command never hit this because it is the only
-/// connection its process ever opens; `serve` and `mcp` are the first long-lived processes
-/// where a second migration can start before the first has finished.
-///
-/// This is not free even once the schema is current: `ensure_migrations_table` issues a
-/// `CREATE TABLE IF NOT EXISTS` - a write, taking a write lock - on every connection open,
-/// so every migration here is a write and not just a read of `_sqlx_migrations`.
-///
-/// It is the in-process analogue of the `ServeLock` that `serve` takes, taken
-/// cross-process for the same reason, and it does **not** close the cross-process case: two
-/// flowlite processes first-migrating one fresh data directory can still collide, since
-/// only `serve` holds that lock.
-static MIGRATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// `serve` and `mcp` are long-lived processes where two connections can open at once - two
+/// concurrent MCP tool calls each open their own. In-process only: two flowlite processes
+/// opening one fresh data directory can still collide, since only `serve` holds the
+/// cross-process `ServeLock`.
+static OPEN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// How long a connection waits for another process's write lock on `flowlite.db` before it
 /// fails with `SQLITE_BUSY`. `serve`, CLI commands and the MCP server all write the same file.
@@ -51,35 +35,15 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 impl Toolkit {
 
     pub fn new(app_config: AppConfig) -> Self {
-        Self { app_config, mem_name: "flowlite_mem".to_string() }
-    }
-
-    /// The same toolkit, attaching a `mem` nothing else has the name of - for a process
-    /// that seeds it more than once, where the shared default name would make the second
-    /// seed a primary-key collision on the first's rows instead of a private view.
-    pub fn with_fresh_mem(&self) -> Toolkit {
-        Toolkit {
-            mem_name: format!("flowlite_mem_{}", Uuid::new_v4()),
-            ..self.clone()
-        }
+        Self { app_config }
     }
 
     pub async fn get_conn_pool(&self) -> anyhow::Result<SqlitePool> {
         let connect_options = self.disk_connect_options()?;
-        let mem_name = self.mem_name.clone();
+
+        let _guard = OPEN_LOCK.lock().await;
+
         let conn_pool = SqlitePoolOptions::new()
-            .after_connect(move |conn, _meta| {
-                let attach = format!(
-                    "ATTACH DATABASE 'file:{}?mode=memory&cache=shared' AS mem",
-                    mem_name,
-                );
-                Box::pin(async move {
-                    sqlx::query(sqlx::AssertSqlSafe(attach))
-                        .execute(conn)
-                        .await?;
-                    Ok(())
-                })
-            })
             .connect_with(connect_options)
             .await?;
 
@@ -91,23 +55,11 @@ impl Toolkit {
 
     pub async fn get_conn(&self) -> anyhow::Result<SqliteConnection> {
         let connect_options = self.disk_connect_options()?;
-        let mut conn = SqliteConnection::connect_with(&connect_options).await?;
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "ATTACH DATABASE 'file:{}?mode=memory&cache=shared' AS mem",
-            self.mem_name,
-        )))
-            .execute(&mut conn)
-            .await?;
-        self.update_disk_schema(&mut conn).await?;
-        Ok(conn)
-    }
 
-    pub async fn get_memory_conn(&self) -> anyhow::Result<SqliteConnection> {
-        let mut conn = SqliteConnection::connect(&format!(
-            "sqlite:file:{}?mode=memory&cache=shared",
-            self.mem_name,
-        )).await?;
-        self.update_memory_schema(&mut conn).await?;
+        let _guard = OPEN_LOCK.lock().await;
+
+        let mut conn = SqliteConnection::connect_with(&connect_options).await?;
+        self.update_disk_schema(&mut conn).await?;
         Ok(conn)
     }
 
@@ -143,26 +95,9 @@ impl Toolkit {
     /// `run_direct(None, conn, false)` is `.run()`'s own body (`sqlx-core`'s
     /// `migrator.rs`), so behavior is unchanged.
     ///
-    /// Serialized on `MIGRATION_LOCK` - see that constant for why.
+    /// Callers hold `OPEN_LOCK` - see that constant for why.
     async fn update_disk_schema(&self, conn: &mut SqliteConnection) -> anyhow::Result<()> {
-        let _guard = MIGRATION_LOCK.lock().await;
         sqlx::migrate!("./db/schemas/disk/migrations").run_direct(None, conn, false).await?;
-        Ok(())
-    }
-
-    /// Concrete for the same reason as `update_disk_schema`: `Migrator::run_direct` over a
-    /// plain connection, sidestepping `.run()`'s `Acquire<'e>` bound entirely rather than
-    /// hitting the "not general enough" failure inside a caller that must itself be `Send`
-    /// for a lifetime this fn cannot see (an rmcp `#[tool]` fn's boxed future).
-    ///
-    /// Serialized on `MIGRATION_LOCK` too, for the same reason `update_disk_schema` is -
-    /// this one is safe on its own today, since `with_fresh_mem` gives every MCP call a
-    /// name nothing else shares, but a shared lock for every migration is one invariant to
-    /// hold rather than a rule with an exception for the schema that happens to be safe now.
-    pub async fn update_memory_schema(&self, conn: &mut SqliteConnection) -> anyhow::Result<()> {
-        let _guard = MIGRATION_LOCK.lock().await;
-        sqlx::migrate!("./db/schemas/memory/migrations").run_direct(None, conn, false).await?;
-
         Ok(())
     }
 
@@ -175,122 +110,7 @@ impl Toolkit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use crate::crud::CRUD;
-    use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
-
-    /// Writes one job file into a fresh temp data dir, for a toolkit of its own to seed
-    /// through `CRUD::init` - the faithful path into `mem.job`, rather than an insert
-    /// built by hand.
-    fn data_dir_with_job(job_id: &str) -> std::path::PathBuf {
-        let data_dir = std::env::temp_dir().join(format!("flowlite-toolkit-test-{}", Uuid::new_v4()));
-        let jobs_dir = data_dir.join("jobs");
-        std::fs::create_dir_all(&jobs_dir).unwrap();
-        std::fs::write(jobs_dir.join("job.yaml"), format!("
-id: {job_id}
-name: Job
-tasks:
-  - id: only
-    command: ./run.sh
-")).unwrap();
-        data_dir
-    }
-
-    /// Two `with_fresh_mem` toolkits seeding the *same* job id are each other's whole
-    /// reason to exist: sharing `flowlite_mem` would make the second seed a primary-key
-    /// collision on the first's `mem.job` row (see `TestDb`'s doc comment), and a long-lived
-    /// MCP server seeding more than once in a process is exactly that collision waiting to
-    /// happen. A private name per toolkit turns the collision into two untouched views.
-    #[tokio::test]
-    async fn two_fresh_mem_toolkits_are_invisible_to_each_other() {
-        let data_dir_a = data_dir_with_job("nightly-sync");
-        let data_dir_b = data_dir_with_job("nightly-sync");
-
-        let toolkit_a = Toolkit::new(AppConfig {
-            data_dir: data_dir_a.to_string_lossy().into_owned(),
-            ..AppConfig::default()
-        }).with_fresh_mem();
-
-        let toolkit_b = Toolkit::new(AppConfig {
-            data_dir: data_dir_b.to_string_lossy().into_owned(),
-            ..AppConfig::default()
-        }).with_fresh_mem();
-
-        assert_ne!(toolkit_a.mem_name, toolkit_b.mem_name);
-
-        // Kept alive for the test's duration: a `mode=memory` database is dropped the
-        // instant nothing has it open, and this is the connection that migrated it.
-        let mut mem_conn_a = SqliteConnection::connect(&format!(
-            "file:{}?mode=memory&cache=shared", toolkit_a.mem_name,
-        )).await.unwrap();
-        toolkit_a.update_memory_schema(&mut mem_conn_a).await.unwrap();
-
-        let mut mem_conn_b = SqliteConnection::connect(&format!(
-            "file:{}?mode=memory&cache=shared", toolkit_b.mem_name,
-        )).await.unwrap();
-        toolkit_b.update_memory_schema(&mut mem_conn_b).await.unwrap();
-
-        let conn_pool_a = toolkit_a.get_conn_pool().await.unwrap();
-        let conn_pool_b = toolkit_b.get_conn_pool().await.unwrap();
-
-        let crud_a = CRUD::new(Arc::new(toolkit_a));
-        let crud_b = CRUD::new(Arc::new(toolkit_b));
-
-        let mut conn_a = conn_pool_a.acquire().await.unwrap();
-        crud_a.init(&mut conn_a).await.unwrap();
-
-        let mut conn_b = conn_pool_b.acquire().await.unwrap();
-        crud_b.init(&mut conn_b).await.unwrap();
-
-        let jobs_a = crud_a.select_jobs(&conn_pool_a, &SelectJobsData {
-            filter: SelectJobsDataFilter { job_id: None, name_like: None },
-            sort: None,
-            limit: None,
-            offset: None,
-        }).await.unwrap();
-
-        let jobs_b = crud_b.select_jobs(&conn_pool_b, &SelectJobsData {
-            filter: SelectJobsDataFilter { job_id: None, name_like: None },
-            sort: None,
-            limit: None,
-            offset: None,
-        }).await.unwrap();
-
-        assert_eq!(jobs_a.len(), 1);
-        assert_eq!(jobs_b.len(), 1);
-
-        let _ = std::fs::remove_dir_all(&data_dir_a);
-        let _ = std::fs::remove_dir_all(&data_dir_b);
-    }
-
-    /// `get_conn` attaches `mem` but deliberately does not migrate it: the memory schema
-    /// belongs to `get_memory_conn`, whose connection is also what keeps the database
-    /// alive. Attaching both here instead would mean every CLI command that reads only run
-    /// history paid for a schema it never queries - and would quietly create an empty `mem`
-    /// for callers that expect to attach the one `serve` seeded.
-    ///
-    /// The failure this pins is the confusing one: an attached but unmigrated database is
-    /// not an error until something reads it, and then it reads as a missing table.
-    #[tokio::test]
-    async fn a_connection_attaches_mem_without_migrating_it() {
-        let data_dir = std::env::temp_dir().join(format!("flowlite-toolkit-test-{}", Uuid::new_v4()));
-
-        let toolkit = Toolkit::new(AppConfig {
-            data_dir: data_dir.to_string_lossy().into_owned(),
-            ..AppConfig::default()
-        }).with_fresh_mem();
-
-        let mut conn = toolkit.get_conn().await.unwrap();
-        let error = sqlx::query("SELECT job_id FROM mem.job")
-            .fetch_all(&mut conn)
-            .await
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("no such table: mem.job"), "{error}");
-
-        let _ = std::fs::remove_dir_all(&data_dir);
-    }
+    use uuid::Uuid;
 
     /// A single connection and a pool connection both carry the pragmas from
     /// `disk_connect_options`, read back from SQLite rather than trusted from the builder.
@@ -301,7 +121,7 @@ tasks:
         let toolkit = Toolkit::new(AppConfig {
             data_dir: data_dir.to_string_lossy().into_owned(),
             ..AppConfig::default()
-        }).with_fresh_mem();
+        });
 
         let mut conn = toolkit.get_conn().await.unwrap();
         let conn_pool = toolkit.get_conn_pool().await.unwrap();
@@ -328,18 +148,5 @@ tasks:
         }
 
         let _ = std::fs::remove_dir_all(&data_dir);
-    }
-
-    /// `Toolkit::new` must still open `flowlite_mem` - every existing CLI command and test
-    /// relies on that name unchanged. Asserted on the field alone, with nothing seeded
-    /// into it: Cargo runs a binary's tests as threads of one process, so a test that
-    /// seeds `flowlite_mem` would race every other test's connection over that one shared
-    /// name, which is what `TestDb`'s doc comment and `crud_with_private_mem`'s both warn
-    /// against.
-    #[test]
-    fn new_toolkit_opens_the_shared_flowlite_mem() {
-        let toolkit = Toolkit::new(AppConfig::default());
-
-        assert_eq!(toolkit.mem_name, "flowlite_mem");
     }
 }

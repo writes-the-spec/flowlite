@@ -7,7 +7,6 @@ use std::cmp::Ordering;
 
 use crate::router::app::middlewares::session::SignedIn;
 use crate::crud::CRUD;
-use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter};
 use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
 use crate::crud::task_run::{TaskRun, SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRunStatus};
@@ -202,15 +201,7 @@ pub async fn job_run_id_route(
         format::duration(finished_at.signed_duration_since(started_at).num_seconds())
     });
 
-    let job = crud.select_job(conn, &SelectJobsData {
-        filter: SelectJobsDataFilter {
-            job_id: Some(job_run.job_id.clone()),
-            ..Default::default()
-        },
-        sort: None,
-        limit: Some(1),
-        offset: None,
-    }).await.unwrap_or_default();
+    let job_exists = state.declared.job(&job_run.job_id).is_some();
 
     // Read defensively like the job above: a lookup that fails loses the link, not the page.
     let parent = select_job_run_parent(&crud, conn, &job_run).await.unwrap_or(None);
@@ -223,7 +214,7 @@ pub async fn job_run_id_route(
         current_route: "home",
         theme: state.toolkit.app_config.ui.theme.as_attribute(),
         signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
-        job_exists: job.is_some(),
+        job_exists,
         job_run: JobRunDisplay {
             id: job_run.id,
             job_id: job_run.job_id,

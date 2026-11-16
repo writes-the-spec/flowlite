@@ -7,7 +7,6 @@ use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 
 use crate::crud::CRUD;
-use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
 use crate::router::app::app_state::AppState;
 use crate::shared::format;
@@ -73,12 +72,10 @@ pub async fn job_run_table_route(
         job_runs
     };
 
-    let installed_job_ids: HashSet<String> = crud.select_jobs(&*state.conn_pool, &SelectJobsData {
-        filter: SelectJobsDataFilter { job_id: None, name_like: None },
-        sort: None,
-        limit: None,
-        offset: None,
-    }).await.unwrap_or_default().into_iter().map(|job| job.job_id).collect();
+    let installed_job_ids: HashSet<&str> = state.declared.jobs
+        .iter()
+        .map(|job| job.job_id.as_str())
+        .collect();
 
     let now = Utc::now();
     let elapsed: Vec<Option<i64>> = job_runs.iter().map(|run| elapsed_seconds(run, now)).collect();
@@ -86,7 +83,7 @@ pub async fn job_run_table_route(
 
     let job_runs_display = job_runs.into_iter().zip(elapsed).map(|(run, seconds)| {
         JobRunDisplay {
-            job_exists: installed_job_ids.contains(&run.job_id),
+            job_exists: installed_job_ids.contains(run.job_id.as_str()),
             id: run.id,
             job_id: run.job_id,
             job_name: run.job_name,

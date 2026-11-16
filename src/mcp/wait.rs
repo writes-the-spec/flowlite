@@ -4,11 +4,11 @@
 //! argument - see there for why it is not a `tokio::time::timeout` around the call. All this
 //! module adds is turning `wait_seconds` into that deadline.
 //!
-//! No transaction wraps the poll, on purpose: `src/toolkit.rs`'s `MIGRATION_LOCK` is held
-//! only while a connection's own schema migration runs, never across a sleep, so a
-//! five-minute wait here holds neither that mutex nor a SQLite write lock. Wrapping the poll
-//! in a transaction would hold a write lock for the same five minutes, stalling every other
-//! connection this process opens behind a busy timeout - not only this call's own.
+//! No transaction wraps the poll, on purpose: `src/toolkit.rs`'s `OPEN_LOCK` is held only
+//! while a connection is opened and migrated, never across a sleep, so a five-minute wait
+//! here holds neither that mutex nor a SQLite write lock. Wrapping the poll in a transaction
+//! would hold a write lock for the same five minutes, stalling every other connection this
+//! process opens behind a busy timeout - not only this call's own.
 
 use std::time::Duration;
 

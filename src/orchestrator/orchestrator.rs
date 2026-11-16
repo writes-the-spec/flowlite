@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::task::JoinHandle;
 use crate::crud::CRUD;
+use crate::declared::Declared;
 use crate::orchestrator::recovery::{recover_orphaned_task_run_attempts, system_boot_time};
 use crate::orchestrator::job_run_dispatcher::JobRunDispatcher;
 use crate::orchestrator::job_run_monitor::JobRunMonitor;
@@ -21,6 +22,7 @@ use crate::signals::Signals;
 /// of them, and the order they are started in doesn't matter.
 pub struct Orchestrator {
     pub crud: Arc<CRUD>,
+    pub declared: Arc<Declared>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
     pub signals: Arc<Signals>,
     /// The child processes the two attempt services share: the dispatcher spawns them,
@@ -38,12 +40,14 @@ impl Orchestrator {
 
     pub fn new(
         crud: Arc<CRUD>,
+        declared: Arc<Declared>,
         conn_pool: Arc<sqlx::SqlitePool>,
         signals: Arc<Signals>,
         app_config: AppConfig,
     ) -> Self {
         Self {
             crud,
+            declared,
             conn_pool,
             signals,
             children: Arc::new(TaskRunAttemptChildren::new()),
@@ -136,6 +140,7 @@ impl Orchestrator {
 
         let job_run_dispatcher = JobRunDispatcher::new(
             self.crud.clone(),
+            self.declared.clone(),
             self.conn_pool.clone(),
             self.signals.clone(),
             self.app_config.clone(),

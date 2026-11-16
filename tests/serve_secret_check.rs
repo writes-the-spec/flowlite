@@ -1,15 +1,12 @@
 //! The behavioural properties the existence check rests on, driven through the built binary
-//! the way `tests/serve_lock.rs` already does - the check itself queries `mem`, which is one
-//! shared-cache database for the whole process, so it cannot be exercised as a unit test
-//! without racing every other test's connection over its schema lock (see `TestDb`'s doc
-//! comment in `src/test_support.rs`).
+//! the way `tests/serve_lock.rs` already does: they are about which command runs the check.
 //!
 //! Two properties, three tests: `serve` refuses to start when a reference is unsatisfied,
-//! and the placement itself - that this cannot live inside `CRUD::init` - needs both a
-//! command that walks `init` (`job list`, which must still succeed) and one that does not
+//! and the placement itself - that this cannot live inside `Declared::load` - needs both a
+//! command that loads the YAML (`job list`, which must still succeed) and one that does not
 //! (`job-run list`, which pins the narrower "reading a run's status needs no credentials"
 //! property but, on its own, cannot tell the placement apart from the check having moved
-//! into `init`).
+//! into `Declared::load`).
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -76,11 +73,10 @@ fn a_served_job_naming_an_undefined_secret_refuses_naming_job_task_and_secret() 
     assert!(stderr.contains("warehouse_pw"), "{stderr}");
 }
 
-/// The test that actually pins the placement: `job list` (`JobListCmd::run`)
-/// calls `CRUD::init` in its own process, seeding `mem.job`/`mem.task` from the very same
-/// YAML `serve` refuses above - the same `mem` the check reads. `job list` is chosen
-/// precisely because it walks that `init` path, so if the existence check ever migrates
-/// into `CRUD::init` itself, this is the assertion that fails.
+/// The test that actually pins the placement: `job list` (`JobListCmd::run`) calls
+/// `Declared::load` on the very same YAML `serve` refuses above. `job list` is chosen
+/// precisely because it loads that YAML, so if the existence check ever moves into
+/// `Declared::load` itself, this is the assertion that fails.
 #[test]
 fn job_list_still_works_in_a_directory_serve_refuses() {
     let dir = data_dir_with_unresolvable_secret();
@@ -100,9 +96,9 @@ fn job_list_still_works_in_a_directory_serve_refuses() {
 
 /// The narrower property this one actually pins: reading a run's status never requires the
 /// credentials that run used. Unlike `job_list_still_works_in_a_directory_serve_refuses`,
-/// `job-run list` (`JobRunListCmd::run`) never calls `CRUD::init` at all -
-/// it reads only the persisted `job_run`/`task_run` tables - so on its own this assertion
-/// cannot catch a check that migrated into `CRUD::init`; that regression is what the
+/// `job-run list` (`JobRunListCmd::run`) never loads the YAML at all - it reads only the
+/// persisted `job_run`/`task_run` tables - so on its own this assertion cannot catch a
+/// check that moved into `Declared::load`; that regression is what the
 /// `job list` test above exists to catch.
 #[test]
 fn job_run_list_still_works_in_a_directory_serve_refuses() {

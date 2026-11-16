@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use crate::crud::task::Task;
+use crate::declared::Task;
 
 const NODE_WIDTH: f64 = 176.0;
 const NODE_HEIGHT: f64 = 36.0;
@@ -40,7 +40,7 @@ fn columns_by_task(tasks: &[Task]) -> HashMap<&str, usize> {
         let mut changed = false;
 
         for task in tasks {
-            let deepest_dependency = task.depends_on.0.iter()
+            let deepest_dependency = task.depends_on.iter()
                 .filter_map(|dependency| columns.get(dependency.as_str()))
                 .max()
                 .copied();
@@ -114,7 +114,7 @@ pub fn build(tasks: &[Task]) -> Dag {
     for task in tasks {
         let (to_x, to_y) = positions[task.task_id.as_str()];
 
-        for dependency in task.depends_on.0.iter() {
+        for dependency in task.depends_on.iter() {
             let Some(&(from_x, from_y)) = positions.get(dependency.as_str()) else { continue };
 
             let start_x = from_x + NODE_WIDTH;

@@ -4,9 +4,6 @@ use askama::Template;
 use axum::Extension;
 
 use crate::router::app::middlewares::session::SignedIn;
-use crate::crud::CRUD;
-use crate::crud::job::{SelectJobsData, SelectJobsDataFilter, SelectJobsDataSort};
-use crate::crud::task::{SelectTasksData, SelectTasksDataFilter, SelectTasksDataSort};
 use crate::router::app::app_state::AppState;
 
 /// The task as declared, name and value pairs already sorted for a table rather than a
@@ -40,62 +37,37 @@ struct TaskIdRouteTemplate {
 
 pub async fn task_id_route(
     State(state): State<AppState>,
-    Extension(crud): Extension<CRUD>,
     Path((job_id, task_id)): Path<(String, String)>,
     signed_in: Option<Extension<SignedIn>>,
 ) -> impl IntoResponse {
-    let conn = &*state.conn_pool;
-
-    let job = crud.select_job(conn, &SelectJobsData {
-        filter: SelectJobsDataFilter {
-            job_id: Some(job_id.clone()),
-            ..Default::default()
-        },
-        sort: Some(SelectJobsDataSort::RowId),
-        limit: None,
-        offset: None,
-    }).await.unwrap_or_default();
-
-    let job = match job {
-        Some(job) => job,
-        None => return Html("Job not found".to_string()).into_response(),
+    let Some(job) = state.declared.job(&job_id) else {
+        return Html("Job not found".to_string()).into_response();
     };
 
     // Both ids, because a task id is unique per job rather than globally.
-    let task = crud.select_task(conn, &SelectTasksData {
-        filter: SelectTasksDataFilter {
-            task_id: Some(task_id),
-            job_id: Some(job.job_id.clone()),
-        },
-        sort: Some(SelectTasksDataSort::RowId),
-        limit: None,
-        offset: None,
-    }).await.unwrap_or_default();
-
-    let task = match task {
-        Some(task) => task,
-        None => return Html("Task not found".to_string()).into_response(),
+    let Some(task) = state.declared.task(&job_id, &task_id) else {
+        return Html("Task not found".to_string()).into_response();
     };
 
     let template = TaskIdRouteTemplate {
         current_route: "jobs",
         theme: state.toolkit.app_config.ui.theme.as_attribute(),
         signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
-        job_name: job.name,
+        job_name: job.name.clone(),
         task: TaskDisplay {
-            task_id: task.task_id,
-            job_id: task.job_id,
-            description: task.description,
-            command: task.command,
-            stdin: task.stdin,
-            depends_on: task.depends_on.0,
+            task_id: task.task_id.clone(),
+            job_id: task.job_id.clone(),
+            description: task.description.clone(),
+            command: task.command.clone(),
+            stdin: task.stdin.clone(),
+            depends_on: task.depends_on.clone(),
             timeout: task.timeout,
             idle_timeout: task.idle_timeout,
             max_retries: task.max_retries,
             retry_delay: task.retry_delay,
-            env: task.env.0.into_iter().collect(),
-            secret_env: task.secret_env.0.into_iter().collect(),
-            working_dir: task.working_dir,
+            env: task.env.clone().into_iter().collect(),
+            secret_env: task.secret_env.clone().into_iter().collect(),
+            working_dir: task.working_dir.clone(),
         },
     };
 

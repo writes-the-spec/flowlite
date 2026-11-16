@@ -48,7 +48,7 @@
     "should_trigger": false
   },
   {
-    "query": "does this belong in the disk database or the in memory one?",
+    "query": "does this column belong on job_run or on task_run?",
     "should_trigger": false
   },
   {

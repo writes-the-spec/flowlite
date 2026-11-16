@@ -48,7 +48,7 @@
     "should_trigger": false
   },
   {
-    "query": "should the new task_run_output table live in the mem schema or on disk?",
+    "query": "should the new task_run_output data live in Declared or in a flowlite.db table?",
     "should_trigger": false
   },
   {

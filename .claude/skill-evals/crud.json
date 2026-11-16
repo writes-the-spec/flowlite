@@ -16,7 +16,7 @@
     "should_trigger": true
   },
   {
-    "query": "i want select_schedules sorted by next_run instead of row_id. where does the sort enum live and what do i add",
+    "query": "i want select_job_runs sorted by scheduled_at instead of id. where does the sort enum live and what do i add",
     "should_trigger": true
   },
   {
@@ -32,11 +32,11 @@
     "should_trigger": true
   },
   {
-    "query": "my new select returns duplicate rows after i joined mem.task. how do the existing selects handle that join",
+    "query": "my new select returns duplicate rows after i joined task_run. how do the existing selects handle that join",
     "should_trigger": true
   },
   {
-    "query": "wire my new widget entity into CRUD::init so it gets seeded on startup like the others",
+    "query": "my new crud method needs the job's max_parallel_runs - how does it get at the config?",
     "should_trigger": true
   },
   {
@@ -44,7 +44,7 @@
     "should_trigger": false
   },
   {
-    "query": "should this new table go in the in memory schema or the persisted one?",
+    "query": "should this new data be a table or a field on Declared?",
     "should_trigger": false
   },
   {

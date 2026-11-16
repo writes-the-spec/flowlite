@@ -3,9 +3,8 @@ use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
-use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::job_run::JobRunStatus;
-use crate::crud::multistatements::ad_hoc_job::JobIdAlreadyInstalled;
+use crate::declared::{Declared, JobIdAlreadyInstalled};
 use crate::shared::format;
 use crate::shared::job::installed_job_id;
 use crate::shared::job_run::select_job_run;
@@ -67,8 +66,6 @@ pub struct JobSubmitCmd {
 impl JobCmd {
     pub async fn run(&self, toolkit: Toolkit) -> anyhow::Result<()> {
 
-        let _memory_conn = toolkit.get_memory_conn().await?;
-
         match &self.command {
             JobSubcommand::List(cmd) => cmd.run(toolkit, self.json).await,
             JobSubcommand::Submit(cmd) => cmd.run(toolkit, self.json).await,
@@ -79,18 +76,7 @@ impl JobCmd {
 impl JobListCmd {
     pub async fn run(&self, toolkit: Toolkit, json: bool) -> anyhow::Result<()> {
 
-        let mut conn = toolkit.get_conn().await?;
-
-        let crud = CRUD::new(std::sync::Arc::new(toolkit));
-
-        crud.init(&mut conn).await?;
-
-        let jobs = crud.select_jobs(&mut conn, &SelectJobsData {
-            filter: SelectJobsDataFilter::default(),
-            sort: None,
-            limit: None,
-            offset: None,
-        }).await?;
+        let jobs = Declared::load(&toolkit.app_config)?.jobs;
 
         if json {
             println!("{}", serde_json::to_string_pretty(&jobs)?);
@@ -135,14 +121,11 @@ impl JobSubmitCmd {
                 .map_err(describe_unserved_data_dir)?;
         }
 
-        let mut conn = toolkit.get_conn().await?;
-        let crud = CRUD::new(std::sync::Arc::new(toolkit));
-
-        let row_id = crud.init(&mut conn).await?;
+        let mut declared = Declared::load(&toolkit.app_config)?;
 
         let job_id = match (&self.job_name, &self.file) {
-            (Some(job_name), None) => installed_job_id(&crud, &mut conn, job_name).await?,
-            (None, Some(file)) => seed_job_file(&crud, &mut conn, file, row_id).await?,
+            (Some(job_name), None) => installed_job_id(&declared, job_name)?,
+            (None, Some(file)) => add_job_file(&mut declared, &toolkit, file)?,
             // clap's `definition` group requires exactly one of the two.
             _ => anyhow::bail!("Name a job to submit, or pass -f to submit a file"),
         };
@@ -150,8 +133,12 @@ impl JobSubmitCmd {
         let overrides: std::collections::BTreeMap<String, String> =
             self.params.iter().cloned().collect();
 
+        let mut conn = toolkit.get_conn().await?;
+        let crud = CRUD::new(std::sync::Arc::new(toolkit));
+
         let job_run_id = crud.submit_job(
             &mut conn,
+            &declared,
             &job_id,
             &overrides,
             scheduled_at,
@@ -191,29 +178,18 @@ impl JobSubmitCmd {
     }
 }
 
-/// Seeds a job file that is not installed in the data directory, so its run is built from
-/// the same rows every other run is built from.
+/// Adds a job file that is not installed in the data directory, so its run is built the
+/// same way every other run is. The job lives only in this process's `Declared`: `serve`
+/// and the dashboard never see it - only the run it produced, which carries its own
+/// definition and so needs nothing to look back at.
 ///
-/// The seeded job lives only in this process: `mem` is a shared-cache in-memory database,
-/// which SQLite scopes to the process that opened it, and it is gone when this command
-/// exits. `serve` and the dashboard never see it - only the run it produced, which carries
-/// its own definition and so needs nothing to look back at.
-///
-/// The collision check, the seed and the secret check are `CRUD::seed_ad_hoc_job` - shared
-/// with the MCP `submit_job` tool's `file` and `yaml` arguments, which run this same
-/// sequence over a definition of their own. Only the remedy sentence is this command's own:
-/// a collision comes back as a typed `JobIdAlreadyInstalled`, and this is where it becomes
-/// the CLI's own words for "submit it by name instead."
-async fn seed_job_file(
-    crud: &CRUD,
-    conn: &mut sqlx::SqliteConnection,
-    file: &Path,
-    row_id: u64,
-) -> anyhow::Result<String> {
+/// The collision check, the add and the secret check are `Declared::add_ad_hoc_job`,
+/// shared with the MCP `submit_job` tool. Only the remedy sentence is this command's own.
+fn add_job_file(declared: &mut Declared, toolkit: &Toolkit, file: &Path) -> anyhow::Result<String> {
 
     let job_yaml = JobYaml::from_yaml(file)?;
 
-    match crud.seed_ad_hoc_job(&mut *conn, job_yaml, file, row_id).await {
+    match declared.add_ad_hoc_job(&toolkit.app_config, job_yaml, file) {
         Ok(job_id) => Ok(job_id),
         Err(err) => match err.downcast::<JobIdAlreadyInstalled>() {
             Ok(collision) => anyhow::bail!(

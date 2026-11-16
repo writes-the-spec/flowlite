@@ -57,7 +57,7 @@ Consequences:
 
 **Publish rule:** call `self.signals.publish()` after writing a status, or inserting a row, that another service selects on — never after a data-only write. `TaskRunAttemptMonitor::insert_output` deliberately doesn't: it runs every pass per running attempt and would wake all seven pollers constantly.
 
-**The orchestrator reads runs, never definitions.** `command`, `timeout`, `max_retries`, `retry_delay`, `depends_on`, `env`, `working_dir` come off the `task_run` row (snapshotted from `mem.task` by `CRUD::submit_job`), and `parameters`, `scheduled_at` off `job_run`, so a run executes what it was submitted with. No orchestrator file imports `crate::crud::task` or `crate::crud::job`. The one exception is `JobRunDispatcher`'s `is_job_at_max_parallel_runs`, reading `mem.job.max_parallel_runs` — "may I start another?" is a question about the job now. Nothing enforces this: `mem` is attached to every pooled connection.
+**The orchestrator reads runs, never definitions.** `command`, `timeout`, `max_retries`, `retry_delay`, `depends_on`, `env`, `working_dir` come off the `task_run` row (snapshotted from the declared `Task` by `CRUD::submit_job`), and `parameters`, `scheduled_at` off `job_run`, so a run executes what it was submitted with. The one exception is `JobRunDispatcher`'s `is_job_at_max_parallel_runs`, reading the `Job`'s `max_parallel_runs` — "may I start another?" is a question about the job now. It is the only orchestrator service handed `Declared`, so no other can read a definition by accident.
 
 The only shared memory is `TaskRunAttemptChildren` ([src/orchestrator/task_run_attempt_children.rs](../../../src/orchestrator/task_run_attempt_children.rs)) — see [task_run_attempt.md](references/task_run_attempt.md).
 

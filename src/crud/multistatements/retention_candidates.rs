@@ -59,10 +59,10 @@ impl CRUD {
         Ok(count as u32)
     }
 
-    /// Every job id that owns at least one finished run, including one with no row in
-    /// `mem.job` at all: an ad-hoc definition, or a job whose YAML has since been deleted.
-    /// It is what the per-job pass iterates over, since nothing else enumerates "jobs that
-    /// have ever run" the way `mem.job` enumerates "jobs currently declared".
+    /// Every job id that owns at least one finished run, including one no YAML declares:
+    /// an ad-hoc definition, or a job whose YAML has since been deleted. It is what the
+    /// per-job pass iterates over, since nothing else enumerates "jobs that have ever run"
+    /// the way `Declared::jobs` enumerates "jobs currently declared".
     pub async fn select_job_ids_with_finished_job_runs(&self, conn: &mut SqliteConnection) -> anyhow::Result<Vec<String>> {
 
         let job_ids = self.select_job_run_job_ids(&mut *conn, &SelectJobRunJobIdsData {
@@ -637,9 +637,8 @@ mod tests {
         assert_eq!(count, 2);
     }
 
-    /// Every job id owning a finished run comes back, including one with no `mem.job` row
-    /// at all — `TestDb` leaves `mem` unmigrated, so this also proves the query never joins
-    /// against it.
+    /// Every job id owning a finished run comes back, including one the `TestDb` declares
+    /// no job for.
     #[tokio::test]
     async fn select_job_ids_with_finished_job_runs_includes_ids_with_no_job_row() {
 

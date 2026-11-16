@@ -44,7 +44,7 @@
     "should_trigger": false
   },
   {
-    "query": "add a description column to mem.schedule and update the migration",
+    "query": "add a description column to job_run_stop and update the migration",
     "should_trigger": false
   },
   {

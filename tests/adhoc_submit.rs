@@ -1,10 +1,6 @@
 //! `job submit -f <file>` — a run whose definition was never installed in the data
-//! directory. Driven through the built binary rather than as unit tests because the whole
-//! feature turns on what `mem` holds, and `mem` is one shared-cache database per process:
-//! seeding it inside a unit test races every other test's connection over its schema lock
-//! (see `TestDb`'s doc comment in `src/test_support.rs`), which is the same reason
-//! `tests/serve_secret_check.rs`
-//! lives out here.
+//! directory. Driven through the built binary, since the feature is a CLI flag and what it
+//! must not do is leave anything behind for the next process.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -69,8 +65,8 @@ fn a_submitted_file_does_not_become_an_installed_job() {
     assert!(!stdout.contains("hello"), "the file was installed: {stdout}");
 }
 
-/// `job_id` is `mem.job`'s primary key, so the alternative to refusing is a raw constraint
-/// error. The message has to name the command that does what they meant.
+/// Two jobs cannot share an id. The message has to name the command that does what they
+/// meant.
 #[test]
 fn a_file_whose_id_is_already_installed_is_refused() {
     let dir = data_dir("collision");
@@ -125,7 +121,7 @@ fn a_file_naming_an_undefined_secret_is_refused() {
     assert!(stderr.contains("warehouse_pw"), "{stderr}");
 }
 
-/// The scope of that check. By the time the file is seeded, `mem` also holds every
+/// The scope of that check. By the time the file is added, `Declared` also holds every
 /// installed job, so an unscoped check would refuse this submit over a job it has nothing
 /// to do with.
 #[test]

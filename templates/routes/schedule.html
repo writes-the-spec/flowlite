@@ -95,11 +95,11 @@
                 <td class="deftable__id"><a href="/jobs/{{ schedule_job.job_id }}">{{ schedule_job.job_id }}</a></td>
 
                 <td>
-                    {% if schedule_job.parameters.0.is_empty() %}
+                    {% if schedule_job.parameters.is_empty() %}
                     <span class="none">none</span>
                     {% else %}
                     <div class="deps">
-                        {% for (key, value) in schedule_job.parameters.0 %}
+                        {% for (key, value) in schedule_job.parameters %}
                         <span class="dep">{{ key }}={{ value }}</span>
                         {% endfor %}
                     </div>

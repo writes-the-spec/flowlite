@@ -5,7 +5,6 @@ use axum::Extension;
 
 use crate::router::app::middlewares::session::SignedIn;
 use crate::crud::CRUD;
-use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, TaskRunStatus};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus};
 use crate::crud::task_run_attempt_output::{group_task_run_attempt_output, SelectTaskRunAttemptOutputsData, SelectTaskRunAttemptOutputsDataFilter, SelectTaskRunAttemptOutputsDataSort, TaskRunAttemptOutputStreams};
@@ -169,21 +168,13 @@ pub async fn task_run_id_route(
         format::duration(finished_at.signed_duration_since(started_at).num_seconds())
     });
 
-    let job = crud.select_job(conn, &SelectJobsData {
-        filter: SelectJobsDataFilter {
-            job_id: Some(task_run.job_id.clone()),
-            ..Default::default()
-        },
-        sort: None,
-        limit: Some(1),
-        offset: None,
-    }).await.unwrap_or_default();
+    let job_exists = state.declared.job(&task_run.job_id).is_some();
 
     let template = TaskRunIdRouteTemplate {
         current_route: "home",
         theme: state.toolkit.app_config.ui.theme.as_attribute(),
         signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
-        job_exists: job.is_some(),
+        job_exists,
         task_run: TaskRunDisplay {
             id: task_run.id,
             job_run_id: task_run.job_run_id,

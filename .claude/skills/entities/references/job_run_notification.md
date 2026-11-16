@@ -27,7 +27,7 @@ Written **at submit**, so **`pending` means open, not ready** — usually the ru
 
 ## Written by
 
-- **Inserted** by `CRUD::submit_job` / `CRUD::rerun_job` ([src/crud/multistatements/](../../../../src/crud/multistatements/)) via `insert_job_run_definition`, with the [`job_run`](job_run.md) and [`task_run`](task_run.md)s — frozen at submit like the rest of the definition: from `mem.job.on_failure_recipients`/`on_success_recipients`, or for a rerun the earlier run's rows. **One row per channel per block**, each delivered independently (a Slack outage does not swallow the mail); at most one of a run's `failure`/`success` rows is ever delivered.
+- **Inserted** by `CRUD::submit_job` / `CRUD::rerun_job` ([src/crud/multistatements/](../../../../src/crud/multistatements/)) via `insert_job_run_definition`, with the [`job_run`](job_run.md) and [`task_run`](task_run.md)s — frozen at submit like the rest of the definition: from the `Job`'s `on_failure_recipients`/`on_success_recipients`, or for a rerun the earlier run's rows. **One row per channel per block**, each delivered independently (a Slack outage does not swallow the mail); at most one of a run's `failure`/`success` rows is ever delivered.
 - **Updated** by `NotificationService` only. **The orchestrator never writes it**; `JobRunMonitor` does not know notifications exist.
 
 Writing at submit means the row exists before the run can fail; inserted at finish, it would have to share the monitor's status-write transaction or be lost, since a monitor never revisits a finished run. The cost is that most rows close `skipped`.

@@ -4,19 +4,19 @@
     "should_trigger": true
   },
   {
-    "query": "no such table: mem.job - what did i forget",
+    "query": "database is locked when two mcp calls open a fresh data directory at once",
     "should_trigger": true
   },
   {
-    "query": "when should something call with_fresh_mem",
+    "query": "where do the WAL and busy timeout pragmas get set on a connection",
     "should_trigger": true
   },
   {
-    "query": "database schema is locked: mem, where does that come from",
+    "query": "why does get_conn hold a lock while it connects",
     "should_trigger": true
   },
   {
-    "query": "why does serve share one mem and the mcp server not",
+    "query": "should my new service open its own connection or take the pool",
     "should_trigger": true
   },
   {
@@ -24,11 +24,11 @@
     "should_trigger": true
   },
   {
-    "query": "my seeded jobs vanish partway through the command",
+    "query": "the migration ran twice on a fresh database - CREATE TABLE failed: table already exists",
     "should_trigger": true
   },
   {
-    "query": "what is MIGRATION_LOCK actually protecting against",
+    "query": "what is OPEN_LOCK actually protecting against",
     "should_trigger": true
   },
   {

@@ -24,7 +24,7 @@
     "should_trigger": true
   },
   {
-    "query": "why does TestDb leave the mem schema unmigrated",
+    "query": "how do i give a TestDb a job and a schedule for a scheduler test",
     "should_trigger": true
   },
   {

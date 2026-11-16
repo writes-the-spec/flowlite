@@ -6,8 +6,7 @@ use serde::Deserialize;
 
 use crate::router::app::middlewares::session::SignedIn;
 use crate::cron_trigger::CronTrigger;
-use crate::crud::CRUD;
-use crate::crud::schedule::{SelectSchedulesData, SelectSchedulesDataFilter, SelectSchedulesDataSort};
+use crate::declared::Schedule;
 use crate::router::app::app_state::AppState;
 use crate::shared::format;
 
@@ -52,12 +51,9 @@ fn schedules_href(page: u32, name_like: Option<&str>) -> String {
 
 pub async fn schedules_route(
     State(state): State<AppState>,
-    Extension(crud): Extension<CRUD>,
     Query(query): Query<SchedulesRouteQuery>,
     signed_in: Option<Extension<SignedIn>>,
 ) -> impl IntoResponse {
-    let conn = &*state.conn_pool;
-
     let page_size = state.toolkit.app_config.ui.page_size;
 
     let page = query.page.unwrap_or(1).max(1);
@@ -67,30 +63,29 @@ pub async fn schedules_route(
     // filter on the empty name.
     let name_like = query.schedule_name_like.filter(|name| !name.is_empty());
 
-    let schedules = crud.select_schedules(conn, &SelectSchedulesData {
-        filter: SelectSchedulesDataFilter {
-            schedule_id: None,
-            name_like: name_like.clone(),
-            ..Default::default()
-        },
-        sort: Some(SelectSchedulesDataSort::RowId),
-        limit: Some(page_size + 1), // One extra row tells us whether a next page exists.
-        offset: Some(offset),
-    }).await.unwrap_or_default();
+    let name_like_lowercase = name_like.as_deref().map(str::to_lowercase);
 
-    let has_next_page = schedules.len() > page_size as usize;
+    let matching: Vec<&Schedule> = state.declared.schedules
+        .iter()
+        .filter(|schedule| match &name_like_lowercase {
+            Some(name) => schedule.name.to_lowercase().contains(name),
+            None => true,
+        })
+        .collect();
 
-    let entries = schedules.into_iter().take(page_size as usize).map(|schedule| {
+    let has_next_page = matching.len() > (offset + page_size) as usize;
 
-        // Derived here rather than stored on the row: it is the next occurrence after now,
-        // which is a different answer every time it is asked and nothing else reads.
-        let next_run = CronTrigger::from_schedule(&schedule).get_next_run(None);
+    let entries = matching.into_iter().skip(offset as usize).take(page_size as usize).map(|schedule| {
+
+        // Derived here rather than stored: it is the next occurrence after now, which is a
+        // different answer every time it is asked and nothing else reads.
+        let next_run = CronTrigger::from_schedule(schedule).get_next_run(None);
 
         ScheduleEntry {
-            schedule_id: schedule.schedule_id,
-            name: schedule.name,
-            description: schedule.description,
-            cron: schedule.cron,
+            schedule_id: schedule.schedule_id.clone(),
+            name: schedule.name.clone(),
+            description: schedule.description.clone(),
+            cron: schedule.cron.clone(),
             next_run: next_run.map(format::timestamp),
             disabled: schedule.disabled,
         }

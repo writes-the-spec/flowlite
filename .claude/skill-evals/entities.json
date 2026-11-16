@@ -1,6 +1,6 @@
 [
   {
-    "query": "adding a task_run_log table for structured logs. does that belong in the mem schema or on disk?",
+    "query": "adding a task_run_log entity for structured logs. does that belong in Declared or in flowlite.db?",
     "should_trigger": true
   },
   {
@@ -12,7 +12,7 @@
     "should_trigger": false
   },
   {
-    "query": "why is mem.job empty when i query it from a second connection in my new background task?",
+    "query": "which services read a job's keep_runs and max_parallel_runs, and when?",
     "should_trigger": true
   },
   {
@@ -24,11 +24,11 @@
     "should_trigger": false
   },
   {
-    "query": "does the mem schema survive a restart? im storing next_run there and it keeps resetting to the next occurrence",
+    "query": "does Declared survive a restart? im storing next_run there and it keeps resetting to the next occurrence",
     "should_trigger": true
   },
   {
-    "query": "we want to persist the resolved dag so we dont recompute it every startup. disk or memory?",
+    "query": "we want to persist the resolved dag so we dont recompute it every startup. flowlite.db or Declared?",
     "should_trigger": true
   },
   {
@@ -36,7 +36,7 @@
     "should_trigger": true
   },
   {
-    "query": "that ATTACH DATABASE line — do i need to run it on my new connection or does Toolkit already handle it",
+    "query": "that ATTACH DATABASE line \u2014 do i need to run it on my new connection or does Toolkit already handle it",
     "should_trigger": true
   },
   {
@@ -72,7 +72,7 @@
     "should_trigger": true
   },
   {
-    "query": "is schedule.next_run written once at startup or updated as it fires? trying to understand what carries live state in mem",
+    "query": "is a schedule's next_run written once at startup or updated as it fires? trying to understand what carries live state",
     "should_trigger": true
   },
   {

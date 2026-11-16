@@ -1,23 +1,22 @@
-# `schedule_job` (mem)
+# `ScheduleJob` (Declared)
 
-Which jobs a [`schedule`](schedule.md) submits — one row per job under the schedule YAML's `jobs:`. No primary key, only `UNIQUE (row_id)`.
+Which jobs a [`Schedule`](schedule.md) submits — one per job under the schedule YAML's `jobs:`, a struct in `Declared` ([src/declared/declared.rs](../../../../src/declared/declared.rs)).
 
-| Column | Meaning |
+| Field | Meaning |
 |---|---|
-| `row_id` | YAML declaration order. `UNIQUE`. |
-| `schedule_id` | Foreign key to [`schedule`](schedule.md). |
-| `job_id` | Foreign key to [`job`](job.md). |
-| `parameters` | `NOT NULL`, `'{}'` if none. Overrides of the job's `parameters`, passed to `CRUD::submit_job`, where an undeclared name raises via `resolve_job_parameters`. |
+| `schedule_id` | The [`Schedule`](schedule.md) it belongs to. |
+| `job_id` | A [`Job`](job.md) some file declares — checked at load. |
+| `parameters` | Empty if none. Overrides of the job's `parameters`, passed to `CRUD::submit_job`, where an undeclared name raises via `resolve_job_parameters`. |
 
 ## Written by
 
-`CRUD::init`, after every `job` row, so the foreign key below checks against a complete `job` table.
+`Declared::load`, after every job, so `job_id` is checked against the complete set.
 
 ## Read by
 
-- `Scheduler::schedule_jobs`, once per schedule per pass, so `submit_if_missing` can call `CRUD::submit_job` with `parameters` for each occurrence with no run yet.
+- `Scheduler::reconcile_schedule`, through `Declared::jobs_of_schedule`, once per schedule per pass, so `submit_if_missing` can call `CRUD::submit_job` with `parameters` for each occurrence with no run yet.
 - The schedule-detail web route, which renders `parameters`.
 
-## The foreign key is load-bearing
+## An unknown job stops startup
 
-sqlx turns `PRAGMA foreign_keys` on by default, so **a schedule naming a nonexistent job stops startup**: `CRUD::init`'s config transaction aborts with `(code: 787) FOREIGN KEY constraint failed`, taking down `serve`, `job list` and `job submit` alike. In exchange the Scheduler never sees an unresolvable job id.
+A schedule naming a job no file declares fails `Declared::load`, taking down `serve`, `job list` and `job submit` alike. In exchange the Scheduler never sees an unresolvable job id.

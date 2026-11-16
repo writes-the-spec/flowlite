@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use crate::app_config::AppConfig;
 use crate::crud::CRUD;
+use crate::declared::Declared;
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort, UpdateJobRunsData, UpdateJobRunsDataFilter, UpdateJobRunsDataInput};
 use crate::crud::task_run::{TaskRunStatus, UpdateTaskRunsData, UpdateTaskRunsDataFilter, UpdateTaskRunsDataInput};
 use crate::poller::Service;
@@ -13,6 +14,8 @@ use chrono::Utc;
 /// running. Hands off to JobRunMonitor through the job run status only.
 pub struct JobRunDispatcher {
     pub crud: Arc<CRUD>,
+    /// Read for each job's `max_parallel_runs`.
+    pub declared: Arc<Declared>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
     pub signals: Arc<Signals>,
     pub app_config: AppConfig,
@@ -23,12 +26,14 @@ impl JobRunDispatcher {
 
     pub fn new(
         crud: Arc<CRUD>,
+        declared: Arc<Declared>,
         conn_pool: Arc<sqlx::SqlitePool>,
         signals: Arc<Signals>,
         app_config: AppConfig,
     ) -> Self {
         Self {
             crud,
+            declared,
             conn_pool,
             signals,
             app_config,
@@ -174,7 +179,7 @@ impl JobRunDispatcher {
 
         let mut conn = self.conn_pool.acquire().await?;
 
-        self.crud.is_job_at_max_parallel_runs(&mut conn, &job_run.job_id).await
+        self.crud.is_job_at_max_parallel_runs(&mut conn, &self.declared, &job_run.job_id).await
 
     }
 

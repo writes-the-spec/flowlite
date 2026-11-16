@@ -1271,12 +1271,12 @@ inside it is circular); pass `-D` / `--data-dir` / `FLOWLITE_DATA_DIR`.
 
 ## Upgrading
 
-flowlite keeps two schemas, and they upgrade differently.
+Configuration and run history upgrade differently.
 
-The **memory** schema holds jobs, schedules and tasks. It is rebuilt from your YAML into a
-fresh in-memory database on every start, so an upgrade asks nothing of it.
+Jobs, schedules and tasks are read from your YAML on every start and kept in memory, so
+an upgrade asks nothing of them.
 
-The **disk** schema holds the run history in `flowlite.db`, which outlives the process.
+The run history lives in `flowlite.db`, which outlives the process.
 From 0.1.0 on it changes only by new migration files, which a new binary applies when it
 first starts. Stop `serve`, replace the binary and start it again, and the history comes
 along.

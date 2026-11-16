@@ -32,8 +32,6 @@ pub struct WidgetListCmd {}
 
 impl WidgetCmd {
     pub async fn run(&self, toolkit: Toolkit) -> anyhow::Result<()> {
-        let _memory_conn = toolkit.get_memory_conn().await?;
-
         match &self.command {
             WidgetSubcommand::List(cmd) => cmd.run(toolkit, self.json).await,
         }
@@ -44,7 +42,6 @@ impl WidgetListCmd {
     pub async fn run(&self, toolkit: Toolkit, json: bool) -> anyhow::Result<()> {
         let mut conn = toolkit.get_conn().await?;
         let crud = CRUD::new(std::sync::Arc::new(toolkit));
-        crud.init(&mut conn).await?;
 
         let widgets = crud.select_widgets(&mut conn, &SelectWidgetsData { /* filter, sort, limit, offset */ }).await?;
 
@@ -71,5 +68,5 @@ impl WidgetListCmd {
 - **JSON on stdout is the rows themselves, no `{ok, data}` envelope; errors never go there.** Errors stay `anyhow::Result`, which `main` prints to stderr before exiting 1, so a redirected `--json` file holds rows or nothing. A command reporting an outcome (`job submit --wait`) must not also print it to stdout, or the failure is stated twice.
 - **No imports from `src/mcp/` or `src/router/`** except `serve` and `mcp` starting them ([tests/frontend_boundaries.rs](../../../tests/frontend_boundaries.rs) allows those by name). Shared helpers (`format`, `limits`, `JobRunDetail`, `wait_for_job_run`, `parse_job_run_status`) live in `src/shared/`; see the `frontends` skill.
 - **Data goes through `CRUD::new(Arc::new(toolkit))`** and the `crud::<entity>` query structs (`crud` skill); no raw SQL here.
-- **Only a command that reads config seeds it.** One querying a `mem` table holds a `toolkit.get_memory_conn()` binding for the whole command (it runs the memory migrations and keeps the shared-cache database alive) and calls `crud.init(&mut conn)` first, like `job list` and `job submit`. One reading only run history does neither: the `job-run` commands ([src/cli/commands/job_run.rs](../../../src/cli/commands/job_run.rs)), `logs` and `rerun` included, read no config so they still work when a YAML file in the data dir no longer parses.
+- **Only a command that reads config loads it.** One needing jobs or schedules calls `Declared::load(&toolkit.app_config)?` and passes `&declared` where it is wanted, like `job list` and `job submit` ([yaml skill](../yaml/SKILL.md)). One reading only run history does not: the `job-run` commands ([src/cli/commands/job_run.rs](../../../src/cli/commands/job_run.rs)), `logs` and `rerun` included, read no config so they still work when a YAML file in the data dir no longer parses.
 - **Long-running commands** (`serve`) build `Toolkit`/`CRUD`/the pool as `Arc`s - follow [src/cli/commands/serve.rs](../../../src/cli/commands/serve.rs). Services that move runs are wired in `Orchestrator::start` ([src/orchestrator/orchestrator.rs](../../../src/orchestrator/orchestrator.rs)); a service the orchestrator neither calls nor is called by (`Scheduler`, `NotificationService`, `RetentionService`) gets its own `Poller` in `serve.rs`, its wake-up registered before any poller spawns (`poller` skill).

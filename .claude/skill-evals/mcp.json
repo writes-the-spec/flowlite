@@ -20,7 +20,7 @@
     "should_trigger": true
   },
   {
-    "query": "why does every tool call open its own connection with a fresh mem",
+    "query": "why does every tool call load the yaml again instead of reusing what the server loaded",
     "should_trigger": true
   },
   {
@@ -72,7 +72,7 @@
     "should_trigger": false
   },
   {
-    "query": "write a test that needs a seeded mem database",
+    "query": "write a test that needs a job declared in TestDb",
     "should_trigger": false
   },
   {

@@ -42,7 +42,7 @@ impl McpServer {
 /// Takes no connection and seeds nothing, exactly as the command does: this writes the
 /// configuration the other tools read, so it has to work in a directory that has no
 /// database yet. The files it writes reach `list_jobs` on the very next call anyway, since
-/// every call seeds a `mem` of its own.
+/// every call loads the YAML afresh.
 fn init_result(data_dir: &str) -> anyhow::Result<InitResult> {
     let files = scaffold(std::path::Path::new(data_dir))?;
 

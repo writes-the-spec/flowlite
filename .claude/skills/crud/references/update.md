@@ -1,6 +1,6 @@
 # Update methods
 
-Only entities that change state after creation get an `update_*`: `job_run`, `task_run`, `task_run_attempt`, `job_run_notification`. Config-seeded entities (`job`, `task`, `schedule`, `schedule_job`) don't.
+Only entities that change state after creation get an `update_*`: `job_run`, `task_run`, `task_run_attempt`, `job_run_notification`. `job_run_stop` and `task_run_attempt_output` are insert-only.
 
 ## Struct shape
 
@@ -43,7 +43,7 @@ pub async fn update_widgets<'e, E>(&self, executor: E, data: &UpdateWidgetsData)
 where
     E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
 {
-    let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("UPDATE mem.widget SET ");
+    let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new("UPDATE widget SET ");
     let mut separated = query_builder.separated(", ");
 
     if let Some(status) = &data.input.status {

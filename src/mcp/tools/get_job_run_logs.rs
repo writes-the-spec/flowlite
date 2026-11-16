@@ -100,10 +100,9 @@ async fn get_job_run_logs_rows(
     task_id: Option<&str>,
     max_bytes: usize,
 ) -> anyhow::Result<Vec<TaskRunAttemptLog>> {
-    let toolkit = toolkit.with_fresh_mem();
     let mut conn = toolkit.get_conn().await?;
 
-    let crud = CRUD::new(Arc::new(toolkit));
+    let crud = CRUD::new(Arc::new(toolkit.clone()));
 
     let (task_run_attempts, mut task_run_attempt_output) =
         crud.select_task_run_attempt_logs(&mut conn, job_run_id, task_id).await?;

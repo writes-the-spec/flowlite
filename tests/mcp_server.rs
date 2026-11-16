@@ -315,10 +315,10 @@ fn list_jobs_shows_a_job_installed_in_the_data_directory() {
     assert_eq!(job_ids, vec!["hello"]);
 }
 
-/// The staleness half of the fresh-mem mechanism: `mem` is seeded once per call, not once
-/// per process, so a file written into `jobs/` after this long-lived server started is
-/// still visible on the very next call - the whole reason a CLI command's "read config,
-/// then exit" cannot simply be ported unchanged into a server.
+/// The YAML is loaded once per call, not once per process, so a file written into `jobs/`
+/// after this long-lived server started is still visible on the very next call - the whole
+/// reason a CLI command's "read config, then exit" cannot simply be ported unchanged into a
+/// server.
 #[test]
 fn a_job_file_written_after_the_server_started_is_visible_to_list_jobs() {
     let dir = data_dir("late-job");
@@ -586,27 +586,15 @@ fn submitting_refuses_to_wait_for_a_run_that_is_not_due() {
     assert!(tool_text(&result).contains("not due"), "{result}");
 }
 
-/// The regression test for the whole fresh-mem mechanism this cut exists for: two calls
-/// seeding the same inline id must not collide, because each seeds a `mem` nothing else has
-/// the name of.
+/// Two calls submitting the same inline id at once, into a data directory with no
+/// `flowlite.db` yet.
 ///
 /// Both `tools/call` requests are sent before either response is read, so they genuinely
-/// overlap inside the server rather than running one after the other: rmcp dispatches each
-/// to its own task (src/mcp/mod.rs's own doc comment says calls run concurrently), so two
-/// calls in flight at once is the real shape of the hazard `with_fresh_mem` exists to
-/// prevent. A version of this test that waited for the first response before sending the
-/// second would not catch a regression here: `mem` is a shared-cache database that SQLite
-/// drops the instant nothing has it open (`src/toolkit.rs`), so a fully sequential first
-/// call's rows are already gone by the time a second, later call starts - there would be
-/// nothing left to collide with, and the test would pass even with `with_fresh_mem` deleted.
-/// (Confirmed by hand while fixing this: temporarily replacing `with_fresh_mem()` with a
-/// plain `.clone()` in `submit_job_run` still passed the old sequential version of this
-/// test, which is exactly why it is written this way now.)
-///
-/// Relies on `src/toolkit.rs`'s `MIGRATION_LOCK` to keep the two calls' own disk-schema
-/// migrations (each call's `get_conn` runs one) from racing each other on the file both
-/// calls share - a real hazard, discovered while building this test, but a separate one
-/// from the `mem` collision this test exists to catch.
+/// overlap inside the server: rmcp dispatches each to its own task. Each call loads its own
+/// `Declared`, so the shared id is no collision; what they do share is the first open of
+/// `flowlite.db`, which `src/toolkit.rs`'s `OPEN_LOCK` serializes - without it one call
+/// intermittently fails with "database is locked" while the other switches the new file
+/// into WAL.
 #[test]
 fn two_concurrent_submits_of_the_same_inline_id_do_not_collide() {
     let dir = data_dir("submit-inline-concurrent");
@@ -653,9 +641,8 @@ fn submitting_a_file_does_not_install_it() {
     assert_eq!(listed.as_array().unwrap().len(), 0, "the file was installed: {listed}");
 }
 
-/// `job_id` is `mem.job`'s primary key, so the alternative to refusing is a raw constraint
-/// error. The remedy names the shape this tool itself takes - not the CLI's `-f`, which
-/// this caller never passed.
+/// Two jobs cannot share an id. The remedy names the shape this tool itself takes - not
+/// the CLI's `-f`, which this caller never passed.
 #[test]
 fn an_inline_definition_colliding_with_an_installed_job_is_refused_by_name() {
     let dir = data_dir("submit-collision");
@@ -1059,7 +1046,7 @@ fn a_misspelled_argument_key_is_refused_naming_it() {
 
 /// The tool half of `flowlite init`: an agent handed an empty data directory can lay the
 /// example job and schedule into it without a shell, and the job it wrote is submittable on
-/// the very next call - the same fresh-`mem` seeding that makes a late job file visible to
+/// the very next call - the same per-call load that makes a late job file visible to
 /// `list_jobs`.
 #[test]
 fn init_data_dir_scaffolds_the_directory_and_then_lists_the_job_it_wrote() {

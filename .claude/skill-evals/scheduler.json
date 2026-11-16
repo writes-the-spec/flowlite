@@ -48,7 +48,7 @@
     "should_trigger": false
   },
   {
-    "query": "should schedule_job live in the mem schema or on disk?",
+    "query": "should schedule_job become a table in flowlite.db?",
     "should_trigger": false
   },
   {

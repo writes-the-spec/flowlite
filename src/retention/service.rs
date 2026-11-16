@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::app_config::AppConfig;
 use crate::crud::CRUD;
-use crate::crud::job::{SelectJobsData, SelectJobsDataFilter};
+use crate::declared::Declared;
 use crate::crud::job_run::{DeleteJobRunsData, DeleteJobRunsDataFilter};
 use crate::crud::multistatements::retention_candidates::{
     SelectDeletableJobRunsData, SelectDeletableJobRunsDataFilter, SelectDeletableJobRunsDataSort,
@@ -21,6 +21,8 @@ use crate::run_dir::remove_job_run_dir;
 /// inside it.
 pub struct RetentionService {
     pub crud: Arc<CRUD>,
+    /// Read for each job's `keep_runs`.
+    pub declared: Arc<Declared>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
     pub app_config: AppConfig,
 }
@@ -42,11 +44,13 @@ impl RetentionService {
 
     pub fn new(
         crud: Arc<CRUD>,
+        declared: Arc<Declared>,
         conn_pool: Arc<sqlx::SqlitePool>,
         app_config: AppConfig,
     ) -> Self {
         Self {
             crud,
+            declared,
             conn_pool,
             app_config,
         }
@@ -54,13 +58,12 @@ impl RetentionService {
 
     /// Every finished job run past its job's own `keep_runs`, one job at a time.
     ///
-    /// A job id with no row in `mem.job` falls back to `[job_defaults] keep_runs`, not to
+    /// A job id `declared` does not hold falls back to `[job_defaults] keep_runs`, not to
     /// "no limit" — unlike `is_job_at_max_parallel_runs`, which treats a missing job as
-    /// having no cap at all. That is safe there because a job with no row can never have a
-    /// running job run to count; here a job with no row can still own years of finished
-    /// runs (an ad-hoc job, or one whose YAML was deleted), and defaulting to "keep
-    /// everything" would let exactly the jobs retention most needs to reach opt out by
-    /// disappearing.
+    /// having no cap at all. That is harmless there, since such a job declares no cap to
+    /// enforce; here such a job can still own years of finished runs (an ad-hoc job, or
+    /// one whose YAML was deleted), and defaulting to "keep everything" would let exactly
+    /// the jobs retention most needs to reach opt out by disappearing.
     ///
     /// **`keep_runs == 0` skips the job entirely** rather than calling
     /// `select_deletable_job_runs` with no offset: `offset: None` and `offset: Some(0)` both
@@ -79,14 +82,7 @@ impl RetentionService {
 
         for job_id in job_ids {
 
-            let job = self.crud.select_job(&mut *conn, &SelectJobsData {
-                filter: SelectJobsDataFilter { job_id: Some(job_id.clone()), name_like: None },
-                sort: None,
-                limit: None,
-                offset: None,
-            }).await?;
-
-            let keep_runs = match job {
+            let keep_runs = match self.declared.job(&job_id) {
                 Some(job) => job.keep_runs,
                 None => self.app_config.job_defaults.keep_runs,
             };
@@ -259,11 +255,11 @@ mod tests {
     use crate::test_support::TestDb;
 
     fn service_for(db: &TestDb) -> RetentionService {
-        RetentionService::new(db.crud.clone(), db.conn_pool.clone(), db.app_config())
+        RetentionService::new(db.crud.clone(), std::sync::Arc::new(db.declared()), db.conn_pool.clone(), db.app_config())
     }
 
     fn service_with_config(db: &TestDb, app_config: AppConfig) -> RetentionService {
-        RetentionService::new(db.crud.clone(), db.conn_pool.clone(), app_config)
+        RetentionService::new(db.crud.clone(), std::sync::Arc::new(db.declared()), db.conn_pool.clone(), app_config)
     }
 
     /// A finished run under a caller-chosen job id, for the tests that need more than one
@@ -332,8 +328,8 @@ mod tests {
     #[tokio::test]
     async fn keep_runs_keeps_the_newest_n() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
-        db.insert_job("job", 3).await;
+        let db = TestDb::new().await;
+        db.insert_job("job", 3);
 
         let mut runs = Vec::new();
         for _ in 0..5 {
@@ -355,8 +351,8 @@ mod tests {
     #[tokio::test]
     async fn queued_and_running_runs_are_never_selected() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
-        db.insert_job("job", 1).await;
+        let db = TestDb::new().await;
+        db.insert_job("job", 1);
 
         let queued = db.insert_job_run(JobRunStatus::Queued).await;
         let running = db.insert_job_run(JobRunStatus::Running).await;
@@ -382,8 +378,8 @@ mod tests {
     #[tokio::test]
     async fn a_pending_notification_survives_until_sent() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
-        db.insert_job("job", 1).await;
+        let db = TestDb::new().await;
+        db.insert_job("job", 1);
 
         let old = db.insert_job_run(JobRunStatus::Succeeded).await;
         let _new = db.insert_job_run(JobRunStatus::Succeeded).await;
@@ -413,8 +409,6 @@ mod tests {
     #[tokio::test]
     async fn handle_removes_all_six_tables_and_leaves_a_neighbour_intact() {
 
-        // `handle` deletes by job run id and never resolves a job's `keep_runs`, so nothing
-        // here reads `mem.job` - a plain `TestDb` is enough.
         let db = TestDb::new().await;
 
         let deleted = full_job_run(&db).await;
@@ -582,8 +576,8 @@ mod tests {
     #[tokio::test]
     async fn keep_runs_zero_is_skipped_by_the_per_job_rule_but_not_by_the_global_ceiling() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
-        db.insert_job("job", 0).await;
+        let db = TestDb::new().await;
+        db.insert_job("job", 0);
 
         let run1 = db.insert_job_run(JobRunStatus::Succeeded).await;
         let run2 = db.insert_job_run(JobRunStatus::Succeeded).await;
@@ -611,7 +605,7 @@ mod tests {
     #[tokio::test]
     async fn keep_runs_total_selects_oldest_first_across_jobs() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+        let db = TestDb::new().await;
 
         let a1 = insert_finished_run_for(&db, "job-a", JobRunStatus::Succeeded).await;
         let b1 = insert_finished_run_for(&db, "job-b", JobRunStatus::Succeeded).await;
@@ -635,11 +629,11 @@ mod tests {
         assert!(!ids.contains(&a2.id));
     }
 
-    /// Test 7: a run whose job_id has no row in mem is judged by [job_defaults] keep_runs.
+    /// Test 7: a run whose job nothing declares is judged by [job_defaults] keep_runs.
     #[tokio::test]
-    async fn a_job_with_no_mem_row_is_judged_by_job_defaults_keep_runs() {
+    async fn a_job_nothing_declares_is_judged_by_job_defaults_keep_runs() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
+        let db = TestDb::new().await;
 
         let mut runs = Vec::new();
         for _ in 0..5 {
@@ -666,8 +660,8 @@ mod tests {
     #[tokio::test]
     async fn a_pass_is_capped_at_max_deletes_per_pass_and_the_next_pass_continues() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
-        db.insert_job("job", 0).await;
+        let db = TestDb::new().await;
+        db.insert_job("job", 0);
 
         let mut runs = Vec::new();
         for _ in 0..5 {
@@ -696,8 +690,8 @@ mod tests {
     #[tokio::test]
     async fn the_newest_run_of_a_job_is_never_selected() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
-        db.insert_job("job", 1).await;
+        let db = TestDb::new().await;
+        db.insert_job("job", 1);
 
         let mut runs = Vec::new();
         for _ in 0..4 {
@@ -721,8 +715,8 @@ mod tests {
     #[tokio::test]
     async fn a_budgeted_per_job_pass_deletes_the_oldest_runs_first() {
 
-        let (db, _mem_conn) = TestDb::new_with_migrated_mem().await;
-        db.insert_job("job", 3).await;
+        let db = TestDb::new().await;
+        db.insert_job("job", 3);
 
         let mut runs = Vec::new();
         for _ in 0..5 {

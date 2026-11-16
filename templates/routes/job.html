@@ -35,7 +35,7 @@
     </div>
     {% else %}
     <div class="meta">
-        {% for (name, value) in job.parameters.0 %}
+        {% for (name, value) in job.parameters %}
         <div class="meta__item">
             <div class="meta__label">{{ name }}</div>
             <div class="meta__value meta__value--mono">{% if value.is_empty() %}<span class="none">empty</span>{% else %}{{ value }}{% endif %}</div>
@@ -118,11 +118,11 @@
                 <td>{% if task.description.is_empty() %}<span class="none">—</span>{% else %}{{ task.description }}{% endif %}</td>
 
                 <td>
-                    {% if task.depends_on.0.is_empty() %}
+                    {% if task.depends_on.is_empty() %}
                     <span class="none">nothing</span>
                     {% else %}
                     <div class="deps">
-                        {% for dependency in task.depends_on.0 %}
+                        {% for dependency in task.depends_on %}
                         <span class="dep">{{ dependency }}</span>
                         {% endfor %}
                     </div>
@@ -159,7 +159,7 @@
         <p class="dialog__body">Each value starts at the job's declared default. Changing one here changes it for this run only — the job's YAML is untouched, and the run records what it was submitted with.</p>
 
         <div class="dialog__scroll">
-            {% for (name, value) in job.parameters.0 %}
+            {% for (name, value) in job.parameters %}
             <div class="meta__item">
                 <label class="meta__label" for="param_{{ name }}">{{ name }}</label>
                 <input class="field" type="text" id="param_{{ name }}" name="{{ name }}" value="{{ value }}">

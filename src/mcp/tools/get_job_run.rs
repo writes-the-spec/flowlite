@@ -63,10 +63,9 @@ async fn get_job_run_detail(
             .map_err(describe_unserved_data_dir)?;
     }
 
-    let toolkit = toolkit.with_fresh_mem();
     let mut conn = toolkit.get_conn().await?;
 
-    let crud = CRUD::new(Arc::new(toolkit));
+    let crud = CRUD::new(Arc::new(toolkit.clone()));
 
     if wait_seconds > 0 {
         wait_for_settled_job_run(&crud, &mut conn, job_run_id, wait_seconds).await?;

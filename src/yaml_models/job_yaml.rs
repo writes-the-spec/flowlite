@@ -22,7 +22,7 @@ pub struct JobYamlTask {
     /// flowlite.toml. A job's limits are claimed by every one of its tasks.
     #[serde(default)]
     pub limits: Vec<String>,
-    /// Seconds one attempt may run for. `None` is "not declared", which `CRUD::init`
+    /// Seconds one attempt may run for. `None` is "not declared", which `Declared::load`
     /// resolves against `[job_defaults]` in flowlite.toml rather than a number written here.
     #[serde(default)]
     pub timeout: Option<u32>,

@@ -4,7 +4,7 @@ use cron::Schedule as CronSchedule;
 
 
 use std::str::FromStr;
-use crate::crud::schedule::Schedule;
+use crate::declared::Schedule;
 
 /// A schedule's cron expression, the zone it is read in, and everything that bounds it -
 /// its dates, and whether it is disabled at all.

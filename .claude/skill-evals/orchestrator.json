@@ -44,7 +44,7 @@
     "should_trigger": false
   },
   {
-    "query": "should this table live in the mem schema?",
+    "query": "should this table live in flowlite.db or on Declared?",
     "should_trigger": false
   },
   {

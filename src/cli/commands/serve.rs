@@ -2,11 +2,11 @@ use clap::Args;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use crate::router::app::app::create_router;
 use crate::router::app::app_state::AppState;
 use crate::toolkit::Toolkit;
 use crate::crud::CRUD;
+use crate::declared::Declared;
 use crate::notifications::NotificationService;
 use crate::notifications::channel::NotificationChannels;
 use crate::orchestrator::Orchestrator;
@@ -43,34 +43,23 @@ impl ServeCmd {
 
         let toolkit = Arc::new(toolkit);
 
-        let memory_conn = toolkit.get_memory_conn().await?;
-        let memory_conn = Arc::new(Mutex::new(memory_conn));
-
         let crud = CRUD::new(toolkit.clone());
         let crud = Arc::new(crud);
 
         let conn_pool = toolkit.get_conn_pool().await?;
         let conn_pool = Arc::new(conn_pool);
 
-        let mut init_conn = conn_pool.acquire().await?;
-        crud.init(&mut init_conn).await?;
-        drop(init_conn);
+        let declared = Declared::load(&toolkit.app_config)?;
 
-        // Every job's and task's secret_env: must name a secret app_config.secrets
-        // actually defines. Checked here, and only here - never inside `init` itself -
-        // because `init` also runs inside `job` and `job-run` commands, which seed this
-        // very same mem.job/mem.task from this very same YAML in their own process. A
-        // check there would mean `flowlite job-run list` refuses to run in any terminal
-        // that has not exported the production secrets, and reading a run's status must
-        // never require the credentials that run used. This is the one process that will
-        // actually spawn a command, so it is the one place this fails before the bind
-        // rather than at 03:00.
-        let mut secret_check_conn = conn_pool.acquire().await?;
-        crud.check_secret_env_is_satisfied(
-            &mut secret_check_conn,
-            &toolkit.app_config.secrets,
-            None,
-        ).await?;
+        // Every job's and task's secret_env: must name a secret app_config.secrets actually
+        // defines. Checked here, and never inside `Declared::load`, because `job` commands
+        // load the very same YAML in their own process: `flowlite job list` must not refuse
+        // to run in a terminal that has not exported the production secrets. This is the one
+        // process that will spawn a command, so it is the one place this fails before the
+        // bind rather than at 03:00.
+        declared.check_secret_env_is_satisfied(&toolkit.app_config.secrets, None)?;
+
+        let declared = Arc::new(declared);
 
         let signals = Arc::new(Signals::new());
 
@@ -84,6 +73,7 @@ impl ServeCmd {
         let scheduler = Scheduler::new(
             toolkit.clone(),
             crud.clone(),
+            declared.clone(),
             conn_pool.clone(),
             signals.clone(),
         );
@@ -98,6 +88,7 @@ impl ServeCmd {
 
         let orchestrator = Orchestrator::new(
             crud.clone(),
+            declared.clone(),
             conn_pool.clone(),
             signals.clone(),
             app_config.clone(),
@@ -132,6 +123,7 @@ impl ServeCmd {
         // every unrelated status change for nothing.
         let retention_service = RetentionService::new(
             crud.clone(),
+            declared.clone(),
             conn_pool.clone(),
             app_config.clone(),
         );
@@ -155,7 +147,7 @@ impl ServeCmd {
         let app_state = AppState::new(
             toolkit.clone(),
             conn_pool.clone(),
-            memory_conn.clone(),
+            declared.clone(),
             signals.clone(),
             bound,
         );
