@@ -12,7 +12,7 @@ Each entity has its own file under `src/crud/`, with methods on the shared `CRUD
 | [submit_job.rs](../../../src/crud/multistatements/submit_job.rs) | `submit_job`; `resolve_job_parameters`, which checks a caller's overrides |
 | [rerun_job.rs](../../../src/crud/multistatements/rerun_job.rs) | `rerun_job` |
 | [job_run_definition.rs](../../../src/crud/multistatements/job_run_definition.rs) | Not an operation: the `JobRunDefinition` vocabulary those two share, the merges that build one, and `insert_job_run_definition` — the only place a run's config is written, in one transaction |
-| [limits.rs](../../../src/crud/multistatements/limits.rs) | `is_job_at_max_parallel_runs`, `count_running_attempts`, `claimed_limit_slots`, `count_waiting_attempts` |
+| [limits.rs](../../../src/crud/multistatements/limits.rs) | `is_job_at_max_parallel_runs`, `count_running_attempts`, `claimed_limit_slots` |
 | [job_run_descendants.rs](../../../src/crud/multistatements/job_run_descendants.rs) | `select_job_run_descendants` — runs a run's tasks submitted, recursively |
 | [job_run_reads.rs](../../../src/crud/multistatements/job_run_reads.rs) | `select_job_run_with_task_runs`, `select_task_run_attempt_logs` |
 | [task_run_inputs.rs](../../../src/crud/multistatements/task_run_inputs.rs) | `select_task_run_outputs`, `TaskRunOutput` — what a run's tasks produced so far, for `FLOWLITE_TASK_OUTPUT` |

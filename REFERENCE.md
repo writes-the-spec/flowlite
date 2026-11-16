@@ -551,13 +551,7 @@ NAME         IN USE  MAX
 global           32   32  FULL
 llm_api           0    -
 warehouse         3    3  FULL
-
-2 attempts are waiting on another run, holding no slot
 ```
-
-The line under the table appears only when something is waiting, and says where the
-processes went: those attempts are running, but asleep inside a wait of flowlite's own, so
-they are in none of the rows above.
 
 A row whose in-use count has reached a non-zero max is marked `FULL`, which is the answer to
 "why is nothing running". A limit configured `0` means no ceiling at all, not zero slots,
@@ -570,12 +564,12 @@ It reads `flowlite.toml` for the maxima and the on-disk database for the counts 
 it answers for a data directory whose server is down as readily as one whose server is up —
 the same guarantee `status` makes by reading the lock file instead of asking the process.
 
-`max_running_attempts` bounds attempts *doing work*. An attempt asleep inside
-`job submit --wait`, `job-run stop --wait`, or an MCP call with `wait_seconds` is not one of
-them: it gives its slot back for as long as it polls, and takes it again when the wait
-returns. So the number of task processes alive at once is not bounded by this key, and a
-machine composing heavily can show a low number in use with many processes running.
-`flowlite limits` says how many are waiting.
+**A task waiting on a run it submitted keeps its slot.** An attempt asleep inside `job
+submit --wait`, `job-run stop --wait` or an MCP call with `wait_seconds` is running like
+any other, so it counts against `max_running_attempts` and against every limit it claims.
+If every slot is held by a parent waiting on its child, the child queues behind them and
+nothing moves. A pipeline that fans out and waits needs a cap above the number of parents
+that wait at once, and a parent should not claim a named limit its children need.
 
 ## Runs from the command line
 
@@ -633,11 +627,11 @@ Unlike `job submit --wait` it exits 0 whichever status the run settled to: the s
 what it was asked either way. It makes the same unserved-directory check, and refuses the
 same way.
 
-flowlite knows about its own waits, and only those. A task blocked on `sleep`, on a slow
-HTTP call, or inside an agent waiting on a provider holds its slot throughout — nothing
-reads a command to guess what it is doing. A task waiting on a run *of its own job* still
-deadlocks against `max_parallel_runs`: that gate counts job runs rather than attempts, so
-it has no way to know the waiting attempt is the one it is blocking.
+A task holds its slot for as long as its command runs, whatever it is doing: blocked on
+`sleep`, on a slow HTTP call, inside an agent waiting on a provider, or waiting on a run it
+submitted — see [Concurrency limits](#concurrency-limits). A task waiting on a run *of its
+own job* also deadlocks against `max_parallel_runs`, since its own run holds the job's
+only slot.
 
 ### A run from a file
 
@@ -1075,10 +1069,7 @@ sent.
 `get_serve_status` and `list_limits` are the pair an agent reaches for when a run does not
 progress: the first says whether anything is serving the directory at all, the second what
 a `queued` run is waiting behind. `list_limits` returns the rows `flowlite limits --json`
-prints under `limits`, plus `waiting_attempts`: how many attempts are running but asleep in
-a wait of flowlite's own. They hold no slot and are counted in none of the rows, so without
-that field an agent reads `global 0/32` on a machine running thirty commands, concludes
-nothing is happening and submits more.
+prints, under `limits`.
 
 `init_data_dir` takes no arguments: the directory is the one `-D` named, so an agent cannot
 point it somewhere nobody asked for. Nothing is overwritten, and the result says which files
@@ -1115,11 +1106,8 @@ agent gets an outcome in one call instead of a polling loop. It returns as soon 
 settles; if the time runs out first the run comes back merely unfinished rather than as an
 error, since its id is what lets the agent ask again. A value above 300 clamps to 300.
 
-It holds no slot for that span either, the same as `--wait` on the command line, and takes
-it back when the call returns — whether the run settled or the bound ran out first. But an
-agent that goes on to wait on its own model provider before deciding what to submit next
-holds its slot the whole time, since flowlite only recognises the wait it just made, not
-whatever the agent does around it.
+An agent running inside a task keeps that task's slot while it waits, the same as `--wait`
+on the command line — see [Concurrency limits](#concurrency-limits).
 
 **A submit into a directory nothing is serving writes a run that will not start.** It is
 allowed, as on the command line, and the tool result says so beside the JSON: the run stays

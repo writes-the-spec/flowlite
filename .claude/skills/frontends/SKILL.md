@@ -23,7 +23,7 @@ Starting is allowed; borrowing is not. If the item would still make sense with t
 | [init.rs](../../../src/shared/init.rs) | `scaffold`, `ScaffoldedFile`, `InitResult` - what `init` and `init_data_dir` lay down |
 | [job.rs](../../../src/shared/job.rs) | `installed_job_id` |
 | [job_run.rs](../../../src/shared/job_run.rs) | `select_job_run`, `stop_job_run`, `parse_job_run_status`, the `JobRunDetail` / `TaskRunAttemptLog` shapes |
-| [limits.rs](../../../src/shared/limits.rs) | `LimitRow`, `limit_rows`, `is_full`, `waiting_note` |
+| [limits.rs](../../../src/shared/limits.rs) | `LimitRow`, `limit_rows`, `is_full` |
 | [schedule_at.rs](../../../src/shared/schedule_at.rs) | `parse_schedule_at`, `refuse_waiting_for_a_future_run` |
 | [serve_status.rs](../../../src/shared/serve_status.rs) | `status_json`, `uptime_seconds` |
 | [task_run_attempt.rs](../../../src/shared/task_run_attempt.rs) | `own_task_run_attempt_id` - the attempt a command running inside a task belongs to, from its environment |

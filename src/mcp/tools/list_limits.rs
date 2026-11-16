@@ -30,8 +30,7 @@ impl McpServer {
     // answers "what is it waiting behind". A caller reaches for them in that order.
     /// Why nothing is running: the cap on task attempts across every job, and each named
     /// concurrency limit, with how many attempts currently claim it and how many it
-    /// allows. A max of 0 means no ceiling. `waiting_attempts` counts attempts that are
-    /// running but waiting on another run; they hold no slot and are in none of the rows.
+    /// allows. A max of 0 means no ceiling.
     #[tool]
     async fn list_limits(&self, Parameters(_args): Parameters<ListLimits>) -> CallToolResult {
         match limits_rows(&self.toolkit).await {
@@ -41,16 +40,11 @@ impl McpServer {
     }
 }
 
-/// The tool's whole answer, rather than the bare `LimitRow` array it used to be.
-///
-/// The array is still there under `limits`, unchanged. What the envelope adds is
-/// `waiting_attempts`: attempts that are Running but asleep in one of flowlite's own waits,
-/// holding no slot and appearing in no row above. Without it an agent reads `global 0/32`
-/// on a machine running thirty commands, concludes nothing is happening and submits more.
+/// The tool's whole answer: the rows under `limits`, in an object so a field can be added
+/// beside them without changing what `.limits` reads.
 #[derive(Serialize)]
 struct Limits {
     limits: Vec<LimitRow>,
-    waiting_attempts: u32,
 }
 
 /// Reads `flowlite.toml` for the maxima and the disk tables for the counts, which is all
@@ -66,7 +60,6 @@ async fn limits_rows(toolkit: &Toolkit) -> anyhow::Result<Limits> {
 
     let running_attempts = crud.count_running_attempts(&mut conn).await?;
     let claimed_limit_slots = crud.claimed_limit_slots(&mut conn).await?;
-    let waiting_attempts = crud.count_waiting_attempts(&mut conn).await?;
 
     Ok(Limits {
         limits: limit_rows(
@@ -75,6 +68,5 @@ async fn limits_rows(toolkit: &Toolkit) -> anyhow::Result<Limits> {
             &concurrency_limits,
             &claimed_limit_slots,
         ),
-        waiting_attempts,
     })
 }

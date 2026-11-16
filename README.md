@@ -37,7 +37,7 @@ agent can also drive flowlite itself over MCP.
 - **Fan-out decided at run time.** A task can submit further runs, from the CLI or over MCP.
   Those runs are linked to the task, stopped if it fails or is stopped, and deleted with it.
 - **Provider quotas.** A named limit (`llm_api = 4`) caps how many tasks reach one provider
-  at once, and a task waiting with `--wait` on a run it submitted holds no slot.
+  at once.
 
 ## Install
 

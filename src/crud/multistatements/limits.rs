@@ -1,6 +1,5 @@
 //! What the orchestrator's two concurrency gates count against: runs in flight for one
-//! job, and attempts running across every job. Only a Running row that is not waiting on
-//! another run holds a slot.
+//! job, and attempts running across every job. Only a Running row holds a slot.
 
 use std::collections::BTreeMap;
 use sqlx::SqliteConnection;
@@ -66,21 +65,16 @@ impl CRUD {
 
     /// How many task run attempts are Running right now, across every job - what
     /// `TaskRunAttemptDispatcher::should_stay_queued`'s global cap counts against. Running
-    /// is the only status that
-    /// holds a slot, the same way `is_job_at_max_parallel_runs` counts only running job
-    /// runs.
+    /// is the only status that holds a slot, the same way `is_job_at_max_parallel_runs`
+    /// counts only running job runs.
+    ///
+    /// An attempt asleep in `job submit --wait` on a run it submitted is Running and holds
+    /// its slot like any other.
     pub async fn count_running_attempts(&self, conn: &mut SqliteConnection) -> anyhow::Result<u32> {
 
         let running_attempts = self.select_running_attempts(&mut *conn).await?;
 
-        // An attempt asleep in flowlite's own wait holds no slot - counting it is what
-        // deadlocked a task that composes with `--wait`. See `wait_for_job_run`.
-        let working = running_attempts
-            .iter()
-            .filter(|attempt| attempt.waiting_since.is_none())
-            .count();
-
-        Ok(working as u32)
+        Ok(running_attempts.len() as u32)
     }
 
     /// How many running task run attempts currently claim each named limit - what
@@ -94,7 +88,7 @@ impl CRUD {
 
         let mut claimed_limit_slots = BTreeMap::new();
 
-        for running_attempt in running_attempts.iter().filter(|attempt| attempt.waiting_since.is_none()) {
+        for running_attempt in &running_attempts {
 
             let task_run = self.select_task_run(&mut *conn, &SelectTaskRunsData {
                 filter: SelectTaskRunsDataFilter {
@@ -111,113 +105,5 @@ impl CRUD {
         }
 
         Ok(claimed_limit_slots)
-    }
-
-    /// How many Running attempts are asleep in flowlite's own wait, and so in neither count
-    /// above.
-    pub async fn count_waiting_attempts(&self, conn: &mut SqliteConnection) -> anyhow::Result<u32> {
-
-        let running_attempts = self.select_running_attempts(&mut *conn).await?;
-
-        let waiting = running_attempts
-            .iter()
-            .filter(|attempt| attempt.waiting_since.is_some())
-            .count();
-
-        Ok(waiting as u32)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::crud::job_run::JobRunStatus;
-    use crate::crud::task_run::TaskRunStatus;
-    use crate::crud::task_run_attempt::TaskRunAttemptStatus;
-    use crate::test_support::TestDb;
-
-    /// The deadlock this exists to remove, in miniature: the attempt is Running and its
-    /// process is alive, but it is asleep in a poll loop waiting on another run, so it is not
-    /// what max_running_attempts is meant to bound.
-    #[tokio::test]
-    async fn a_waiting_attempt_is_not_counted_against_the_global_cap() {
-
-        let db = TestDb::new().await;
-
-        let job_run = db.insert_job_run(JobRunStatus::Running).await;
-        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
-        let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
-
-        let mut conn = db.conn_pool.acquire().await.unwrap();
-
-        assert_eq!(db.crud.count_running_attempts(&mut conn).await.unwrap(), 1);
-
-        db.mark_task_run_attempt_waiting(attempt.id).await;
-
-        assert_eq!(db.crud.count_running_attempts(&mut conn).await.unwrap(), 0);
-    }
-
-    /// The named limits go the same way, and for the same reason: a provider quota is about
-    /// calls in flight, and a parent asleep on a child is making none.
-    #[tokio::test]
-    async fn a_waiting_attempt_releases_the_named_limits_it_claimed() {
-
-        let db = TestDb::new().await;
-
-        let job_run = db.insert_job_run(JobRunStatus::Running).await;
-        let task_run = db.insert_task_run_with_limits(job_run.id, vec!["openai_api".to_string()]).await;
-        let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
-
-        let mut conn = db.conn_pool.acquire().await.unwrap();
-
-        assert_eq!(db.crud.claimed_limit_slots(&mut conn).await.unwrap().get("openai_api"), Some(&1));
-
-        db.mark_task_run_attempt_waiting(attempt.id).await;
-
-        assert_eq!(db.crud.claimed_limit_slots(&mut conn).await.unwrap().get("openai_api"), None);
-    }
-
-    /// The count the three surfaces print beside the table, so a reader who sees 0 in use on a
-    /// busy machine is told where the processes went.
-    #[tokio::test]
-    async fn waiting_attempts_are_counted_separately() {
-
-        let db = TestDb::new().await;
-
-        let job_run = db.insert_job_run(JobRunStatus::Running).await;
-        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
-        let waiting = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
-
-        let other_task_run = db.insert_named_task_run(job_run.id, "worker", TaskRunStatus::Running).await;
-        db.insert_task_run_attempt(&other_task_run, 1, TaskRunAttemptStatus::Running).await;
-
-        let mut conn = db.conn_pool.acquire().await.unwrap();
-
-        assert_eq!(db.crud.count_waiting_attempts(&mut conn).await.unwrap(), 0);
-
-        db.mark_task_run_attempt_waiting(waiting.id).await;
-
-        assert_eq!(db.crud.count_waiting_attempts(&mut conn).await.unwrap(), 1);
-        assert_eq!(db.crud.count_running_attempts(&mut conn).await.unwrap(), 1);
-    }
-
-    /// A settled attempt is nobody's slot and nobody's waiter, mark or no mark. Nothing clears
-    /// the stamp when an attempt finishes, so this is the case that makes that safe.
-    #[tokio::test]
-    async fn a_settled_attempt_with_a_stale_mark_is_in_neither_count() {
-
-        let db = TestDb::new().await;
-
-        let job_run = db.insert_job_run(JobRunStatus::Running).await;
-        let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
-        let attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
-
-        db.mark_task_run_attempt_waiting(attempt.id).await;
-
-        let mut conn = db.conn_pool.acquire().await.unwrap();
-
-        db.settle_task_run_attempt(attempt.id, TaskRunAttemptStatus::Succeeded).await;
-
-        assert_eq!(db.crud.count_running_attempts(&mut conn).await.unwrap(), 0);
-        assert_eq!(db.crud.count_waiting_attempts(&mut conn).await.unwrap(), 0);
     }
 }

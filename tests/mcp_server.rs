@@ -1135,5 +1135,4 @@ fn list_limits_returns_the_global_cap_as_a_row_of_its_own() {
     assert_eq!(by_name["global"]["max"], json!(4));
     assert_eq!(by_name["global"]["in_use"], json!(0));
     assert_eq!(by_name["warehouse"]["max"], json!(2));
-    assert_eq!(response["waiting_attempts"], json!(0));
 }
