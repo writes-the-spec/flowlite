@@ -957,9 +957,9 @@ The dashboard is served out of the binary. `flowlite serve` binds `127.0.0.1:800
 `--address` and `--port` say otherwise; visit it for the job list, the run history, a
 job's dependency graph and the output of any task.
 
-It has a dark palette and a light one, and by default follows whichever the viewer's own
-OS asks for — so a shared instance leaves the choice to whoever opens it. `[ui] theme` takes
-`dark` or `light` to overrule that. One stylesheet, both themes, no build step.
+It has a dark palette and a light one, and follows whichever the viewer's own OS asks for —
+so a shared instance leaves the choice to whoever opens it. One stylesheet, both themes, no
+build step.
 
 It offers three writes, each the browser equivalent of a command and each asking for
 confirmation first: **Stop** and **Rerun** on a run's page, and **Submit run** on a job's
@@ -1125,19 +1125,13 @@ default alone, and each key can also be set as an environment variable
 ```toml
 [orchestrator]
 poll_interval_seconds = 1       # how often a service looks for work itself
-error_backoff_seconds = 5       # pause before a failed service restarts
-reader_eof_timeout_seconds = 2  # wait for a finished attempt's output to end
 max_stream_bytes = 1048576      # per stream, per attempt: half its head, half its tail
 max_task_output_bytes = 1048576 # the most a task's result may be; over it the attempt fails
-read_buffer_bytes = 8192        # one read from a running command's pipe
 max_running_attempts = 32       # running task attempts across every job, 0 for no limit
 kill_grace_seconds = 10         # between SIGTERM and SIGKILL on a stop, timeout or shutdown
 
 [ui]
 page_size = 25                  # rows per page on the run, job and schedule lists
-max_page_size = 100             # the largest ?page_size= the run list accepts
-refresh_interval_seconds = 3    # how often a page showing a live run refreshes
-theme = "auto"                  # auto follows the viewer's OS, or dark, or light
 
 [job_defaults]
 timeout_seconds = 3600          # what a task with no timeout: gets

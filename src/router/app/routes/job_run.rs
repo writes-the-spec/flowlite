@@ -56,7 +56,6 @@ pub struct Tick {
 #[template(path = "routes/job_run.html")]
 struct JobRunIdRouteTemplate {
     current_route: &'static str,
-    theme: &'static str,
     /// Who is signed in, for the masthead; None when `[auth]` is not configured.
     signed_in_as: Option<String>,
     job_run: JobRunDisplay,
@@ -205,7 +204,6 @@ pub async fn job_run_id_route(
 
     let template = JobRunIdRouteTemplate {
         current_route: "home",
-        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         job_exists,
         job_run: JobRunDisplay {
@@ -230,7 +228,7 @@ pub async fn job_run_id_route(
         // Scheduled included: a run due immediately still spends one poll pass there, and
         // a page loaded during that pass must keep polling rather than going stale.
         polling: matches!(job_run.status, JobRunStatus::Scheduled | JobRunStatus::Queued | JobRunStatus::Running),
-        refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
+        refresh_seconds: super::REFRESH_INTERVAL_SECONDS,
         skippable: controls.skippable,
         stoppable: controls.stoppable,
         rerunnable: controls.rerunnable,

@@ -19,7 +19,6 @@ pub struct JobEntry {
 #[template(path = "routes/jobs.html")]
 struct JobsRouteTemplate {
     current_route: &'static str,
-    theme: &'static str,
     /// Who is signed in, for the masthead; None when `[auth]` is not configured.
     signed_in_as: Option<String>,
     jobs: Vec<JobEntry>,
@@ -97,7 +96,6 @@ pub async fn jobs_route(
 
     let template = JobsRouteTemplate {
         current_route: "jobs",
-        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         jobs: entries,
         current_name: name_like,

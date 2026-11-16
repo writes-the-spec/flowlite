@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="{{ theme }}">
+<html lang="en" data-theme="auto">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,7 +9,7 @@
        once: past this line data-theme is always "dark" or "light", never "auto". First
        thing in the head, so it runs before the first paint and no page flashes the wrong
        palette. With scripting off, "auto" stays on the dark palette the stylesheet opens
-       with, which is the one an instance that never configured a theme used to get. #}
+       with. #}
     <script>
         if (document.documentElement.dataset.theme === "auto") {
             document.documentElement.dataset.theme =
@@ -17,8 +17,8 @@
         }
     </script>
 
-    {# The tab strip is the browser's, not the page's, so these follow the OS rather than
-       [ui] theme: a light dashboard in a dark-themed browser still wants the bone icon. #}
+    {# The tab strip is the browser's, not the page's, so these follow the OS with a media
+       query of their own. #}
     <link rel="icon" href="/assets/brand/icon-dark-32.png" sizes="32x32" type="image/png" media="(prefers-color-scheme: dark)">
     <link rel="icon" href="/assets/brand/icon-dark-256.png" sizes="256x256" type="image/png" media="(prefers-color-scheme: dark)">
     <link rel="icon" href="/assets/brand/icon-light-32.png" sizes="32x32" type="image/png" media="(prefers-color-scheme: light)">
@@ -46,7 +46,7 @@
 
     {# A polled region swaps in fresh elements, and a fresh element starts scrolled to the
        top - so without this a reader scrolled down the run table, or along a wide one, is
-       thrown back every refresh_interval_seconds. Before a swap, every element in the
+       thrown back every refresh. Before a swap, every element in the
        target that is scrolled is noted by where it sits: its nearest ancestor with an id,
        its tag and class, and which of its like-classed siblings under that ancestor it
        is. After the swap the same spot in the new markup gets the same offsets back.

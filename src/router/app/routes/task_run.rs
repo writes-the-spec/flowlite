@@ -66,7 +66,6 @@ fn stream_note(stream: &str) -> String {
 #[template(path = "routes/task_run.html")]
 struct TaskRunIdRouteTemplate {
     current_route: &'static str,
-    theme: &'static str,
     /// Who is signed in, for the masthead; None when `[auth]` is not configured.
     signed_in_as: Option<String>,
     task_run: TaskRunDisplay,
@@ -172,7 +171,6 @@ pub async fn task_run_id_route(
 
     let template = TaskRunIdRouteTemplate {
         current_route: "home",
-        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         job_exists,
         task_run: TaskRunDisplay {
@@ -197,7 +195,7 @@ pub async fn task_run_id_route(
             task_run.status,
             TaskRunStatus::Planned | TaskRunStatus::Waiting | TaskRunStatus::Running,
         ),
-        refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
+        refresh_seconds: super::REFRESH_INTERVAL_SECONDS,
     };
 
     match template.render() {

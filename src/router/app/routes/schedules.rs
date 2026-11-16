@@ -23,7 +23,6 @@ pub struct ScheduleEntry {
 #[template(path = "routes/schedules.html")]
 struct SchedulesRouteTemplate {
     current_route: &'static str,
-    theme: &'static str,
     /// Who is signed in, for the masthead; None when `[auth]` is not configured.
     signed_in_as: Option<String>,
     schedules: Vec<ScheduleEntry>,
@@ -107,13 +106,12 @@ pub async fn schedules_route(
 
     let template = SchedulesRouteTemplate {
         current_route: "schedules",
-        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         schedules: entries,
         current_name: name_like,
         prev_href,
         next_href,
-        refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
+        refresh_seconds: super::REFRESH_INTERVAL_SECONDS,
         self_href,
     };
 

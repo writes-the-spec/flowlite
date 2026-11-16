@@ -31,16 +31,10 @@ fn the_reference_prints_the_real_defaults() {
     // `timeout_seconds` is a [slack] key and a [job_defaults] one, with different defaults.
     let documented = [
         ("orchestrator", "poll_interval_seconds", orchestrator.poll_interval_seconds.to_string()),
-        ("orchestrator", "error_backoff_seconds", orchestrator.error_backoff_seconds.to_string()),
-        ("orchestrator", "reader_eof_timeout_seconds", orchestrator.reader_eof_timeout_seconds.to_string()),
         ("orchestrator", "max_stream_bytes", orchestrator.max_stream_bytes.to_string()),
-        ("orchestrator", "read_buffer_bytes", orchestrator.read_buffer_bytes.to_string()),
         ("orchestrator", "max_running_attempts", orchestrator.max_running_attempts.to_string()),
         ("orchestrator", "kill_grace_seconds", orchestrator.kill_grace_seconds.to_string()),
         ("ui", "page_size", ui.page_size.to_string()),
-        ("ui", "max_page_size", ui.max_page_size.to_string()),
-        ("ui", "refresh_interval_seconds", ui.refresh_interval_seconds.to_string()),
-        ("ui", "theme", format!("\"{}\"", ui.theme.as_attribute())),
         ("job_defaults", "timeout_seconds", job.timeout_seconds.to_string()),
         ("job_defaults", "idle_timeout_seconds", job.idle_timeout_seconds.to_string()),
         ("job_defaults", "max_retries", job.max_retries.to_string()),

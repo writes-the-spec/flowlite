@@ -28,14 +28,9 @@ pub trait Service: Send + Sync + 'static {
 - **A failing `select` ends the pass**, is logged, and the loop restarts after the backoff. This is the only error that propagates.
 - **The interval is a safety net and cannot be turned off.** `flowlite job submit` writes a `job_run` from another process and can't publish, so only the interval notices it. Ticks use tokio's default `MissedTickBehavior::Burst`: a pass longer than the interval is followed straight away by another.
 
-## The two knobs
+## Timing
 
-Both are in `[orchestrator]` ([app_config skill](../app_config/SKILL.md)), not constants here. The `Poller` reads them from the `AppConfig` it is given, so a test can set its own interval.
-
-| Key | Default | Times |
-|---|---|---|
-| `poll_interval_seconds` | 1 | the safety-net tick |
-| `error_backoff_seconds` | 5 | the wait before restarting after a failed `select` |
+`[orchestrator] poll_interval_seconds` (default 1, [app_config skill](../app_config/SKILL.md)) is the safety-net tick. The `Poller` reads it from the `AppConfig` it is given, so a test can set its own interval. `ERROR_BACKOFF` in [src/poller.rs](../../../src/poller.rs) (5 seconds) is the wait before restarting after a failed `select`.
 
 ## Who implements it
 
@@ -52,7 +47,7 @@ The last three are started directly by [serve.rs](../../../src/cli/commands/serv
 
 - **Per-row work goes in `handle`, never in the loop.** The loop has no per-service branches.
 - **`select` returns the rows this service owns, by status.** Services are coupled only through the status one writes and another selects on. Never add a direct call from one service to another.
-- **`select` only selects.** A `select` error costs the whole service `error_backoff_seconds` on every pass until it clears, so other per-pass work (such as a sweep over some other set) must not go there, or one bad row stalls every row the service owns.
+- **`select` only selects.** A `select` error costs the whole service `ERROR_BACKOFF` on every pass until it clears, so other per-pass work (such as a sweep over some other set) must not go there, or one bad row stalls every row the service owns.
 - **`row_context` goes into an error line**: give the row's id and what it belongs to, as a log reader would want.
 - **Register wake-ups before spawning any `Poller`.** A poller's first pass runs as soon as it is spawned, so a wake-up registered inside `Poller::new` could miss a publish from a poller already running. The orchestrator skill has the two-line pattern.
 - **A service nothing publishes to takes a bare `Notify`** rather than registering with `Signals`, so unrelated status changes don't wake it. `Scheduler` and `RetentionService` do this.

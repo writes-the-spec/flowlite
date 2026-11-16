@@ -68,7 +68,7 @@ It never touches a task run row: retries and task run status are `TaskRunMonitor
 **Pipes are never read on the poll pass** (the pass is serial, so per-attempt waits add up across every running attempt). The dispatcher spawns two readers ([src/orchestrator/task_run_attempt_reader.rs](../../../../src/orchestrator/task_run_attempt_reader.rs)) that own the pipes, validate UTF-8, record at most `[orchestrator] max_stream_bytes` per stream (kept as head and tail) and send `String` chunks down one unbounded mpsc. The monitor only drains it:
 
 - `Running`: `record_output` `try_recv`s and never waits, so output lands at most one pass late.
-- Terminal: `finish_reading` waits for the channel to close (both readers at EOF), bounded by `[orchestrator] reader_eof_timeout_seconds` (default 2) because a grandchild that escaped the group can hold a pipe open; on timeout it aborts the readers.
+- Terminal: `finish_reading` waits for the channel to close (both readers at EOF), bounded by `READER_EOF_TIMEOUT` (2 seconds) because a grandchild that escaped the group can hold a pipe open; on timeout it aborts the readers.
 
 **Kill before drain** in `finish_termination`: closing the pipes is what produces EOF, so draining first would wait out the whole bound.
 

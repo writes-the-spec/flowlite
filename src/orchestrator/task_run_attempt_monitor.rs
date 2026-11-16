@@ -9,6 +9,9 @@ use crate::run_dir::{job_run_dir, task_output_path};
 use crate::signals::Signals;
 use chrono::{DateTime, Utc};
 
+/// How long the monitor waits for an ended attempt's readers to reach EOF.
+const READER_EOF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 
 /// Waits on the child process TaskRunAttemptDispatcher spawned for every running task
 /// run attempt and finishes the attempt once its process exits, runs past its timeout
@@ -478,7 +481,7 @@ impl TaskRunAttemptMonitor {
         // Bounded because EOF is not guaranteed: something that escaped the process group
         // can hold a pipe open after the kill. Poller::run handles rows in sequence, so an
         // unbounded wait on one attempt would stop every other attempt being handled.
-        let drained = tokio::time::timeout(self.app_config.orchestrator.reader_eof_timeout(), async {
+        let drained = tokio::time::timeout(READER_EOF_TIMEOUT, async {
             while let Some(chunk) = task_run_attempt_child.chunks.recv().await {
                 match chunk.stream {
                     TaskRunAttemptOutputStream::Stdout => stdout.push_str(&chunk.content),

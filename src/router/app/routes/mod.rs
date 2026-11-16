@@ -1,3 +1,6 @@
+/// How often a page watching something live asks for itself again.
+pub const REFRESH_INTERVAL_SECONDS: u32 = 3;
+
 pub mod home;
 pub mod job;
 pub mod job_dag;

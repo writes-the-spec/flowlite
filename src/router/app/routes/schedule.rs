@@ -25,7 +25,6 @@ pub struct ScheduleDisplay {
 #[template(path = "routes/schedule.html")]
 struct ScheduleIdRouteTemplate {
     current_route: &'static str,
-    theme: &'static str,
     /// Who is signed in, for the masthead; None when `[auth]` is not configured.
     signed_in_as: Option<String>,
     schedule: ScheduleDisplay,
@@ -54,7 +53,6 @@ pub async fn schedule_id_route(
 
     let template = ScheduleIdRouteTemplate {
         current_route: "schedules",
-        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         schedule: ScheduleDisplay {
             schedule_id: schedule.schedule_id.clone(),
@@ -68,7 +66,7 @@ pub async fn schedule_id_route(
             disabled: schedule.disabled,
         },
         schedule_jobs,
-        refresh_seconds: state.toolkit.app_config.ui.refresh_interval_seconds,
+        refresh_seconds: super::REFRESH_INTERVAL_SECONDS,
     };
 
     match template.render() {

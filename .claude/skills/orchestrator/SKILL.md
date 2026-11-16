@@ -43,7 +43,7 @@ Attempts are only inserted for a `Running` task run, so they start `Queued`, alr
 
 ## How they coordinate
 
-No service calls another. Each is a `Service` ([src/poller.rs](../../../src/poller.rs): `name`, `row_context`, `select`, `handle`) driven by its own `Poller` ([poller skill](../poller/SKILL.md)), which owns the loop, error backoff (`[orchestrator] error_backoff_seconds`, default 5) and interval (`poll_interval_seconds`, default 1, read from the `AppConfig` each pass).
+No service calls another. Each is a `Service` ([src/poller.rs](../../../src/poller.rs): `name`, `row_context`, `select`, `handle`) driven by its own `Poller` ([poller skill](../poller/SKILL.md)), which owns the loop, error backoff (`ERROR_BACKOFF`, 5 seconds) and interval (`poll_interval_seconds`, default 1, read from the `AppConfig` each pass).
 
 Adding a service to `Orchestrator::start` takes **two** lines besides constructing it: `let new_service_wakeup = self.signals.register();` in the registration block at the top, and `Poller::new(Arc::new(new_service), new_service_wakeup, self.app_config.clone()).start()` at the bottom. **Every wake-up is registered before any `Poller` spawns**, because a poller's first pass runs immediately and could publish to signals not yet registered. A service nothing publishes to takes a bare `Notify` instead, like the Scheduler in [src/cli/commands/serve.rs](../../../src/cli/commands/serve.rs).
 

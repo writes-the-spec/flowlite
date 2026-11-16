@@ -5,6 +5,9 @@ use crate::app_config::AppConfig;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
+/// How long a service waits before its loop restarts after an error.
+const ERROR_BACKOFF: std::time::Duration = std::time::Duration::from_secs(5);
+
 
 /// One background service a Poller drives: the rows it owns, and what it does with
 /// each one. The loop, the wake-ups and the error handling belong to the Poller, so an
@@ -71,7 +74,7 @@ impl<S: Service> Poller<S> {
                     return;
                 }
 
-                let backoff = self.app_config.orchestrator.error_backoff();
+                let backoff = ERROR_BACKOFF;
 
                 eprintln!(
                     "{} error, restarting in {}s: {e:?}",

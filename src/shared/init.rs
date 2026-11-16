@@ -88,16 +88,11 @@ const FLOWLITE_TOML: &str = r#"# flowlite configuration. Everything here has a d
 
 # [orchestrator]
 # poll_interval_seconds = 1       # how often a service looks for work itself
-# error_backoff_seconds = 5       # pause before a failed service restarts
-# reader_eof_timeout_seconds = 2  # wait for a finished attempt's output to end
 # max_stream_bytes = 1048576      # per stream, per attempt: half its head, half its tail
-# read_buffer_bytes = 8192        # one read from a running command's pipe
 # max_running_attempts = 32       # running task attempts across every job, 0 for no limit
 
 # [ui]
 # page_size = 25                  # rows per page on the run, job and schedule lists
-# max_page_size = 100             # the largest ?page_size= the run list accepts
-# refresh_interval_seconds = 3    # how often a page showing a live run refreshes
 
 # What a job's YAML gets for a field it leaves out, read when that YAML is read - at
 # startup. A run already submitted keeps the values it was submitted with.

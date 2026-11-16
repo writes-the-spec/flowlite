@@ -28,7 +28,6 @@ pub struct TaskDisplay {
 #[template(path = "routes/task.html")]
 struct TaskIdRouteTemplate {
     current_route: &'static str,
-    theme: &'static str,
     /// Who is signed in, for the masthead; None when `[auth]` is not configured.
     signed_in_as: Option<String>,
     job_name: String,
@@ -51,7 +50,6 @@ pub async fn task_id_route(
 
     let template = TaskIdRouteTemplate {
         current_route: "jobs",
-        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         job_name: job.name.clone(),
         task: TaskDisplay {

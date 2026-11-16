@@ -22,16 +22,20 @@ pub struct HomeQuery {
     pub filter_status: Option<JobRunStatus>,
 }
 
+/// The largest `?page_size=` the run list accepts.
+const MAX_PAGE_SIZE: usize = 100;
+
 impl HomeQuery {
     pub fn page(&self) -> usize {
         self.page.unwrap_or(1).max(1)
     }
 
-    /// The query string's own value, defaulted and capped by `[ui]` in flowlite.toml.
+    /// The query string's own value, defaulted by `[ui] page_size` in flowlite.toml and
+    /// capped at `MAX_PAGE_SIZE`.
     pub fn page_size(&self, app_config: &AppConfig) -> usize {
         self.page_size
             .unwrap_or(app_config.ui.page_size as usize)
-            .clamp(1, app_config.ui.max_page_size as usize)
+            .clamp(1, MAX_PAGE_SIZE)
     }
 
     /// The job select posts an empty value for "All jobs", which means no filter at all
@@ -89,7 +93,6 @@ pub struct StatusChip {
 #[template(path = "routes/home.html")]
 struct HomeRouteTemplate {
     current_route: &'static str,
-    theme: &'static str,
     /// Who is signed in, for the masthead; None when `[auth]` is not configured.
     signed_in_as: Option<String>,
     page_size: usize,
@@ -140,10 +143,9 @@ pub async fn home_route(
 
     let template = HomeRouteTemplate {
         current_route: "home",
-        theme: app_config.ui.theme.as_attribute(),
         signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         page_size,
-        refresh_seconds: app_config.ui.refresh_interval_seconds,
+        refresh_seconds: super::REFRESH_INTERVAL_SECONDS,
         table_href,
         jobs,
         selected_job_id: filter_job_id,

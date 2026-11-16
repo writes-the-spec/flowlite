@@ -5,6 +5,9 @@ use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStream;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::mpsc::UnboundedSender;
 
+/// One read from a child's pipe.
+const READ_BUFFER_BYTES: usize = 8192;
+
 
 /// One coalescible piece of one stream, already validated as UTF-8.
 ///
@@ -47,7 +50,7 @@ pub async fn read_task_run_attempt_stream<R>(
 where
     R: AsyncRead + Unpin,
 {
-    let mut buf = vec![0u8; app_config.orchestrator.read_buffer_bytes];
+    let mut buf = vec![0u8; READ_BUFFER_BYTES];
     let mut carry: Vec<u8> = Vec::new();
     let mut capture = StreamCapture::new(app_config.orchestrator.max_stream_bytes);
 

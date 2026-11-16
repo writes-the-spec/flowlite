@@ -9,16 +9,9 @@ pub struct AppConfigOrchestrator {
     /// turned off: `job submit` writes from another process and so cannot publish, and
     /// this interval is the only thing that notices.
     pub poll_interval_seconds: u64,
-    /// How long a poller waits before restarting after an error.
-    pub error_backoff_seconds: u64,
-    /// How long the attempt monitor waits for the readers to reach EOF after the process
-    /// has gone, per timeout and per stop.
-    pub reader_eof_timeout_seconds: u64,
     /// The most output one stream of one attempt records. Past it the reader keeps
     /// reading and stops recording, which bounds both the table and the memory in flight.
     pub max_stream_bytes: usize,
-    /// One read from a child's pipe.
-    pub read_buffer_bytes: usize,
     /// The most a task's result may be. Past it the attempt fails rather than recording a
     /// truncated result, which is the one thing a dependent must never be handed: half a
     /// document parses as a whole one often enough to matter.
@@ -34,10 +27,7 @@ impl Default for AppConfigOrchestrator {
     fn default() -> Self {
         Self {
             poll_interval_seconds: 1,
-            error_backoff_seconds: 5,
-            reader_eof_timeout_seconds: 2,
             max_stream_bytes: 1024 * 1024,
-            read_buffer_bytes: 8192,
             max_task_output_bytes: 1024 * 1024,
             max_running_attempts: 32,
             kill_grace_seconds: 10,
@@ -48,14 +38,6 @@ impl Default for AppConfigOrchestrator {
 impl AppConfigOrchestrator {
     pub fn poll_interval(&self) -> Duration {
         Duration::from_secs(self.poll_interval_seconds)
-    }
-
-    pub fn error_backoff(&self) -> Duration {
-        Duration::from_secs(self.error_backoff_seconds)
-    }
-
-    pub fn reader_eof_timeout(&self) -> Duration {
-        Duration::from_secs(self.reader_eof_timeout_seconds)
     }
 
     pub fn kill_grace(&self) -> Duration {

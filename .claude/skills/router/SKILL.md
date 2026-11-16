@@ -21,7 +21,6 @@ pub struct WidgetDisplay {          // finished strings: the template chooses no
 #[template(path = "routes/widgets.html")]
 struct WidgetsRouteTemplate {
     current_route: &'static str,
-    theme: &'static str,
     widgets: Vec<WidgetDisplay>,
 }
 
@@ -34,7 +33,6 @@ pub async fn widgets_route(
 
     let template = WidgetsRouteTemplate {
         current_route: "widgets",
-        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         widgets: widgets.into_iter().map(|w| WidgetDisplay {
             widget_id: w.widget_id,
             created_at: format::timestamp(w.created_at),   // crate::shared::format
@@ -56,11 +54,11 @@ pub async fn widgets_route(
 4. Create `templates/routes/widgets.html` with `{% extends "routes/root.html" %}`, a `{% block title %}Widgets · flowlite{% endblock %}` and a `{% block content %}`.
 5. For a masthead link, edit [templates/routes/root.html](../../../templates/routes/root.html), keyed on `current_route`.
 
-Every page struct carries `current_route`, `theme` and `signed_in_as`. `root.html` renders `theme` into `<html data-theme="...">`, which the light palette keys on, so a page without it does not compile; it comes from `[ui] theme`. `signed_in_as` is the masthead's name and Log out button: the handler takes `signed_in: Option<Extension<SignedIn>>` and sets `signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject)`, which is `None` when `[auth]` is off. "Error rendering template" on a page means the `Err` arm above ran; the askama error is on serve's stderr.
+Every page struct carries `current_route` and `signed_in_as`. `root.html` starts as `<html data-theme="auto">` and its first script resolves that to the viewer's `prefers-color-scheme`, which the light palette keys on. `signed_in_as` is the masthead's name and Log out button: the handler takes `signed_in: Option<Extension<SignedIn>>` and sets `signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject)`, which is `None` when `[auth]` is off. "Error rendering template" on a page means the `Err` arm above ran; the askama error is on serve's stderr.
 
 ## htmx partials
 
-A self-refreshing region is its own route returning a fragment - [job_run_table](../../../src/router/app/routes/job_run_table.rs), [limits_panel](../../../src/router/app/routes/limits_panel.rs) - fetched by the home page with `hx-get` and `hx-trigger="load, every {{ refresh_seconds }}s"` (`refresh_seconds` = `app_config.ui.refresh_interval_seconds`). A partial's template has no `{% extends %}`; its handler passes no `current_route` or `theme`. A partial sharing query parameters with its page imports them (`job_run_table` uses the home page's `HomeQuery`, `Pagination`, `runs_href`).
+A self-refreshing region is its own route returning a fragment - [job_run_table](../../../src/router/app/routes/job_run_table.rs), [limits_panel](../../../src/router/app/routes/limits_panel.rs) - fetched by the home page with `hx-get` and `hx-trigger="load, every {{ refresh_seconds }}s"` (`refresh_seconds` = `routes::REFRESH_INTERVAL_SECONDS`). A partial's template has no `{% extends %}`; its handler passes no `current_route`. A partial sharing query parameters with its page imports them (`job_run_table` uses the home page's `HomeQuery`, `Pagination`, `runs_href`).
 
 ## Rules
 

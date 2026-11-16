@@ -48,7 +48,7 @@ impl AppConfigMetrics {
 
 - **Every key has a default, defined here.** No reader writes `unwrap_or(30)`; a key without one breaks every existing `flowlite.toml`.
 - **A section with no possible default is `Option<T>`, absent = off**, with `#[serde(default, skip_serializing_if = "Option::is_none")]`. `[smtp]` / `[slack]`: a job naming an unconfigured channel is a **startup error**, not a silent non-delivery. Without `skip_serializing_if`, a `null` in the defaults layer is what a real section would have to merge over.
-- **Serde defaults per field only inside `Option<T>` sections.** A `#[serde(default)]` section is in the defaults layer, so figment supplies every key (`[ui]` naming only `page_size` keeps the rest). An `Option<T>` section has nothing underneath: optional keys carry `#[serde(default = "...")]` (`smtp.port`, `slack.api_url`), and those without (`smtp.host`, `smtp.from`, `slack.token`) make a half-written section a startup error.
+- **Serde defaults per field only inside `Option<T>` sections.** A `#[serde(default)]` section is in the defaults layer, so figment supplies every key (`[job_defaults]` naming only `keep_runs` keeps the rest). An `Option<T>` section has nothing underneath: optional keys carry `#[serde(default = "...")]` (`smtp.port`, `slack.api_url`), and those without (`smtp.host`, `smtp.from`, `slack.token`) make a half-written section a startup error.
 - **Durations: a `*_seconds` field plus a method returning `Duration`** (`poll_interval_seconds` / `poll_interval()`).
 - **`secrets` is redacted; `concurrency_limits` isn't.** `secrets` is `#[serde(skip_serializing)]` and `Debug` prints its names against `<redacted>`, so a stray `{app_config:?}` can't dump credentials. A wrong limit should be visible.
 - **`AppConfig`'s `Debug` is hand-written — add every new field.** Deriving would undo the redaction. Known exception: `smtp.password`, `slack.token` print via their sections' derived `Debug`.
@@ -60,7 +60,7 @@ impl AppConfigMetrics {
 | Section | Read by |
 |---|---|
 | `[orchestrator]` | [src/poller.rs](../../../src/poller.rs) and the services ([orchestrator skill](../orchestrator/SKILL.md)) |
-| `[ui]` | dashboard paging, refresh, palette ([router skill](../router/SKILL.md)) |
+| `[ui]` | dashboard paging ([router skill](../router/SKILL.md)) |
 | `[job_defaults]`, `[schedule_defaults]` | `Declared::load`, for what a YAML omits; `keep_runs` also by `RetentionService` ([src/retention/service.rs](../../../src/retention/service.rs)) for a job id nothing declares |
 | `[smtp]`, `[slack]` | the channels ([notifications skill](../notifications/SKILL.md)) |
 | `[auth]` | the dashboard's login: `AppState::new` builds the `IdpClient`, the `SessionStore` (`session_seconds`) and the session cookie from it ([router skill](../router/SKILL.md)). `client_secret` is redacted by `AppConfigAuth`'s own hand-written `Debug` |

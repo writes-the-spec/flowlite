@@ -15,7 +15,6 @@ use crate::router::app::middlewares::session::safe_next;
 #[template(path = "routes/login.html")]
 struct LoginRouteTemplate {
     current_route: &'static str,
-    theme: &'static str,
     signed_in_as: Option<String>,
     next: String,
     username: String,
@@ -55,7 +54,7 @@ pub async fn login_page_route(
         return Redirect::to(&next).into_response();
     }
 
-    render(&state, StatusCode::OK, next, String::new(), None)
+    render(StatusCode::OK, next, String::new(), None)
 }
 
 pub async fn login_route(
@@ -90,13 +89,12 @@ pub async fn login_route(
         Err(IdpError::Rejected(reason)) => {
             eprintln!("Refused a dashboard login for {}: {reason}.", form.username);
 
-            render(&state, StatusCode::UNAUTHORIZED, next, form.username, Some("Wrong username or password."))
+            render(StatusCode::UNAUTHORIZED, next, form.username, Some("Wrong username or password."))
         }
         Err(error @ IdpError::Unavailable(_)) => {
             eprintln!("Could not log {} in to the dashboard: {error}.", form.username);
 
             render(
-                &state,
                 StatusCode::SERVICE_UNAVAILABLE,
                 next,
                 form.username,
@@ -109,7 +107,6 @@ pub async fn login_route(
 /// The form, again: the username is kept so a mistyped password costs one field, and the
 /// password never is.
 fn render(
-    state: &AppState,
     status: StatusCode,
     next: String,
     username: String,
@@ -118,7 +115,6 @@ fn render(
 
     let template = LoginRouteTemplate {
         current_route: "login",
-        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         signed_in_as: None,
         next,
         username,

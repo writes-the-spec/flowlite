@@ -17,7 +17,6 @@ use std::collections::BTreeMap;
 #[template(path = "routes/job_missing.html")]
 struct JobMissingTemplate {
     current_route: &'static str,
-    theme: &'static str,
     /// Who is signed in, for the masthead; None when `[auth]` is not configured.
     signed_in_as: Option<String>,
     job_id: String,
@@ -27,7 +26,6 @@ struct JobMissingTemplate {
 #[template(path = "routes/job.html")]
 struct JobIdRouteTemplate {
     current_route: &'static str,
-    theme: &'static str,
     /// Who is signed in, for the masthead; None when `[auth]` is not configured.
     signed_in_as: Option<String>,
     job: Job,
@@ -46,7 +44,6 @@ pub async fn job_id_route(
         None => {
             let template = JobMissingTemplate {
                 current_route: "jobs",
-                theme: state.toolkit.app_config.ui.theme.as_attribute(),
                 signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
                 job_id,
             };
@@ -71,7 +68,6 @@ pub async fn job_id_route(
 
     let template = JobIdRouteTemplate {
         current_route: "jobs",
-        theme: state.toolkit.app_config.ui.theme.as_attribute(),
         signed_in_as: signed_in.map(|Extension(signed_in)| signed_in.subject),
         job,
         tasks,
