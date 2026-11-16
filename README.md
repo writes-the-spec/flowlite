@@ -60,7 +60,7 @@ A schedule submits one or more jobs on a cron expression:
 id: nightly
 name: Nightly
 cron: "0 30 1 * * *"               # six fields, seconds first: 01:30:00 every day
-timezone: Europe/Vienna
+timezone: Europe/Paris
 jobs:
   - id: ci-report
 ```
