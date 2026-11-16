@@ -6,7 +6,7 @@
 //!
 //! Shared stops at the fact. A refusal raised here is a typed value, never a finished
 //! sentence: the frontends do not agree on what the reader can do about it, so each words
-//! its own remedy. `wait::DataDirNotServed` is the worked example.
+//! its own remedy. `wait::ProjectDirNotServed` is the worked example.
 
 pub mod format;
 pub mod init;

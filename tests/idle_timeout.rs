@@ -9,7 +9,7 @@ use serde_json::Value;
 mod common;
 use common::{flowlite, install_job, is_up, serve, until, ServerGuard};
 
-fn data_dir() -> PathBuf {
+fn project_dir() -> PathBuf {
     let dir = std::env::temp_dir()
         .join(format!("flowlite-idle-{}", uuid::Uuid::new_v4()));
 
@@ -30,7 +30,7 @@ tasks:
 #[test]
 fn a_task_that_goes_quiet_is_timed_out_at_its_idle_timeout() {
 
-    let dir = data_dir();
+    let dir = project_dir();
 
     install_job(&dir, "quiet.yaml", QUIET);
 

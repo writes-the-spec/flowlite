@@ -312,7 +312,7 @@ impl TaskRunAttemptDispatcher {
         let task_run = self.get_task_run(task_run_attempt).await?;
         let job_run = self.get_job_run(task_run_attempt).await?;
 
-        let job_run_dir = job_run_dir(&self.app_config.data_dir, job_run.id)?;
+        let job_run_dir = job_run_dir(&self.app_config.project_dir, job_run.id)?;
 
         let inputs = self.get_inputs(&task_run, &job_run_dir).await?;
         let previous_attempt = self.write_previous_attempt_files(task_run_attempt, &job_run_dir).await?;
@@ -321,7 +321,7 @@ impl TaskRunAttemptDispatcher {
             &task_run,
             &job_run,
             task_run_attempt,
-            &self.app_config.data_dir,
+            &self.app_config.project_dir,
             &job_run_dir,
             &inputs,
             previous_attempt.as_ref(),
@@ -928,7 +928,7 @@ mod tests {
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
-        let survived = db.data_dir().join("survived");
+        let survived = db.project_dir().join("survived");
 
         let task_run = db.insert_task_run_for_command(
             job_run.id,
@@ -1223,7 +1223,7 @@ mod tests {
             chrono::Utc::now(),
         ).await;
 
-        let seen_path = db.data_dir().join("seen.txt");
+        let seen_path = db.project_dir().join("seen.txt");
 
         let task_run = db.insert_task_run_for_command_with_env(
             job_run.id,
@@ -1270,7 +1270,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
 
-        let seen_path = db.data_dir().join("seen.txt");
+        let seen_path = db.project_dir().join("seen.txt");
 
         let task_run = db.insert_task_run_for_command_with_secret_env(
             job_run.id,
@@ -1321,7 +1321,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
 
-        let seen_path = db.data_dir().join("seen.txt");
+        let seen_path = db.project_dir().join("seen.txt");
 
         let task_run = db.insert_task_run_for_command_with_env(
             job_run.id,
@@ -1375,7 +1375,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
 
-        let seen_path = db.data_dir().join("seen.txt");
+        let seen_path = db.project_dir().join("seen.txt");
 
         let task_run = db.insert_task_run_for_command_with_env(
             job_run.id,
@@ -1400,11 +1400,11 @@ mod tests {
         assert_eq!(read_command_file(&seen_path).await, "ok");
     }
 
-    /// The companion of the strip: the data directory is the one FLOWLITE_ variable a task
+    /// The companion of the strip: the project directory is the one FLOWLITE_ variable a task
     /// command has a reason to read, since a command that calls flowlite itself needs it,
     /// so it is injected instead of inherited.
     #[tokio::test]
-    async fn the_data_dir_reaches_the_command() {
+    async fn the_project_dir_reaches_the_command() {
 
         let _environment = reading_the_environment();
 
@@ -1412,12 +1412,12 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
 
-        let seen_path = db.data_dir().join("seen.txt");
+        let seen_path = db.project_dir().join("seen.txt");
 
         let task_run = db.insert_task_run_for_command_with_env(
             job_run.id,
             &format!(
-                "printf '%s' \"$FLOWLITE_DATA_DIR\" > {}",
+                "printf '%s' \"$FLOWLITE_PROJECT_DIR\" > {}",
                 seen_path.display(),
             ),
             std::collections::BTreeMap::new(),
@@ -1437,7 +1437,7 @@ mod tests {
 
         assert_eq!(
             read_command_file(&seen_path).await,
-            db.data_dir().to_string_lossy(),
+            db.project_dir().to_string_lossy(),
         );
     }
 
@@ -1456,7 +1456,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
 
-        let seen_path = db.data_dir().join("seen.txt");
+        let seen_path = db.project_dir().join("seen.txt");
 
         let task_run = db.insert_task_run_for_command_with_env(
             job_run.id,
@@ -1496,7 +1496,7 @@ mod tests {
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
-        let seen_path = db.data_dir().join("pwd.txt");
+        let seen_path = db.project_dir().join("pwd.txt");
 
         let task_run = db.insert_task_run_for_command(
             job_run.id,
@@ -1518,7 +1518,7 @@ mod tests {
         let seen = read_command_file(&seen_path).await;
 
         let expected = crate::run_dir::job_run_dir(
-            &db.app_config().data_dir,
+            &db.app_config().project_dir,
             job_run.id,
         ).unwrap();
 
@@ -1541,8 +1541,8 @@ mod tests {
         let first = db.insert_job_run(JobRunStatus::Running).await;
         let second = db.insert_job_run(JobRunStatus::Running).await;
 
-        let first_dir = crate::run_dir::job_run_dir(&db.app_config().data_dir, first.id).unwrap();
-        let second_dir = crate::run_dir::job_run_dir(&db.app_config().data_dir, second.id).unwrap();
+        let first_dir = crate::run_dir::job_run_dir(&db.app_config().project_dir, first.id).unwrap();
+        let second_dir = crate::run_dir::job_run_dir(&db.app_config().project_dir, second.id).unwrap();
 
         assert_ne!(first_dir, second_dir);
     }
@@ -1576,7 +1576,7 @@ mod tests {
             .unwrap();
 
         let path = crate::run_dir::task_output_path(
-            &crate::run_dir::job_run_dir(&db.app_config().data_dir, job_run.id).unwrap(),
+            &crate::run_dir::job_run_dir(&db.app_config().project_dir, job_run.id).unwrap(),
             &task_run.task_id,
             1,
         );
@@ -1612,7 +1612,7 @@ mod tests {
         }
 
         if let Some(result) = result {
-            let job_run_dir = crate::run_dir::job_run_dir(&db.app_config().data_dir, task_run.job_run_id).unwrap();
+            let job_run_dir = crate::run_dir::job_run_dir(&db.app_config().project_dir, task_run.job_run_id).unwrap();
             std::fs::write(task_output_path(&job_run_dir, &task_run.task_id, 1), result).unwrap();
         }
 
@@ -1631,7 +1631,7 @@ mod tests {
 
         let db = TestDb::new().await;
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
-        let seen_path = db.data_dir().join("seen.txt");
+        let seen_path = db.project_dir().join("seen.txt");
 
         let task_run = db.insert_task_run_for_command(
             job_run.id,
@@ -1667,7 +1667,7 @@ mod tests {
 
         let db = TestDb::new().await;
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
-        let seen_path = db.data_dir().join("seen.txt");
+        let seen_path = db.project_dir().join("seen.txt");
 
         let task_run = db.insert_task_run_for_command(
             job_run.id,
@@ -1706,7 +1706,7 @@ mod tests {
         let plan_attempt = db.insert_task_run_attempt(&plan, 1, TaskRunAttemptStatus::Running).await;
 
         let path = crate::run_dir::task_output_path(
-            &crate::run_dir::job_run_dir(&db.app_config().data_dir, job_run.id).unwrap(),
+            &crate::run_dir::job_run_dir(&db.app_config().project_dir, job_run.id).unwrap(),
             "plan",
             1,
         );
@@ -1715,7 +1715,7 @@ mod tests {
         db.spawn_exited_child(&plan_attempt, "exit 0", Utc::now() + TimeDelta::seconds(3600)).await;
         db.task_run_attempt_monitor().handle(&plan_attempt).await.unwrap();
 
-        let seen_path = db.data_dir().join("seen.txt");
+        let seen_path = db.project_dir().join("seen.txt");
 
         let execute = db.insert_task_run_for_command_depending_on(
             job_run.id,
@@ -1743,8 +1743,8 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
 
-        let working_dir = db.data_dir().to_string_lossy().into_owned();
-        let seen_path = db.data_dir().join("pwd.txt");
+        let working_dir = db.project_dir().to_string_lossy().into_owned();
+        let seen_path = db.project_dir().join("pwd.txt");
 
         let task_run = db.insert_task_run_for_command_with_env(
             job_run.id,
@@ -1994,7 +1994,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
 
-        let seen_path = db.data_dir().join("seen.txt");
+        let seen_path = db.project_dir().join("seen.txt");
 
         let task_run = db.insert_task_run_for_command(
             job_run.id,
@@ -2025,7 +2025,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
 
-        let seen_path = db.data_dir().join("seen.txt");
+        let seen_path = db.project_dir().join("seen.txt");
 
         let task_run = db.insert_task_run_for_command_with_stdin(
             job_run.id,
@@ -2053,7 +2053,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
 
-        let seen_path = db.data_dir().join("seen.txt");
+        let seen_path = db.project_dir().join("seen.txt");
 
         let task_run = db.insert_task_run_for_command_with_stdin(
             job_run.id,
@@ -2085,7 +2085,7 @@ mod tests {
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
 
-        let seen_path = db.data_dir().join("seen.txt");
+        let seen_path = db.project_dir().join("seen.txt");
 
         let stdin = "x".repeat(256 * 1024);
 

@@ -4,7 +4,7 @@
     "should_trigger": true
   },
   {
-    "query": "database is locked when two mcp calls open a fresh data directory at once",
+    "query": "database is locked when two mcp calls open a fresh project directory at once",
     "should_trigger": true
   },
   {

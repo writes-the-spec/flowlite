@@ -52,7 +52,7 @@
     "should_trigger": false
   },
   {
-    "query": "add a --jobs-dir flag to the cli so jobs can live outside the data dir",
+    "query": "add a --jobs-dir flag to the cli so jobs can live outside the project dir",
     "should_trigger": false
   },
   {

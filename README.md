@@ -56,7 +56,7 @@ flowlite serve                          # scheduler, orchestrator and dashboard 
 flowlite job submit hello-world --wait  # in a second shell; exits non-zero unless it succeeded
 ```
 
-Everything lives in the data directory: the current one, or whichever `-D` names. Jobs are
+Everything lives in the project directory: the current one, or whichever `-p` names. Jobs are
 under `jobs/`, schedules under `schedules/`, and everything flowlite writes itself — run
 history in `flowlite.db`, run directories, the serve lock — under `.flowlite/`.
 
@@ -158,15 +158,15 @@ open and nothing to start first. Register it with any MCP client as a stdio serv
 ```json
 {
   "mcpServers": {
-    "flowlite": { "command": "flowlite", "args": ["-D", "./data", "mcp"] }
+    "flowlite": { "command": "flowlite", "args": ["-p", "./data", "mcp"] }
   }
 }
 ```
 
 | Tool | Answers |
 |---|---|
-| `init_data_dir` | Set this empty directory up with an example job and schedule. |
-| `list_jobs` | What jobs does this data directory declare? |
+| `init_project_dir` | Set this empty directory up with an example job and schedule. |
+| `list_jobs` | What jobs does this project directory declare? |
 | `submit_job` | Run this installed job, file or inline YAML, and optionally wait for the outcome. |
 | `list_job_runs` | What has run lately, by job and by status? |
 | `get_job_run` | What happened to run 42, task by task, and what did each task produce? |
@@ -174,7 +174,7 @@ open and nothing to start first. Register it with any MCP client as a stdio serv
 | `stop_job_run` | Stop run 42, and tell me what it settled to. |
 | `get_serve_status` | Is anything actually serving this directory? |
 | `list_limits` | What is a queued run waiting behind? |
-| `validate_data_dir` | Would `serve` start on the YAML and flowlite.toml I just edited? |
+| `validate_project_dir` | Would `serve` start on the YAML and flowlite.toml I just edited? |
 
 Each tool returns the same fields its CLI twin prints with `--json`. `submit_job` accepts a
 pipeline an agent wrote itself as inline YAML, and runs it once without installing it.

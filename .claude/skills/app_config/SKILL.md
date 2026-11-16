@@ -5,16 +5,16 @@ description: The config layer (src/app_config/) - how flowlite.toml and FLOWLITE
 
 # Config conventions (src/app_config/)
 
-One `AppConfig`, built once at startup and handed to everything. `<data_dir>/flowlite.toml` is read only by [src/app_config/app_config.rs](../../../src/app_config/app_config.rs); each `[section]` is a struct in its own file, re-exported from [mod.rs](../../../src/app_config/mod.rs). It holds what differs per machine; job and schedule definitions are YAML ([yaml skill](../yaml/SKILL.md)).
+One `AppConfig`, built once at startup and handed to everything. `<project_dir>/flowlite.toml` is read only by [src/app_config/app_config.rs](../../../src/app_config/app_config.rs); each `[section]` is a struct in its own file, re-exported from [mod.rs](../../../src/app_config/mod.rs). It holds what differs per machine; job and schedule definitions are YAML ([yaml skill](../yaml/SKILL.md)).
 
 ## How a value is resolved
 
 `AppConfig::load` merges figment layers, lowest first:
 
 1. `Serialized::defaults(AppConfig::default())` — a missing `flowlite.toml` loads fine.
-2. `Toml::file(data_dir/flowlite.toml)`.
+2. `Toml::file(project_dir/flowlite.toml)`.
 3. `Env::prefixed("FLOWLITE_").split("__")` — `FLOWLITE_SLACK__TOKEN` is `[slack] token`, `FLOWLITE_SECRETS__WAREHOUSE_PW` one `secrets` entry.
-4. `Serialized::default("data_dir", ...)` — last, so a file inside the directory can't redirect it.
+4. `Serialized::default("project_dir", ...)` — last, so a file inside the directory can't redirect it.
 
 Then a concurrency limit named `global` is refused: `flowlite limits` prints the combined cap under that name.
 

@@ -270,7 +270,7 @@ impl CRUD {
 
     /// How many rows `data.filter` matches — counted by the database rather than by
     /// selecting the rows and taking their length, because the sets this is asked about are
-    /// unbounded: "every finished run in the database" is 50,000 rows on a long-lived data
+    /// unbounded: "every finished run in the database" is 50,000 rows on a long-lived project
     /// directory, and the answer is one integer.
     pub async fn count_job_runs<'e, E>(&self, executor: E, data: &CountJobRunsData) -> anyhow::Result<i64>
     where

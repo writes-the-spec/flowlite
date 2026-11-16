@@ -5,7 +5,7 @@ description: How a table is declared in flowlite and how a schema change lands -
 
 # Landing a schema change
 
-One database, `<data_dir>/.flowlite/flowlite.db`, with one migration history in `db/schemas/disk/migrations/`, run by `Toolkit::update_disk_schema`. It holds runs — what must survive a restart.
+One database, `<project_dir>/.flowlite/flowlite.db`, with one migration history in `db/schemas/disk/migrations/`, run by `Toolkit::update_disk_schema`. It holds runs — what must survive a restart.
 
 **Decide first:** *if the process restarts, should this still exist?* No → it is config, a field on a `Declared` struct loaded from YAML, and needs no table or migration at all ([yaml skill](../yaml/SKILL.md)). Yes → a table here. The [entities skill](../entities/SKILL.md) maps what exists.
 
@@ -14,7 +14,7 @@ One database, `<data_dir>/.flowlite/flowlite.db`, with one migration history in 
 **`sqlx::migrate!` checksums every migration it applies.** Change one byte of a file a database has run and that process refuses to start until the file is restored or the database reset. So ask **"has any database applied this migration?"** — by looking:
 
 ```bash
-sqlite3 "<data_dir>/.flowlite/flowlite.db" \
+sqlite3 "<project_dir>/.flowlite/flowlite.db" \
   "SELECT version, description FROM _sqlx_migrations ORDER BY version;"
 ```
 
@@ -32,5 +32,5 @@ Nothing has → edit the original. Something has, or unsure → add a new migrat
 ## Before you finish
 
 - **`cargo test`** — every test builds its database from the migrations, catching syntax errors, bad foreign keys and bad ordering first.
-- **If you edited a file that had been applied, start the app once against a real data directory** (checksums are only compared on startup): `cargo run -- -D /tmp/probe serve`.
+- **If you edited a file that had been applied, start the app once against a real project directory** (checksums are only compared on startup): `cargo run -- -p /tmp/probe serve`.
 - **Update the table's file** under `.claude/skills/entities/references/`, and the entities `SKILL.md` table if the table is new — readers trust the map instead of the DDL.

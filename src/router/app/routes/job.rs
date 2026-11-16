@@ -11,7 +11,7 @@ use crate::router::app::routes::job_dag::{self as dag, Dag};
 use std::collections::BTreeMap;
 
 /// A job id with nothing behind it. Reachable two ways: a run submitted from a file, whose
-/// definition was never installed here, and a job deleted from the data directory while its
+/// definition was never installed here, and a job deleted from the project directory while its
 /// runs remain. Both leave the id readable everywhere the runs are, so it needs a page.
 #[derive(Template)]
 #[template(path = "routes/job_missing.html")]

@@ -10,7 +10,7 @@ use serde_json::Value;
 mod common;
 use common::{flowlite, install_job, is_up, serve, until, ServerGuard, BINARY};
 
-fn data_dir() -> PathBuf {
+fn project_dir() -> PathBuf {
     let dir = std::env::temp_dir()
         .join(format!("flowlite-parent-{}", uuid::Uuid::new_v4()));
 
@@ -39,7 +39,7 @@ fn job_run_json(dir: &std::path::Path, job_run_id: i64) -> Value {
 #[test]
 fn a_run_submitted_by_a_task_names_its_parent_and_is_named_by_it() {
 
-    let dir = data_dir();
+    let dir = project_dir();
 
     install_job(&dir, "child.yaml", CHILD);
     install_job(&dir, "parent.yaml", &parent_yaml());
@@ -75,7 +75,7 @@ const SLOW_CHILD: &str = "id: child\nname: Child\ntasks:\n  - id: work\n    comm
 #[test]
 fn stopping_a_run_stops_the_run_its_task_submitted() {
 
-    let dir = data_dir();
+    let dir = project_dir();
 
     install_job(&dir, "child.yaml", SLOW_CHILD);
     install_job(&dir, "parent.yaml", &parent_yaml());

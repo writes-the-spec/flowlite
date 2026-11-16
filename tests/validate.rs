@@ -7,7 +7,7 @@ use std::process::{Command, Output};
 const BINARY: &str = env!("CARGO_BIN_EXE_flowlite");
 
 
-fn data_dir(label: &str) -> PathBuf {
+fn project_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir()
         .join(format!("flowlite-validate-{label}-{}", uuid::Uuid::new_v4()));
 
@@ -19,7 +19,7 @@ fn data_dir(label: &str) -> PathBuf {
 fn validate(dir: &Path, json: bool) -> Output {
     let mut command = Command::new(BINARY);
 
-    command.arg("-D").arg(dir).arg("validate");
+    command.arg("-p").arg(dir).arg("validate");
 
     if json {
         command.arg("--json");
@@ -33,7 +33,7 @@ const HELLO: &str = "id: hello\nname: Hello\ntasks:\n  - id: say\n    command: \
 
 #[test]
 fn a_valid_directory_passes_with_its_counts_and_leaves_no_database() {
-    let dir = data_dir("valid");
+    let dir = project_dir("valid");
     std::fs::write(dir.join("jobs").join("hello.yaml"), HELLO).unwrap();
 
     let output = validate(&dir, false);
@@ -50,7 +50,7 @@ fn a_valid_directory_passes_with_its_counts_and_leaves_no_database() {
 
 #[test]
 fn a_file_that_does_not_parse_fails_naming_the_file() {
-    let dir = data_dir("unparsable");
+    let dir = project_dir("unparsable");
     std::fs::write(dir.join("jobs").join("broken.yaml"), "name: No Id\ntasks: []\n").unwrap();
 
     let output = validate(&dir, true);
@@ -66,7 +66,7 @@ fn a_file_that_does_not_parse_fails_naming_the_file() {
 /// `serve`.
 #[test]
 fn a_secret_nothing_defines_fails_as_it_would_fail_serve() {
-    let dir = data_dir("secret");
+    let dir = project_dir("secret");
 
     std::fs::write(
         dir.join("jobs").join("nightly.yaml"),

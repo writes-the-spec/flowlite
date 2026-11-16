@@ -16,22 +16,22 @@ impl InitCmd {
     /// whose YAML no longer parses - the two moments it is most likely to be reached for.
     pub async fn run(&self, toolkit: Toolkit) -> anyhow::Result<()> {
 
-        let data_dir = Path::new(&toolkit.app_config.data_dir);
+        let project_dir = Path::new(&toolkit.app_config.project_dir);
 
-        let files = scaffold(data_dir)?;
+        let files = scaffold(project_dir)?;
 
-        println!("{}", init_report(data_dir, &files));
+        println!("{}", init_report(project_dir, &files));
 
         Ok(())
     }
 }
 
 
-/// Names the directory because `-D` and `FLOWLITE_DATA_DIR` both mean the scaffold can
+/// Names the directory because `-p` and `FLOWLITE_PROJECT_DIR` both mean the scaffold can
 /// land somewhere other than where the command was typed.
-pub fn init_report(data_dir: &Path, files: &[ScaffoldedFile]) -> String {
+pub fn init_report(project_dir: &Path, files: &[ScaffoldedFile]) -> String {
 
-    let mut lines = vec![format!("flowlite data directory {}", data_dir.display()), String::new()];
+    let mut lines = vec![format!("flowlite project directory {}", project_dir.display()), String::new()];
 
     for file in files {
         let verb = if file.created { "wrote" } else { "kept " };
@@ -57,13 +57,13 @@ mod tests {
 
     #[test]
     fn the_report_says_which_files_were_written_and_which_were_kept() {
-        let data_dir = a_temp_dir();
+        let project_dir = a_temp_dir();
 
-        let first = scaffold(&data_dir).unwrap();
-        let second = scaffold(&data_dir).unwrap();
+        let first = scaffold(&project_dir).unwrap();
+        let second = scaffold(&project_dir).unwrap();
 
-        let wrote = init_report(&data_dir, &first);
-        let kept = init_report(&data_dir, &second);
+        let wrote = init_report(&project_dir, &first);
+        let kept = init_report(&project_dir, &second);
 
         assert!(wrote.contains("wrote"), "{wrote}");
         assert!(!wrote.contains("kept"), "{wrote}");
@@ -73,12 +73,12 @@ mod tests {
 
     #[test]
     fn the_report_names_the_directory_and_the_command_that_starts_it() {
-        let data_dir = a_temp_dir();
+        let project_dir = a_temp_dir();
 
-        let files = scaffold(&data_dir).unwrap();
-        let report = init_report(&data_dir, &files);
+        let files = scaffold(&project_dir).unwrap();
+        let report = init_report(&project_dir, &files);
 
-        assert!(report.contains(&data_dir.display().to_string()), "{report}");
+        assert!(report.contains(&project_dir.display().to_string()), "{report}");
         assert!(report.contains("flowlite serve"), "{report}");
     }
 }

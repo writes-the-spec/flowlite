@@ -17,7 +17,7 @@ The **Scheduler** ([src/scheduler/scheduler.rs](../../../src/scheduler/scheduler
 
 ## Definition (YAML → `Schedule` + `ScheduleJob`)
 
-`<data_dir>/schedules/*.yml`, parsed by `ScheduleYaml` ([src/yaml_models/schedule_yaml.rs](../../../src/yaml_models/schedule_yaml.rs)):
+`<project_dir>/schedules/*.yml`, parsed by `ScheduleYaml` ([src/yaml_models/schedule_yaml.rs](../../../src/yaml_models/schedule_yaml.rs)):
 
 ```yaml
 id: nightly

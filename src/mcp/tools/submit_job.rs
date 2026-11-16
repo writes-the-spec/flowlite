@@ -1,4 +1,4 @@
-//! `submit_job`: the one tool that writes a run, from a job installed in the data
+//! `submit_job`: the one tool that writes a run, from a job installed in the project
 //! directory, a file that is never installed there, or a definition given inline.
 
 use std::collections::BTreeMap;
@@ -21,11 +21,11 @@ use crate::mcp::McpServer;
 use crate::shared::job::installed_job_id;
 use crate::shared::schedule_at::{parse_schedule_at, refuse_waiting_for_a_future_run};
 use crate::shared::task_run_attempt::own_task_run_attempt_id;
-use crate::shared::wait::ensure_data_dir_is_served;
+use crate::shared::wait::ensure_project_dir_is_served;
 use crate::toolkit::Toolkit;
 use crate::yaml_models::job_yaml::JobYaml;
 
-use super::result::{describe_unserved_data_dir, error_result, job_run_result, unserved_directory_warning};
+use super::result::{describe_unserved_project_dir, error_result, job_run_result, unserved_directory_warning};
 
 /// The label this tool's messages read for an inline `yaml` definition, in place of the
 /// path a `file` would have - tells an agent where a definition came from without
@@ -39,7 +39,7 @@ const INLINE_YAML_LABEL: &str = "<inline yaml>";
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubmitJob {
-    /// The id of a job installed in the data directory. Exactly one of job, file or yaml
+    /// The id of a job installed in the project directory. Exactly one of job, file or yaml
     /// is required.
     pub job: Option<String>,
     /// A path to a job definition that is not installed there, read where it lies rather
@@ -69,7 +69,7 @@ impl McpServer {
     // that would otherwise cut a longer wait off. Kept out of the `///` above: every word
     // there is sent to the model on every turn, and none of this helps it choose the tool
     // or fill an argument.
-    /// Submit a run of a job: one installed in the data directory, a file that is never
+    /// Submit a run of a job: one installed in the project directory, a file that is never
     /// installed there, or a definition given inline. Returns the job run, still scheduled
     /// unless `wait_seconds` was long enough for it to finish.
     #[tool]
@@ -153,8 +153,8 @@ async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(J
     // behind for a server that is not there to run it - the same ordering `job submit
     // --wait` keeps.
     if wait_seconds > 0 {
-        ensure_data_dir_is_served(&toolkit.app_config.data_dir)
-            .map_err(describe_unserved_data_dir)?;
+        ensure_project_dir_is_served(&toolkit.app_config.project_dir)
+            .map_err(describe_unserved_project_dir)?;
     }
 
     let app_config = &toolkit.app_config;
@@ -198,7 +198,7 @@ async fn submit_job_run(toolkit: &Toolkit, args: SubmitJob) -> anyhow::Result<(J
     // agent whose obvious next move is to retry, queuing a duplicate run for one that
     // already exists. Degrading to a warning instead keeps the run's id in the agent's
     // hands either way.
-    let warning = unserved_directory_warning(&crud.toolkit.app_config.data_dir);
+    let warning = unserved_directory_warning(&crud.toolkit.app_config.project_dir);
 
     Ok((job_run, warning))
 }
@@ -208,16 +208,16 @@ mod tests {
     use super::*;
     use crate::app_config::AppConfig;
 
-    /// Two calls submitting the same inline id at once, over one fresh data directory -
+    /// Two calls submitting the same inline id at once, over one fresh project directory -
     /// each call's `Declared` is its own, and `OPEN_LOCK` keeps their first opens of
     /// `flowlite.db` from colliding.
     #[tokio::test]
     async fn two_joined_submits_of_the_same_inline_id_do_not_collide() {
-        let data_dir = std::env::temp_dir().join(format!("flowlite-mcp-concurrent-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(data_dir.join("jobs")).unwrap();
+        let project_dir = std::env::temp_dir().join(format!("flowlite-mcp-concurrent-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(project_dir.join("jobs")).unwrap();
 
         let toolkit = Toolkit::new(AppConfig {
-            data_dir: data_dir.to_string_lossy().into_owned(),
+            project_dir: project_dir.to_string_lossy().into_owned(),
             ..AppConfig::default()
         });
 
@@ -238,7 +238,7 @@ mod tests {
         assert_eq!(second_run.job_id, "probe");
         assert_ne!(first_run.id, second_run.id, "two submits must get two different run ids");
 
-        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project_dir);
     }
 
     fn submit_job_args(job: Option<&str>, file: Option<&str>, yaml: Option<&str>) -> SubmitJob {

@@ -10,7 +10,7 @@ use crate::shared::job::installed_job_id;
 use crate::shared::job_run::select_job_run;
 use crate::shared::schedule_at::refuse_waiting_for_a_future_run;
 use crate::shared::task_run_attempt::own_task_run_attempt_id;
-use crate::shared::wait::{ensure_data_dir_is_served, wait_for_job_run, DataDirNotServed};
+use crate::shared::wait::{ensure_project_dir_is_served, wait_for_job_run, ProjectDirNotServed};
 use crate::yaml_models::job_yaml::JobYaml;
 
 #[derive(Args)]
@@ -29,12 +29,12 @@ pub enum JobSubcommand {
     Submit(JobSubmitCmd),
 }
 
-/// List the jobs declared in the data directory.
+/// List the jobs declared in the project directory.
 #[derive(Args)]
 pub struct JobListCmd {
 }
 
-/// Submit a run of a job: one installed in the data directory, by id, or a definition read
+/// Submit a run of a job: one installed in the project directory, by id, or a definition read
 /// from a file that is never installed there at all.
 #[derive(Args, Debug)]
 #[command(group(
@@ -43,7 +43,7 @@ pub struct JobListCmd {
 pub struct JobSubmitCmd {
     pub job_name: Option<String>,
 
-    /// Submit the job defined by this file rather than one installed in the data
+    /// Submit the job defined by this file rather than one installed in the project
     /// directory. The file is read where it is and never copied there.
     #[arg(short = 'f', long, value_name = "FILE")]
     pub file: Option<PathBuf>,
@@ -117,8 +117,8 @@ impl JobSubmitCmd {
         if self.wait {
             refuse_waiting_for_a_future_run(scheduled_at, Utc::now())?;
 
-            ensure_data_dir_is_served(&toolkit.app_config.data_dir)
-                .map_err(describe_unserved_data_dir)?;
+            ensure_project_dir_is_served(&toolkit.app_config.project_dir)
+                .map_err(describe_unserved_project_dir)?;
         }
 
         let mut declared = Declared::load(&toolkit.app_config)?;
@@ -178,7 +178,7 @@ impl JobSubmitCmd {
     }
 }
 
-/// Adds a job file that is not installed in the data directory, so its run is built the
+/// Adds a job file that is not installed in the project directory, so its run is built the
 /// same way every other run is. The job lives only in this process's `Declared`: `serve`
 /// and the dashboard never see it - only the run it produced, which carries its own
 /// definition and so needs nothing to look back at.
@@ -202,11 +202,11 @@ fn add_job_file(declared: &mut Declared, toolkit: &Toolkit, file: &Path) -> anyh
     }
 }
 
-/// The CLI's own words for `DataDirNotServed`: the caller passed `--wait`, so dropping it is
+/// The CLI's own words for `ProjectDirNotServed`: the caller passed `--wait`, so dropping it is
 /// the remedy. Shared by `job submit` and `job-run stop`, which pass the same flag and so say
 /// the same sentence. Any other error passes through unchanged.
-pub(crate) fn describe_unserved_data_dir(err: anyhow::Error) -> anyhow::Error {
-    match err.downcast::<DataDirNotServed>() {
+pub(crate) fn describe_unserved_project_dir(err: anyhow::Error) -> anyhow::Error {
+    match err.downcast::<ProjectDirNotServed>() {
         Ok(unserved) => anyhow::anyhow!(
             "{}, so --wait would never return. Start flowlite serve against it, or drop \
              --wait.",
@@ -260,14 +260,14 @@ mod tests {
     /// The CLI's wording of that fact, word for word what the check itself used to raise:
     /// a person at a terminal really did pass `--wait`, so dropping it is their remedy.
     #[test]
-    fn the_cli_wording_of_an_unserved_data_dir_names_the_flag_to_drop() {
+    fn the_cli_wording_of_an_unserved_project_dir_names_the_flag_to_drop() {
 
-        let unserved = DataDirNotServed { data_dir: "./d1".to_string() };
-        let error = describe_unserved_data_dir(unserved.into());
+        let unserved = ProjectDirNotServed { project_dir: "./d1".to_string() };
+        let error = describe_unserved_project_dir(unserved.into());
 
         assert_eq!(
             error.to_string(),
-            "Data directory ./d1 is not being served, so --wait would never return. Start \
+            "Project directory ./d1 is not being served, so --wait would never return. Start \
              flowlite serve against it, or drop --wait.",
         );
     }
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn the_cli_wording_leaves_any_other_error_alone() {
 
-        let error = describe_unserved_data_dir(anyhow::anyhow!("Job run 7 not found"));
+        let error = describe_unserved_project_dir(anyhow::anyhow!("Job run 7 not found"));
 
         assert_eq!(error.to_string(), "Job run 7 not found");
     }
@@ -437,12 +437,12 @@ mod tests {
     #[tokio::test]
     async fn a_wait_on_a_run_that_is_both_not_due_and_unserved_reports_not_due() {
 
-        let data_dir = std::env::temp_dir()
+        let project_dir = std::env::temp_dir()
             .join(format!("flowlite-job-unserved-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(data_dir.join("jobs")).unwrap();
+        std::fs::create_dir_all(project_dir.join("jobs")).unwrap();
 
         let toolkit = Toolkit::new(crate::app_config::AppConfig {
-            data_dir: data_dir.to_string_lossy().into_owned(),
+            project_dir: project_dir.to_string_lossy().into_owned(),
             ..crate::app_config::AppConfig::default()
         });
 
@@ -459,6 +459,6 @@ mod tests {
         assert!(error.contains("not due"), "{error}");
         assert!(!error.contains("not being served"), "{error}");
 
-        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project_dir);
     }
 }

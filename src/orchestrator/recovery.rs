@@ -201,7 +201,7 @@ mod tests {
 
         let db = TestDb::new().await;
 
-        let (mut leader, worker) = spawn_orphan(&db.data_dir().join("pid")).await;
+        let (mut leader, worker) = spawn_orphan(&db.project_dir().join("pid")).await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
@@ -270,7 +270,7 @@ mod tests {
 
         let db = TestDb::new().await;
 
-        let (mut leader, worker) = spawn_orphan(&db.data_dir().join("pid")).await;
+        let (mut leader, worker) = spawn_orphan(&db.project_dir().join("pid")).await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;
@@ -310,7 +310,7 @@ mod tests {
 
         let db = TestDb::new().await;
 
-        let (mut leader, worker) = spawn_orphan(&db.data_dir().join("pid")).await;
+        let (mut leader, worker) = spawn_orphan(&db.project_dir().join("pid")).await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run(job_run.id, TaskRunStatus::Running).await;

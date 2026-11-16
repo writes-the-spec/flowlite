@@ -28,7 +28,7 @@ pub struct ServeCmd {
 
 impl ServeCmd {
     pub async fn run(&self, toolkit: Toolkit) -> anyhow::Result<()> {
-        let data_dir = PathBuf::from(&toolkit.app_config.data_dir);
+        let project_dir = PathBuf::from(&toolkit.app_config.project_dir);
 
         // Taken before the pool is opened, so a second serve on this directory stops here
         // rather than racing this one through sqlx::migrate! - and, more importantly, so
@@ -39,7 +39,7 @@ impl ServeCmd {
         // occurrence missing and each submit it, so every occurrence of every schedule would
         // run twice. Bound to a name so it lives as long as the server: `let _` would
         // release it here.
-        let _serve_lock = ServeLock::acquire(&data_dir)?;
+        let _serve_lock = ServeLock::acquire(&project_dir)?;
 
         let toolkit = Arc::new(toolkit);
 
@@ -160,7 +160,7 @@ impl ServeCmd {
 
         // Written after the bind, so that a directory reported as served is one whose
         // port is accepting.
-        write_state(&data_dir, &ServeState {
+        write_state(&project_dir, &ServeState {
             pid: std::process::id(),
             address: bound.ip().to_string(),
             port: bound.port(),
@@ -218,9 +218,9 @@ mod tests {
         dir
     }
 
-    fn toolkit_for(data_dir: &Path) -> Toolkit {
+    fn toolkit_for(project_dir: &Path) -> Toolkit {
         Toolkit::new(AppConfig {
-            data_dir: data_dir.to_string_lossy().into_owned(),
+            project_dir: project_dir.to_string_lossy().into_owned(),
             ..AppConfig::default()
         })
     }
@@ -228,7 +228,7 @@ mod tests {
     /// The lock is taken before the pool is opened, so this fails without ever running a
     /// migration or binding a port - which is what makes it safe to assert on here.
     #[tokio::test]
-    async fn a_second_serve_on_one_data_dir_is_refused_naming_the_directory() {
+    async fn a_second_serve_on_one_project_dir_is_refused_naming_the_directory() {
         let dir = temp_dir();
 
         let _held = ServeLock::acquire(&dir).unwrap();

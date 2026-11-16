@@ -12,7 +12,7 @@ use crate::run_dir::remove_job_run_dir;
 
 
 /// Deletes finished job runs old enough that nothing needs them anymore, so a long-lived
-/// data directory cannot fill the disk.
+/// project directory cannot fill the disk.
 ///
 /// Not part of the orchestrator — that module turns job runs into finished task runs, and
 /// this does the opposite of turning anything into anything — and started the way the
@@ -160,7 +160,7 @@ impl Service for RetentionService {
         // exists and fail on it for ever. A directory left behind is a directory; a poller
         // that cannot get past one row is every run of every job stopping.
         for job_run_id in deleted {
-            if let Err(error) = remove_job_run_dir(&self.app_config.data_dir, job_run_id) {
+            if let Err(error) = remove_job_run_dir(&self.app_config.project_dir, job_run_id) {
                 eprintln!(
                     "Job run {} was deleted but its directory could not be removed: {:#}",
                     job_run_id, error,
@@ -433,7 +433,7 @@ mod tests {
 
         let job_run = insert_finished_run_for(&db, "job", JobRunStatus::Succeeded).await;
 
-        let dir = crate::run_dir::create_job_run_dir(&db.app_config().data_dir, job_run.id).unwrap();
+        let dir = crate::run_dir::create_job_run_dir(&db.app_config().project_dir, job_run.id).unwrap();
         std::fs::write(dir.join("work.txt"), "something").unwrap();
 
         service_for(&db).handle(&job_run.id).await.unwrap();
@@ -453,7 +453,7 @@ mod tests {
         let attempt = db.insert_task_run_attempt(&task_run, 1, crate::crud::task_run_attempt::TaskRunAttemptStatus::Succeeded).await;
         let child = db.insert_child_job_run(&attempt, JobRunStatus::Running).await;
 
-        let child_dir = crate::run_dir::job_run_dir(&db.app_config().data_dir, child.id).unwrap();
+        let child_dir = crate::run_dir::job_run_dir(&db.app_config().project_dir, child.id).unwrap();
 
         service_for(&db).handle(&parent.id).await.unwrap();
 
@@ -487,9 +487,9 @@ mod tests {
         let job_run = insert_finished_run_for(&db, "job", JobRunStatus::Succeeded).await;
         let neighbour = insert_finished_run_for(&db, "job", JobRunStatus::Succeeded).await;
 
-        crate::run_dir::create_job_run_dir(&db.app_config().data_dir, job_run.id).unwrap();
+        crate::run_dir::create_job_run_dir(&db.app_config().project_dir, job_run.id).unwrap();
 
-        let neighbour_dir = crate::run_dir::create_job_run_dir(&db.app_config().data_dir, neighbour.id).unwrap();
+        let neighbour_dir = crate::run_dir::create_job_run_dir(&db.app_config().project_dir, neighbour.id).unwrap();
 
         service_for(&db).handle(&job_run.id).await.unwrap();
 

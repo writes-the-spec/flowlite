@@ -24,7 +24,7 @@ pub struct Toolkit {
 ///
 /// `serve` and `mcp` are long-lived processes where two connections can open at once - two
 /// concurrent MCP tool calls each open their own. In-process only: two flowlite processes
-/// opening one fresh data directory can still collide, since only `serve` holds the
+/// opening one fresh project directory can still collide, since only `serve` holds the
 /// cross-process `ServeLock`.
 static OPEN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -32,14 +32,14 @@ static OPEN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// fails with `SQLITE_BUSY`. `serve`, CLI commands and the MCP server all write the same file.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The database, inside the data directory's state directory rather than beside the YAML:
-/// the top of the data directory is the user's own files, and everything flowlite writes -
+/// The database, inside the project directory's state directory rather than beside the YAML:
+/// the top of the project directory is the user's own files, and everything flowlite writes -
 /// this, its `-wal` and `-shm`, the serve lock and the run directories - sits under one
 /// `.flowlite/` that a single `.gitignore` line covers.
 const DB_FILE: &str = "flowlite.db";
 
-fn db_path(data_dir: &Path) -> PathBuf {
-    state_dir(data_dir).join(DB_FILE)
+fn db_path(project_dir: &Path) -> PathBuf {
+    state_dir(project_dir).join(DB_FILE)
 }
 
 
@@ -80,11 +80,11 @@ impl Toolkit {
     /// of each write. `synchronous=NORMAL` is the setting WAL is designed for: a crash of
     /// flowlite loses nothing, a power cut can lose the last commits but never corrupts.
     fn disk_connect_options(&self) -> anyhow::Result<SqliteConnectOptions> {
-        let data_dir = Path::new(&self.app_config.data_dir);
-        std::fs::create_dir_all(state_dir(data_dir))?;
+        let project_dir = Path::new(&self.app_config.project_dir);
+        std::fs::create_dir_all(state_dir(project_dir))?;
 
         let connect_options = SqliteConnectOptions::new()
-            .filename(db_path(data_dir))
+            .filename(db_path(project_dir))
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
@@ -125,10 +125,10 @@ mod tests {
     /// `disk_connect_options`, read back from SQLite rather than trusted from the builder.
     #[tokio::test]
     async fn disk_connections_use_wal_normal_sync_and_a_busy_timeout() {
-        let data_dir = std::env::temp_dir().join(format!("flowlite-toolkit-test-{}", Uuid::new_v4()));
+        let project_dir = std::env::temp_dir().join(format!("flowlite-toolkit-test-{}", Uuid::new_v4()));
 
         let toolkit = Toolkit::new(AppConfig {
-            data_dir: data_dir.to_string_lossy().into_owned(),
+            project_dir: project_dir.to_string_lossy().into_owned(),
             ..AppConfig::default()
         });
 
@@ -156,28 +156,28 @@ mod tests {
             assert_eq!(busy_timeout_ms, 5000);
         }
 
-        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project_dir);
     }
 
-    /// The database lands in `.flowlite/`, created along with a data directory that does not
-    /// exist yet, and nothing is written at the data directory's top level.
+    /// The database lands in `.flowlite/`, created along with a project directory that does not
+    /// exist yet, and nothing is written at the project directory's top level.
     #[tokio::test]
     async fn the_database_is_created_inside_the_state_directory() {
-        let data_dir = std::env::temp_dir().join(format!("flowlite-toolkit-test-{}", Uuid::new_v4()));
+        let project_dir = std::env::temp_dir().join(format!("flowlite-toolkit-test-{}", Uuid::new_v4()));
 
         let toolkit = Toolkit::new(AppConfig {
-            data_dir: data_dir.to_string_lossy().into_owned(),
+            project_dir: project_dir.to_string_lossy().into_owned(),
             ..AppConfig::default()
         });
 
         let _conn = toolkit.get_conn().await.unwrap();
 
-        assert!(data_dir.join(".flowlite").join("flowlite.db").exists());
-        let top_level: Vec<_> = std::fs::read_dir(&data_dir).unwrap()
+        assert!(project_dir.join(".flowlite").join("flowlite.db").exists());
+        let top_level: Vec<_> = std::fs::read_dir(&project_dir).unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(top_level, [".flowlite"]);
 
-        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project_dir);
     }
 }

@@ -16,7 +16,7 @@ pub struct JobRunDisplay {
     pub id: i64,
     pub job_id: String,
     pub job_name: String,
-    /// Whether the job is still declared in the data directory. A run outlives its job -
+    /// Whether the job is still declared in the project directory. A run outlives its job -
     /// one submitted from a file never had one - and only a job that exists can be linked.
     pub job_exists: bool,
     pub status: JobRunStatus,

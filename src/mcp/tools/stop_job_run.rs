@@ -14,10 +14,10 @@ use crate::crud::CRUD;
 use crate::mcp::wait::{clamp_wait_seconds, wait_for_settled_job_run};
 use crate::mcp::McpServer;
 use crate::shared::job_run::stop_job_run as request_job_run_stop;
-use crate::shared::wait::ensure_data_dir_is_served;
+use crate::shared::wait::ensure_project_dir_is_served;
 use crate::toolkit::Toolkit;
 
-use super::result::{describe_unserved_data_dir, error_result, job_run_result, unserved_directory_warning};
+use super::result::{describe_unserved_project_dir, error_result, job_run_result, unserved_directory_warning};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -68,8 +68,8 @@ async fn stop_job_run_and_wait(
     let wait_seconds = clamp_wait_seconds(args.wait_seconds);
 
     if wait_seconds > 0 {
-        ensure_data_dir_is_served(&toolkit.app_config.data_dir)
-            .map_err(describe_unserved_data_dir)?;
+        ensure_project_dir_is_served(&toolkit.app_config.project_dir)
+            .map_err(describe_unserved_project_dir)?;
     }
 
     let mut conn = toolkit.get_conn().await?;
@@ -83,7 +83,7 @@ async fn stop_job_run_and_wait(
     // After the stop row is written, for the reason `submit_job_run` reads it after its own
     // write: by this point the stop is queued, and a `status` read failure here is a fact
     // about the warning, not about the stop.
-    let warning = unserved_directory_warning(&crud.toolkit.app_config.data_dir);
+    let warning = unserved_directory_warning(&crud.toolkit.app_config.project_dir);
 
     Ok((job_run, warning))
 }

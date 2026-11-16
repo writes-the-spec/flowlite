@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 
-/// Everything a running server says about itself lives inside the data directory it is
-/// serving. Nothing central: a data directory carries its own answer to "is this being
+/// Everything a running server says about itself lives inside the project directory it is
+/// serving. Nothing central: a project directory carries its own answer to "is this being
 /// served", so a directory that is moved or copied stays self-describing and no record
 /// anywhere else can disagree with it.
 pub(crate) const STATE_DIR: &str = ".flowlite";
@@ -27,7 +27,7 @@ pub struct ServeState {
 }
 
 
-/// What the lock and the state file together say about a data directory.
+/// What the lock and the state file together say about a project directory.
 #[derive(Debug)]
 pub enum ServeStatus {
     Down,
@@ -38,20 +38,20 @@ pub enum ServeStatus {
 }
 
 
-pub(crate) fn state_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join(STATE_DIR)
+pub(crate) fn state_dir(project_dir: &Path) -> PathBuf {
+    project_dir.join(STATE_DIR)
 }
 
-fn lock_path(data_dir: &Path) -> PathBuf {
-    state_dir(data_dir).join("serve.lock")
+fn lock_path(project_dir: &Path) -> PathBuf {
+    state_dir(project_dir).join("serve.lock")
 }
 
-pub fn state_path(data_dir: &Path) -> PathBuf {
-    state_dir(data_dir).join("serve.json")
+pub fn state_path(project_dir: &Path) -> PathBuf {
+    state_dir(project_dir).join("serve.json")
 }
 
 
-/// One server's claim on one data directory, held for as long as it serves.
+/// One server's claim on one project directory, held for as long as it serves.
 ///
 /// The lock lives in the descriptor, so dropping this releases it - which means the value
 /// has to outlive the server rather than the function that took it. Bind it to a name:
@@ -66,14 +66,14 @@ pub struct ServeLock {
 impl ServeLock {
 
     /// Takes the directory's lock, or reports who has it.
-    pub fn acquire(data_dir: &Path) -> Result<ServeLock> {
+    pub fn acquire(project_dir: &Path) -> Result<ServeLock> {
 
-        std::fs::create_dir_all(state_dir(data_dir)).with_context(|| format!(
-            "Failed to create {} to lock the data directory",
-            state_dir(data_dir).display(),
+        std::fs::create_dir_all(state_dir(project_dir)).with_context(|| format!(
+            "Failed to create {} to lock the project directory",
+            state_dir(project_dir).display(),
         ))?;
 
-        let path = lock_path(data_dir);
+        let path = lock_path(project_dir);
 
         let file = OpenOptions::new()
             .read(true)
@@ -92,40 +92,40 @@ impl ServeLock {
             // so nothing reads the file as truth anyway. Removing it here just closes
             // the window where a new server would otherwise be reachable as `Up` while
             // still describing the old one.
-            let _ = std::fs::remove_file(state_path(data_dir));
+            let _ = std::fs::remove_file(state_path(project_dir));
             return Ok(ServeLock { _file: file });
         }
 
         // The holder writes its details after taking the lock, so a server still starting
         // up has none to name yet.
-        match read_state(data_dir)? {
+        match read_state(project_dir)? {
             Some(state) => anyhow::bail!(
                 "another flowlite serve is already running on {} (pid {}, http://{}:{})",
-                data_dir.display(), state.pid, state.address, state.port,
+                project_dir.display(), state.pid, state.address, state.port,
             ),
             None => anyhow::bail!(
                 "another flowlite serve is already starting up on {}",
-                data_dir.display(),
+                project_dir.display(),
             ),
         }
     }
 }
 
 
-/// Whether a server holds this data directory, asked by trying to take its lock and
+/// Whether a server holds this project directory, asked by trying to take its lock and
 /// giving it straight back.
 ///
 /// The lock answers, never the state file: a process killed with SIGKILL leaves its state
 /// file behind but cannot keep an flock, so believing the file would report a server that
 /// is not there. The file is read only once the lock has proved somebody holds it.
-pub fn status(data_dir: &Path) -> Result<ServeStatus> {
+pub fn status(project_dir: &Path) -> Result<ServeStatus> {
 
-    let path = lock_path(data_dir);
+    let path = lock_path(project_dir);
 
     // Deliberately not creating it: asking whether a directory is being served must not
     // write anything into it. Read-only too: flock(LOCK_EX) succeeds on a read-only
     // descriptor, and requiring write access would fail this for a supervisor that only
-    // has read access to the data directory, or a read-only mount.
+    // has read access to the project directory, or a read-only mount.
     let file = match OpenOptions::new().read(true).open(&path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ServeStatus::Down),
@@ -140,7 +140,7 @@ pub fn status(data_dir: &Path) -> Result<ServeStatus> {
         return Ok(ServeStatus::Down);
     }
 
-    match read_state(data_dir)? {
+    match read_state(project_dir)? {
         Some(state) => Ok(ServeStatus::Up(state)),
         None => Ok(ServeStatus::Starting),
     }
@@ -170,9 +170,9 @@ fn take_lock(file: &File, path: &Path) -> Result<bool> {
 }
 
 
-pub fn write_state(data_dir: &Path, state: &ServeState) -> Result<()> {
+pub fn write_state(project_dir: &Path, state: &ServeState) -> Result<()> {
 
-    std::fs::create_dir_all(state_dir(data_dir))?;
+    std::fs::create_dir_all(state_dir(project_dir))?;
 
     let written = serde_json::to_vec_pretty(state)
         .context("Failed to serialize the serve state")?;
@@ -180,7 +180,7 @@ pub fn write_state(data_dir: &Path, state: &ServeState) -> Result<()> {
     // Written beside the target and renamed over it rather than truncated in place, so a
     // concurrent `status` never catches a half-written file and reports `Starting` for a
     // server that is actually up.
-    let final_path = state_path(data_dir);
+    let final_path = state_path(project_dir);
     let tmp_path = final_path.with_extension("json.tmp");
 
     std::fs::write(&tmp_path, written).with_context(|| format!(
@@ -203,9 +203,9 @@ pub fn write_state(data_dir: &Path, state: &ServeState) -> Result<()> {
 /// killed with SIGKILL leaves one behind and cannot hold the lock - so every reader goes
 /// through `status`, which asks the lock first and reads this only once the lock has
 /// proved somebody holds it.
-fn read_state(data_dir: &Path) -> Result<Option<ServeState>> {
+fn read_state(project_dir: &Path) -> Result<Option<ServeState>> {
 
-    let path = state_path(data_dir);
+    let path = state_path(project_dir);
 
     let raw = match std::fs::read(&path) {
         Ok(raw) => raw,

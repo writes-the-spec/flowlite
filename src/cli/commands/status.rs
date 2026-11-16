@@ -17,13 +17,13 @@ pub struct StatusCmd {
 impl StatusCmd {
 
     /// Reads the lock and the state file rather than the database, so it answers for a
-    /// data directory whose server is down as readily as one whose server is up - which
+    /// project directory whose server is down as readily as one whose server is up - which
     /// is the whole reason it exists rather than a page in the UI.
     pub async fn run(&self, toolkit: Toolkit) -> anyhow::Result<()> {
 
-        let data_dir = Path::new(&toolkit.app_config.data_dir);
+        let project_dir = Path::new(&toolkit.app_config.project_dir);
 
-        let state = status(data_dir)?;
+        let state = status(project_dir)?;
 
         if self.json {
             println!("{}", status_json(&state));

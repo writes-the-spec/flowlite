@@ -29,14 +29,14 @@ use crate::mcp::McpServer;
 mod get_job_run;
 mod get_job_run_logs;
 mod get_serve_status;
-mod init_data_dir;
+mod init_project_dir;
 mod list_job_runs;
 mod list_jobs;
 mod list_limits;
 mod result;
 mod stop_job_run;
 mod submit_job;
-mod validate_data_dir;
+mod validate_project_dir;
 
 impl McpServer {
 
@@ -54,9 +54,9 @@ impl McpServer {
             + Self::get_job_run_router()
             + Self::get_job_run_logs_router()
             + Self::stop_job_run_router()
-            + Self::init_data_dir_router()
+            + Self::init_project_dir_router()
             + Self::get_serve_status_router()
             + Self::list_limits_router()
-            + Self::validate_data_dir_router()
+            + Self::validate_project_dir_router()
     }
 }

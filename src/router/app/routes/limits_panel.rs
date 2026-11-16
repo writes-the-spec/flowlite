@@ -51,7 +51,7 @@ pub async fn limits_panel_route(
 
     let app_config = &state.toolkit.app_config;
 
-    // A data directory whose database briefly can't be reached shouldn't blank the panel -
+    // A project directory whose database briefly can't be reached shouldn't blank the panel -
     // it reads as nothing running, the same defensiveness the home page's own queries use.
     let (running_attempts, claimed_limit_slots) = match state.conn_pool.acquire().await {
         Ok(mut conn) => (

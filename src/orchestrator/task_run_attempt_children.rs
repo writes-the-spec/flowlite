@@ -247,7 +247,7 @@ mod tests {
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
-        let pid_file = db.data_dir().join("shutdown.pid");
+        let pid_file = db.project_dir().join("shutdown.pid");
 
         let task_run = db.insert_task_run_for_command(
             job_run.id,
@@ -284,8 +284,8 @@ mod tests {
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run(job_run.id, crate::crud::task_run::TaskRunStatus::Running).await;
         let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
-        let cleaned = db.data_dir().join("cleaned");
-        let ready = db.data_dir().join("ready");
+        let cleaned = db.project_dir().join("cleaned");
+        let ready = db.project_dir().join("ready");
 
         db.spawn_running_child(
             &task_run_attempt,
@@ -311,7 +311,7 @@ mod tests {
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
         let task_run = db.insert_task_run(job_run.id, crate::crud::task_run::TaskRunStatus::Running).await;
         let task_run_attempt = db.insert_task_run_attempt(&task_run, 1, TaskRunAttemptStatus::Running).await;
-        let pid_file = db.data_dir().join("stubborn.pid");
+        let pid_file = db.project_dir().join("stubborn.pid");
 
         db.spawn_running_child(
             &task_run_attempt,

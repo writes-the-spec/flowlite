@@ -4,8 +4,8 @@ use anyhow::Context;
 use crate::serve_state::STATE_DIR;
 
 
-/// Where every run's directory lives, under the data directory's own state directory
-/// rather than at its top level: the data directory is walked for YAML, so a name
+/// Where every run's directory lives, under the project directory's own state directory
+/// rather than at its top level: the project directory is walked for YAML, so a name
 /// reserved there would be a name a user cannot give a file.
 const RUNS_DIR: &str = "runs";
 
@@ -19,17 +19,17 @@ const OUTPUT_DIR: &str = ".output";
 /// The directory one job run works in. Created when the run starts, used as the working
 /// directory of every task that declares none, deleted with the run by retention.
 ///
-/// Built from the **canonicalised** data directory. `data_dir` defaults to `.` and may be
+/// Built from the **canonicalised** project directory. `project_dir` defaults to `.` and may be
 /// relative, and a relative working directory would be resolved against the server's own
 /// cwd - the one thing this directory exists to stop mattering. Canonicalising needs the
-/// data directory to exist, which it does wherever this is called: nothing reaches a job
+/// project directory to exist, which it does wherever this is called: nothing reaches a job
 /// run without one.
-pub fn job_run_dir(data_dir: &str, job_run_id: i64) -> anyhow::Result<PathBuf> {
+pub fn job_run_dir(project_dir: &str, job_run_id: i64) -> anyhow::Result<PathBuf> {
 
-    let canonical_data_dir = std::fs::canonicalize(data_dir)
-        .with_context(|| format!("Failed to resolve the data directory '{}'", data_dir))?;
+    let canonical_project_dir = std::fs::canonicalize(project_dir)
+        .with_context(|| format!("Failed to resolve the project directory '{}'", project_dir))?;
 
-    Ok(canonical_data_dir
+    Ok(canonical_project_dir
         .join(STATE_DIR)
         .join(RUNS_DIR)
         .join(job_run_id.to_string()))
@@ -58,9 +58,9 @@ pub fn task_log_path(job_run_dir: &Path, task_id: &str, attempt: u32) -> PathBuf
 /// Both at once, and `create_dir_all` rather than `create_dir`, so a restart that finds the
 /// directory already there is not an error: the dispatcher may have created it and crashed
 /// before writing the status it was about to write.
-pub fn create_job_run_dir(data_dir: &str, job_run_id: i64) -> anyhow::Result<PathBuf> {
+pub fn create_job_run_dir(project_dir: &str, job_run_id: i64) -> anyhow::Result<PathBuf> {
 
-    let dir = job_run_dir(data_dir, job_run_id)?;
+    let dir = job_run_dir(project_dir, job_run_id)?;
 
     std::fs::create_dir_all(dir.join(OUTPUT_DIR))
         .with_context(|| format!("Failed to create the run directory {}", dir.display()))?;
@@ -72,9 +72,9 @@ pub fn create_job_run_dir(data_dir: &str, job_run_id: i64) -> anyhow::Result<Pat
 ///
 /// Called after the rows are gone, so it can only ever be told about a failure - see
 /// `RetentionService::handle`.
-pub fn remove_job_run_dir(data_dir: &str, job_run_id: i64) -> anyhow::Result<bool> {
+pub fn remove_job_run_dir(project_dir: &str, job_run_id: i64) -> anyhow::Result<bool> {
 
-    let dir = job_run_dir(data_dir, job_run_id)?;
+    let dir = job_run_dir(project_dir, job_run_id)?;
 
     if !dir.exists() {
         return Ok(false);
@@ -91,27 +91,27 @@ pub fn remove_job_run_dir(data_dir: &str, job_run_id: i64) -> anyhow::Result<boo
 mod tests {
     use super::*;
 
-    fn temp_data_dir() -> PathBuf {
+    fn temp_project_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("flowlite-run-dir-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::canonicalize(&dir).unwrap()
     }
 
     #[test]
-    fn a_runs_directory_sits_under_the_data_directorys_state_directory() {
-        let data_dir = temp_data_dir();
+    fn a_runs_directory_sits_under_the_project_directorys_state_directory() {
+        let project_dir = temp_project_dir();
 
-        let dir = job_run_dir(&data_dir.to_string_lossy(), 42).unwrap();
+        let dir = job_run_dir(&project_dir.to_string_lossy(), 42).unwrap();
 
-        assert_eq!(dir, data_dir.join(".flowlite").join("runs").join("42"));
+        assert_eq!(dir, project_dir.join(".flowlite").join("runs").join("42"));
     }
 
-    /// `data_dir` may be relative - `.` is its default - and a relative working directory
-    /// would be resolved against the server's own cwd rather than against the data
+    /// `project_dir` may be relative - `.` is its default - and a relative working directory
+    /// would be resolved against the server's own cwd rather than against the project
     /// directory. The relative path here is made against the cwd rather than by changing
     /// it: the cwd is process-wide, and every other test in this run shares it.
     #[test]
-    fn the_path_is_absolute_even_when_the_data_directory_is_relative() {
+    fn the_path_is_absolute_even_when_the_project_directory_is_relative() {
         let name = format!("flowlite-run-dir-relative-{}", uuid::Uuid::new_v4());
         std::fs::create_dir_all(&name).unwrap();
 
@@ -127,9 +127,9 @@ mod tests {
 
     #[test]
     fn creating_a_run_directory_creates_the_output_directory_inside_it() {
-        let data_dir = temp_data_dir();
+        let project_dir = temp_project_dir();
 
-        let dir = create_job_run_dir(&data_dir.to_string_lossy(), 7).unwrap();
+        let dir = create_job_run_dir(&project_dir.to_string_lossy(), 7).unwrap();
 
         assert!(dir.is_dir());
         assert!(dir.join(".output").is_dir());
@@ -140,10 +140,10 @@ mod tests {
     /// there.
     #[test]
     fn creating_a_run_directory_twice_is_not_an_error() {
-        let data_dir = temp_data_dir();
+        let project_dir = temp_project_dir();
 
-        create_job_run_dir(&data_dir.to_string_lossy(), 7).unwrap();
-        create_job_run_dir(&data_dir.to_string_lossy(), 7).unwrap();
+        create_job_run_dir(&project_dir.to_string_lossy(), 7).unwrap();
+        create_job_run_dir(&project_dir.to_string_lossy(), 7).unwrap();
     }
 
     #[test]
@@ -158,13 +158,13 @@ mod tests {
 
     #[test]
     fn removing_a_run_directory_removes_what_is_in_it_and_leaves_its_neighbour() {
-        let data_dir = temp_data_dir();
+        let project_dir = temp_project_dir();
 
-        let dir = create_job_run_dir(&data_dir.to_string_lossy(), 7).unwrap();
-        let neighbour = create_job_run_dir(&data_dir.to_string_lossy(), 8).unwrap();
+        let dir = create_job_run_dir(&project_dir.to_string_lossy(), 7).unwrap();
+        let neighbour = create_job_run_dir(&project_dir.to_string_lossy(), 8).unwrap();
         std::fs::write(dir.join("work.txt"), "something").unwrap();
 
-        assert!(remove_job_run_dir(&data_dir.to_string_lossy(), 7).unwrap());
+        assert!(remove_job_run_dir(&project_dir.to_string_lossy(), 7).unwrap());
 
         assert!(!dir.exists());
         assert!(neighbour.is_dir());
@@ -172,8 +172,8 @@ mod tests {
 
     #[test]
     fn removing_a_run_directory_that_was_never_created_says_so_rather_than_failing() {
-        let data_dir = temp_data_dir();
+        let project_dir = temp_project_dir();
 
-        assert!(!remove_job_run_dir(&data_dir.to_string_lossy(), 7).unwrap());
+        assert!(!remove_job_run_dir(&project_dir.to_string_lossy(), 7).unwrap());
     }
 }

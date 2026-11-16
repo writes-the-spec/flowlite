@@ -124,7 +124,7 @@ impl JobRunDispatcher {
         // Running with nowhere for its tasks to work. Created here rather than at submit
         // so a run that is Scheduled for next March, or skipped before it is released,
         // costs nothing on disk.
-        create_job_run_dir(&self.app_config.data_dir, job_run.id)?;
+        create_job_run_dir(&self.app_config.project_dir, job_run.id)?;
 
         self.crud.update_task_runs(
             &*self.conn_pool,

@@ -1,5 +1,5 @@
 //! The dashboard behind an identity provider's login: what a request without a session
-//! gets, how a login and a logout land, and that a data directory with no `[auth]` serves
+//! gets, how a login and a logout land, and that a project directory with no `[auth]` serves
 //! the dashboard exactly as before.
 //!
 //! Driven through the built binary, like `serve_lock`, because what is under test is the
@@ -16,7 +16,7 @@ mod common;
 use common::fake_idp::{Answer, FakeIdp, CLIENT_ID, CLIENT_SECRET, PASSWORD, USERNAME};
 use common::{is_up, serve, until, ServerGuard};
 
-fn data_dir(label: &str) -> PathBuf {
+fn project_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir()
         .join(format!("flowlite-auth-{label}-{}", uuid::Uuid::new_v4()));
 
@@ -83,7 +83,7 @@ async fn log_in(port: u16, password: &str, next: &str) -> reqwest::Response {
 #[tokio::test]
 async fn a_page_without_a_session_is_sent_to_login_and_back() {
     let fake = FakeIdp::start();
-    let dir = data_dir("no-session");
+    let dir = project_dir("no-session");
     with_auth(&dir, &fake);
     let _server = started(&dir, 18301);
 
@@ -97,7 +97,7 @@ async fn a_page_without_a_session_is_sent_to_login_and_back() {
 #[tokio::test]
 async fn assets_are_served_without_a_session() {
     let fake = FakeIdp::start();
-    let dir = data_dir("assets");
+    let dir = project_dir("assets");
     with_auth(&dir, &fake);
     let _server = started(&dir, 18302);
 
@@ -109,7 +109,7 @@ async fn assets_are_served_without_a_session() {
 #[tokio::test]
 async fn a_wrong_password_is_refused_without_a_session() {
     let fake = FakeIdp::start();
-    let dir = data_dir("wrong-password");
+    let dir = project_dir("wrong-password");
     with_auth(&dir, &fake);
     let _server = started(&dir, 18303);
 
@@ -123,7 +123,7 @@ async fn a_wrong_password_is_refused_without_a_session() {
 #[tokio::test]
 async fn the_right_password_signs_in_and_returns_to_next() {
     let fake = FakeIdp::start();
-    let dir = data_dir("signs-in");
+    let dir = project_dir("signs-in");
     with_auth(&dir, &fake);
     let _server = started(&dir, 18304);
 
@@ -149,7 +149,7 @@ async fn the_right_password_signs_in_and_returns_to_next() {
 #[tokio::test]
 async fn a_login_never_sends_anyone_off_this_server() {
     let fake = FakeIdp::start();
-    let dir = data_dir("open-redirect");
+    let dir = project_dir("open-redirect");
     with_auth(&dir, &fake);
     let _server = started(&dir, 18305);
 
@@ -161,7 +161,7 @@ async fn a_login_never_sends_anyone_off_this_server() {
 #[tokio::test]
 async fn a_signed_out_htmx_partial_moves_the_whole_page_to_login() {
     let fake = FakeIdp::start();
-    let dir = data_dir("htmx");
+    let dir = project_dir("htmx");
     with_auth(&dir, &fake);
     let _server = started(&dir, 18306);
 
@@ -182,7 +182,7 @@ async fn a_signed_out_htmx_partial_moves_the_whole_page_to_login() {
 #[tokio::test]
 async fn a_cross_site_login_is_refused() {
     let fake = FakeIdp::start();
-    let dir = data_dir("cross-site");
+    let dir = project_dir("cross-site");
     with_auth(&dir, &fake);
     let _server = started(&dir, 18307);
 
@@ -200,7 +200,7 @@ async fn a_cross_site_login_is_refused() {
 #[tokio::test]
 async fn logging_out_ends_the_session() {
     let fake = FakeIdp::start();
-    let dir = data_dir("logout");
+    let dir = project_dir("logout");
     with_auth(&dir, &fake);
     let _server = started(&dir, 18308);
 
@@ -231,7 +231,7 @@ async fn logging_out_ends_the_session() {
 #[tokio::test]
 async fn a_login_while_the_provider_is_down_says_so() {
     let fake = FakeIdp::start();
-    let dir = data_dir("provider-down");
+    let dir = project_dir("provider-down");
     with_auth(&dir, &fake);
     let _server = started(&dir, 18309);
 
@@ -245,7 +245,7 @@ async fn a_login_while_the_provider_is_down_says_so() {
 
 #[tokio::test]
 async fn without_an_auth_section_the_dashboard_has_no_login() {
-    let dir = data_dir("no-auth");
+    let dir = project_dir("no-auth");
     let _server = started(&dir, 18310);
 
     let home = client().get("http://127.0.0.1:18310/").send().await.unwrap();

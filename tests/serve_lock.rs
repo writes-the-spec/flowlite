@@ -1,4 +1,4 @@
-//! One server per data directory: what a second `serve` is told, and what a killed one
+//! One server per project directory: what a second `serve` is told, and what a killed one
 //! leaves behind.
 //!
 //! Driven through the built binary via `CARGO_BIN_EXE_flowlite`, which cargo sets for
@@ -20,9 +20,9 @@ use flowlite::serve_state::{state_path, status, ServeStatus};
 mod common;
 use common::{is_up, serve, until, ServerGuard, BINARY};
 
-/// A data directory with one job in it, so it is a real service rather than an empty
+/// A project directory with one job in it, so it is a real service rather than an empty
 /// directory.
-fn data_dir(label: &str) -> PathBuf {
+fn project_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir()
         .join(format!("flowlite-lock-{label}-{}", uuid::Uuid::new_v4()));
 
@@ -45,7 +45,7 @@ fn is_down(dir: &Path) -> bool {
 /// this, naming a pid that is by now either free or somebody else's.
 #[test]
 fn a_sigkilled_server_reads_as_down_even_though_its_state_file_remains() {
-    let dir = data_dir("sigkill");
+    let dir = project_dir("sigkill");
 
     let mut child = ServerGuard::new(serve(&dir, 18201), libc::SIGKILL);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
@@ -71,14 +71,14 @@ fn a_sigkilled_server_reads_as_down_even_though_its_state_file_remains() {
 /// The bug this closes: two servers on one directory run two schedulers over one set of
 /// schedules and fire every cron twice.
 #[test]
-fn a_second_serve_on_one_data_dir_refuses_to_start() {
-    let dir = data_dir("second");
+fn a_second_serve_on_one_project_dir_refuses_to_start() {
+    let dir = project_dir("second");
 
     let mut child = ServerGuard::new(serve(&dir, 18202), libc::SIGTERM);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
 
     let second = Command::new(BINARY)
-        .args(["--data-dir", &dir.to_string_lossy(), "serve", "--port", "18203"])
+        .args(["--project-dir", &dir.to_string_lossy(), "serve", "--port", "18203"])
         .output()
         .unwrap();
 
@@ -94,7 +94,7 @@ fn a_second_serve_on_one_data_dir_refuses_to_start() {
 /// the next start needs no repair step.
 #[test]
 fn a_stopped_server_leaves_the_directory_startable_again() {
-    let dir = data_dir("restart");
+    let dir = project_dir("restart");
 
     let mut first = ServerGuard::new(serve(&dir, 18204), libc::SIGTERM);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");

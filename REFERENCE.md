@@ -2,7 +2,7 @@
 
 Everything flowlite does, section by section. The [README](README.md) is the short version.
 
-- [The data directory](#the-data-directory)
+- [The project directory](#the-project-directory)
 - [Jobs](#jobs) · [Schedules](#schedules) · [Command inputs](#command-inputs) ·
   [Timeouts and retries](#timeouts-and-retries)
 - [Task output](#task-output) · [Task results](#task-results) ·
@@ -11,21 +11,21 @@ Everything flowlite does, section by section. The [README](README.md) is the sho
   [Concurrency limits](#concurrency-limits)
 - [Runs from the command line](#runs-from-the-command-line) · [Reruns](#reruns) ·
   [Retention](#retention) · [When flowlite loses track of a run](#when-flowlite-loses-track-of-a-run)
-- [One server per data directory](#one-server-per-data-directory) · [UI](#ui) ·
+- [One server per project directory](#one-server-per-project-directory) · [UI](#ui) ·
   [Driving flowlite from an agent](#driving-flowlite-from-an-agent)
 - [Configuration](#configuration) · [Upgrading](#upgrading)
 
-## The data directory
+## The project directory
 
-flowlite reads `jobs/`, `schedules/` and an optional `flowlite.toml` from its data directory,
+flowlite reads `jobs/`, `schedules/` and an optional `flowlite.toml` from its project directory,
 and writes everything of its own under `.flowlite/` there: the run history in
-`.flowlite/flowlite.db`, each run's directory, and the serve lock. That directory is the current one unless `-D` /
-`--data-dir` / `FLOWLITE_DATA_DIR` says otherwise — which `init` follows like every other
+`.flowlite/flowlite.db`, each run's directory, and the serve lock. That directory is the current one unless `-p` /
+`--project-dir` / `FLOWLITE_PROJECT_DIR` says otherwise — which `init` follows like every other
 command, so the directory need not exist yet:
 
 ```bash
-flowlite --data-dir /var/lib/flowlite init
-flowlite --data-dir /var/lib/flowlite serve
+flowlite --project-dir /var/lib/flowlite init
+flowlite --project-dir /var/lib/flowlite serve
 ```
 
 `init` writes `jobs/hello.yaml` (`.yml` works too), `schedules/daily-hello.yaml` and a
@@ -262,7 +262,7 @@ The value is a fixed string: there is no `${...}` interpolation in it, for the r
 | `FLOWLITE_TASK_RUN_ID` | This task's run. |
 | `FLOWLITE_TASK_RUN_ATTEMPT_ID` | This attempt. |
 | `FLOWLITE_ATTEMPT` | Which attempt this is, starting at 1. |
-| `FLOWLITE_DATA_DIR` | The data directory this server is serving — injected, not inherited, so a command that calls `flowlite` itself works on the same directory. |
+| `FLOWLITE_PROJECT_DIR` | The project directory this server is serving — injected, not inherited, so a command that calls `flowlite` itself works on the same directory. |
 | `FLOWLITE_SCHEDULED_AT` | The instant a schedule fired for, as RFC3339. Set only for a scheduled run — a manual `job submit` gets no such variable at all, not an empty one. |
 | `FLOWLITE_TASK_OUTPUT` | The path to write this task's result to. See [Task results](#task-results). |
 | `FLOWLITE_INPUT_<TASK_ID>` | The path to the result of a task this one depends on, one variable per dependency that produced one. |
@@ -562,7 +562,7 @@ panel spells it out as `unlimited`. A `0` limit is therefore never `FULL`. `flow
 special-case a dash.
 
 It reads `flowlite.toml` for the maxima and the on-disk database for the counts directly, so
-it answers for a data directory whose server is down as readily as one whose server is up —
+it answers for a project directory whose server is down as readily as one whose server is up —
 the same guarantee `status` makes by reading the lock file instead of asking the process.
 
 **A task waiting on a run it submitted keeps its slot.** An attempt asleep inside `job
@@ -586,7 +586,7 @@ echo $?     # 0 only when the run succeeded
 Every ending that is not a success exits 1 — failed, timed out, aborted, skipped or invalid
 — so a Makefile, a CI step or a parent job can treat a flowlite run like any other command.
 The wait polls the run's row, so it works from a different process, shell or container to
-the one running `flowlite serve`, and is refused outright when nothing is serving the data
+the one running `flowlite serve`, and is refused outright when nothing is serving the project
 directory, since the row it would poll has no writer. Only the wait is refused: submitting
 into a directory whose server is down still queues the run.
 
@@ -636,7 +636,7 @@ only slot.
 
 ### A run from a file
 
-A job normally has to live under `jobs/` in the data directory before it can be run. `-f`
+A job normally has to live under `jobs/` in the project directory before it can be run. `-f`
 submits a definition that does not:
 
 ```bash
@@ -656,7 +656,7 @@ installed job by id, and a definition that was never installed has no id to name
 The file is held to every rule an installed job is held to: a cycle, a duplicate task id, a
 dependency on a task that isn't there, a notification channel this box cannot send on, an
 undefined `limits:` name, or a `secret_env:` naming a secret nothing configures is refused
-before any run is written, naming the file. An id that is already a job in the data
+before any run is written, naming the file. An id that is already a job in the project
 directory is refused too, since that id is what every filter and link resolves through:
 
 ```
@@ -770,7 +770,7 @@ tasks:
     command: make build
 ```
 
-The directory lives under `.flowlite/runs/<job run id>` inside the data directory. The one
+The directory lives under `.flowlite/runs/<job run id>` inside the project directory. The one
 name reserved inside it is `.output`, where results are kept; everything else in it is the
 task's own.
 
@@ -825,7 +825,7 @@ reaped fails the same way it does for an id that never existed.
 
 ## Retention
 
-A long-lived data directory accumulates job runs forever unless something prunes them.
+A long-lived project directory accumulates job runs forever unless something prunes them.
 `RetentionService` does, on the same poller every other background service runs on, inside
 `flowlite serve`. A run becomes a candidate for deletion once it is **finished**, and never
 before — never `Queued` or `Running`, and never one that still owes an undelivered
@@ -859,7 +859,7 @@ database stops growing rather than gets smaller. Get the space back with the ser
 stopped:
 
 ```bash
-sqlite3 <data-dir>/.flowlite/flowlite.db 'VACUUM;'
+sqlite3 <project-dir>/.flowlite/flowlite.db 'VACUUM;'
 ```
 
 flowlite never runs this itself: `VACUUM` rewrites the whole file under an exclusive lock,
@@ -902,21 +902,21 @@ rather than guessed at: an attempt that started before the machine last booted c
 own its recorded group id — the number has been recycled — so nothing is signalled and the
 log says the command may still be running.
 
-## One server per data directory
+## One server per project directory
 
-A data directory is served by exactly one `flowlite serve`. A second one there is refused,
+A project directory is served by exactly one `flowlite serve`. A second one there is refused,
 because two servers would run two schedulers over one set of schedules and fire every cron
 twice. The refusal is an `flock`, so it needs a filesystem where `flock` actually works —
-local disk always qualifies, which is what SQLite already assumes of the data directory.
+local disk always qualifies, which is what SQLite already assumes of the project directory.
 
 A running server keeps its lock and the pid, address and port it bound in `.flowlite/`,
 the same directory that holds the database. Ask about it with:
 
 ```bash
-flowlite -D /srv/etl status
+flowlite -p /srv/etl status
 # serving on http://127.0.0.1:8001 (pid 41207, up 4m 12s, flowlite 0.2.0)
 
-flowlite -D /srv/etl status --json
+flowlite -p /srv/etl status --json
 # {"address":"127.0.0.1","pid":41207,"port":8001,"started_at":"2026-09-10T...","status":"up","uptime_seconds":...,"version":"0.2.0"}
 ```
 
@@ -926,15 +926,15 @@ between the lock being taken and the listener binding — expect it during resta
 on a first start. `status` exits 0 in all three states, so a wrapper should read the
 `status` field rather than the exit code.
 
-Add `.flowlite/` to `.gitignore` if your data directory is a repository, but do not delete
+Add `.flowlite/` to `.gitignore` if your project directory is a repository, but do not delete
 it: it holds the run history. Least of all while a server is running, because the lock lives on the inode rather than the path,
 removing `serve.lock` out from under a running server (`git clean -xdf`, say) lets the next
 `serve` create a fresh inode and start right alongside it.
 
 ### Running several services
 
-A second project is a second data directory, with its own database, its own port and its
-own `serve`. flowlite does not manage the set of them: `-D` names the one you mean, and
+Each project is its own directory, with its own database, its own port and its
+own `serve`. flowlite does not manage the set of them: `-p` names the one you mean, and
 whatever already supervises processes on your machine starts them. A systemd template unit
 is usually all it takes:
 
@@ -942,7 +942,7 @@ is usually all it takes:
 # /etc/systemd/system/flowlite@.service
 [Service]
 EnvironmentFile=/etc/flowlite/%i.env
-ExecStart=/usr/local/bin/flowlite -D /srv/%i serve --address ${ADDRESS} --port ${PORT}
+ExecStart=/usr/local/bin/flowlite -p /srv/%i serve --address ${ADDRESS} --port ${PORT}
 Restart=on-failure
 
 [Install]
@@ -989,7 +989,7 @@ block, so the browser can change what a run is submitted with but not what the j
 ### Logging in
 
 On `127.0.0.1` the dashboard has no login: anyone who can reach the port can already reach
-the data directory. To serve it to other people, add an `[auth]` section and it asks for a
+the project directory. To serve it to other people, add an `[auth]` section and it asks for a
 username and password, which it checks against an OAuth2 identity provider such as
 Keycloak, Auth0 or Entra. A successful login can do everything the dashboard does; who may
 log in is decided in the provider, by who is allowed to use the client.
@@ -1016,7 +1016,7 @@ logins, not sessions already open.
 The session cookie is sent over HTTPS only unless `cookie_secure = false`, so put the
 dashboard behind a TLS-terminating proxy, and bind it to that proxy rather than to
 `0.0.0.0`. `serve` bound to anything but loopback with no `[auth]` still starts, since a
-proxy in front may do the asking, but prints a warning that nothing does. The CLI and `flowlite mcp` open the data directory directly and are not affected
+proxy in front may do the asking, but prints a warning that nothing does. The CLI and `flowlite mcp` open the project directory directly and are not affected
 by `[auth]`.
 
 ## Driving flowlite from an agent
@@ -1028,22 +1028,22 @@ as a stdio server:
 ```json
 {
   "mcpServers": {
-    "flowlite": { "command": "flowlite", "args": ["-D", "./data", "mcp"] }
+    "flowlite": { "command": "flowlite", "args": ["-p", "./data", "mcp"] }
   }
 }
 ```
 
 No port, no HTTP and nothing to start first: the client spawns the binary, talks JSON-RPC
 over its stdio, and the process exits when the client closes stdin. Running
-`flowlite -D ./data init` first is optional, since an agent handed an empty directory can
-call `init_data_dir` itself.
+`flowlite -p ./data init` first is optional, since an agent handed an empty directory can
+call `init_project_dir` itself.
 
 Ten tools, each a projection of a command that already exists:
 
 | Tool | Answers |
 |---|---|
-| `init_data_dir` | Set this empty directory up with an example job and schedule. |
-| `list_jobs` | What jobs does this data directory declare? |
+| `init_project_dir` | Set this empty directory up with an example job and schedule. |
+| `list_jobs` | What jobs does this project directory declare? |
 | `submit_job` | Run this — and, with `wait_seconds`, how did it end? |
 | `list_job_runs` | What has run lately, by job and by status? |
 | `get_job_run` | What happened to run 42, task by task? |
@@ -1051,7 +1051,7 @@ Ten tools, each a projection of a command that already exists:
 | `stop_job_run` | Stop run 42, and tell me what it settled to. |
 | `get_serve_status` | Is anything actually serving this directory? |
 | `list_limits` | What is a run waiting behind? |
-| `validate_data_dir` | Would `serve` start on the YAML and flowlite.toml I just edited? |
+| `validate_project_dir` | Would `serve` start on the YAML and flowlite.toml I just edited? |
 
 Each returns the JSON its `--json` twin prints, so an agent and a shell script reading one
 run read the same fields. Two differ, each for a stated reason.
@@ -1072,13 +1072,13 @@ progress: the first says whether anything is serving the directory at all, the s
 a `queued` run is waiting behind. `list_limits` returns the rows `flowlite limits --json`
 prints, under `limits`.
 
-`init_data_dir` takes no arguments: the directory is the one `-D` named, so an agent cannot
+`init_project_dir` takes no arguments: the directory is the one `-p` named, so an agent cannot
 point it somewhere nobody asked for. Nothing is overwritten, and the result says which files
 it wrote and which were already there:
 
 ```json
 {
-  "data_dir": "./data",
+  "project_dir": "./data",
   "files": [
     { "path": "jobs/hello.yaml", "created": true },
     { "path": "schedules/daily-hello.yaml", "created": true },
@@ -1088,7 +1088,7 @@ it wrote and which were already there:
 ```
 
 The job it writes is submittable on the next call — every tool seeds its own view of the
-data directory, so nothing has to be restarted first.
+project directory, so nothing has to be restarted first.
 
 `submit_job` names what to run exactly one of three ways:
 
@@ -1119,7 +1119,7 @@ would ever settle the row it would poll.
 ## Configuration
 
 Everything below has a default, so flowlite runs with no `flowlite.toml` at all. Write one in
-the data directory to change any of it; a file naming a single key leaves every other
+the project directory to change any of it; a file naming a single key leaves every other
 default alone, and each key can also be set as an environment variable
 (`FLOWLITE_UI__PAGE_SIZE=10`, `FLOWLITE_ORCHESTRATOR__POLL_INTERVAL_SECONDS=5`).
 
@@ -1148,7 +1148,7 @@ timezone = "UTC"                # what a schedule with no timezone: reads its cr
 
 `[job_defaults]` and `[schedule_defaults]` fill in what a job's or schedule's YAML leaves
 out, and they are read when the YAML is — at startup. So a task with no `timeout:` takes
-its timeout from the data directory it was read in, and a run already submitted keeps the
+its timeout from the project directory it was read in, and a run already submitted keeps the
 value it was submitted with.
 
 `[smtp]` and `[slack]` are the sections with no defaults, because there is no default mail
@@ -1214,8 +1214,8 @@ and refused at startup.
 warehouse = 3   # 0 for no limit
 ```
 
-The data directory itself is the one thing not worth setting here (`data_dir` in a file
-inside it is circular); pass `-D` / `--data-dir` / `FLOWLITE_DATA_DIR`.
+The project directory itself is the one thing not worth setting here (`project_dir` in a file
+inside it is circular); pass `-p` / `--project-dir` / `FLOWLITE_PROJECT_DIR`.
 
 
 ## Upgrading
@@ -1230,7 +1230,7 @@ From 0.1.0 on it changes only by new migration files, which a new binary applies
 first starts. Stop `serve`, replace the binary and start it again, and the history comes
 along.
 
-From 0.1.0 to 0.2.0, rename `config.toml` in the data directory to `flowlite.toml`. 0.2.0
+From 0.1.0 to 0.2.0, rename `config.toml` in the project directory to `flowlite.toml`. 0.2.0
 does not read the old name, so a directory that keeps it starts on the defaults: no
 `[secrets]`, no `[smtp]` or `[slack]`, and a job naming one of those is refused at startup.
 

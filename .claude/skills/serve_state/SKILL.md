@@ -1,11 +1,11 @@
 ---
 name: serve_state
-description: The serve lock and state file (src/serve_state.rs) - how flowlite answers "is this data directory being served", why only one serve may hold one directory, and what `.flowlite/serve.lock` and `serve.json` each mean. Use when working on the serve or status command, when a wait or a warning depends on whether a directory is served, when a second serve is refused or wrongly allowed, when a killed server still reads as up, or when adding anything that asks about a running server.
+description: The serve lock and state file (src/serve_state.rs) - how flowlite answers "is this project directory being served", why only one serve may hold one directory, and what `.flowlite/serve.lock` and `serve.json` each mean. Use when working on the serve or status command, when a wait or a warning depends on whether a directory is served, when a second serve is refused or wrongly allowed, when a killed server still reads as up, or when adding anything that asks about a running server.
 ---
 
 # Serve lock and state (src/serve_state.rs)
 
-The answer lives in `.flowlite/` inside the data directory - beside the database, which `Toolkit` keeps there too - so a moved or copied directory still describes itself and there is no central record to disagree with it.
+The answer lives in `.flowlite/` inside the project directory - beside the database, which `Toolkit` keeps there too - so a moved or copied directory still describes itself and there is no central record to disagree with it.
 
 | File | What it is | What it means |
 |---|---|---|
@@ -38,5 +38,5 @@ A process killed with `SIGKILL` leaves `serve.json` behind but can't keep an `fl
 | [mcp/tools/result.rs](../../../src/mcp/tools/result.rs) | a submitted run comes back `scheduled` and, unserved, never reaches `queued`, so the result carries a warning |
 
 For anything new that asks:
-- **Check once, before the work.** `ensure_data_dir_is_served` checks once before a wait, not on every pass, so a wait can survive a deliberate restart of `serve`.
+- **Check once, before the work.** `ensure_project_dir_is_served` checks once before a wait, not on every pass, so a wait can survive a deliberate restart of `serve`.
 - **`Starting` counts as served.** That server holds the lock and will reach the row.

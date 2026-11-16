@@ -32,7 +32,7 @@ use common::{flowlite, install_job, is_up, serve, until, ServerGuard, BINARY};
 /// mistaken for a server that has stopped answering.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
-fn data_dir(label: &str) -> PathBuf {
+fn project_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir()
         .join(format!("flowlite-mcp-{label}-{}", uuid::Uuid::new_v4()));
 
@@ -63,7 +63,7 @@ impl McpClient {
 
     fn start(dir: &Path) -> Self {
         let mut child = Command::new(BINARY)
-            .args(["--data-dir", &dir.to_string_lossy(), "mcp"])
+            .args(["--project-dir", &dir.to_string_lossy(), "mcp"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -225,7 +225,7 @@ fn tool_text(result: &Value) -> &str {
 /// its servers - so the name is the one in the install line, not the crate's default.
 #[test]
 fn initialize_names_the_server_and_its_version() {
-    let dir = data_dir("initialize");
+    let dir = project_dir("initialize");
     let mut client = McpClient::start(&dir);
 
     let result = client.initialize();
@@ -240,7 +240,7 @@ fn initialize_names_the_server_and_its_version() {
 /// named by `tools/list` - the full set the design promises.
 #[test]
 fn the_handshake_declares_tools_and_lists_the_eleven_tools() {
-    let dir = data_dir("tools");
+    let dir = project_dir("tools");
     let mut client = McpClient::start(&dir);
 
     let initialized = client.initialize();
@@ -267,13 +267,13 @@ fn the_handshake_declares_tools_and_lists_the_eleven_tools() {
             "get_job_run",
             "get_job_run_logs",
             "get_serve_status",
-            "init_data_dir",
+            "init_project_dir",
             "list_job_runs",
             "list_jobs",
             "list_limits",
             "stop_job_run",
             "submit_job",
-            "validate_data_dir",
+            "validate_project_dir",
         ],
     );
 }
@@ -282,7 +282,7 @@ fn the_handshake_declares_tools_and_lists_the_eleven_tools() {
 /// every agent session that ever opened it.
 #[test]
 fn closing_stdin_ends_the_process_cleanly() {
-    let dir = data_dir("stdin");
+    let dir = project_dir("stdin");
     let mut client = McpClient::start(&dir);
 
     client.initialize();
@@ -296,11 +296,11 @@ fn closing_stdin_ends_the_process_cleanly() {
     assert!(status.success(), "the server exited with {status}");
 }
 
-/// The projection `list_jobs` exists for: a job installed in the data directory is exactly
+/// The projection `list_jobs` exists for: a job installed in the project directory is exactly
 /// what `job list --json` would print, read back through MCP instead of the CLI.
 #[test]
-fn list_jobs_shows_a_job_installed_in_the_data_directory() {
-    let dir = data_dir("list-jobs");
+fn list_jobs_shows_a_job_installed_in_the_project_directory() {
+    let dir = project_dir("list-jobs");
     install_job(&dir, "hello.yaml", "id: hello\nname: Hello\ntasks:\n  - id: say\n    command: \"true\"\n");
 
     let mut client = McpClient::start(&dir);
@@ -321,7 +321,7 @@ fn list_jobs_shows_a_job_installed_in_the_data_directory() {
 /// server.
 #[test]
 fn a_job_file_written_after_the_server_started_is_visible_to_list_jobs() {
-    let dir = data_dir("late-job");
+    let dir = project_dir("late-job");
 
     let mut client = McpClient::start(&dir);
     client.handshake();
@@ -342,7 +342,7 @@ fn a_job_file_written_after_the_server_started_is_visible_to_list_jobs() {
 /// cannot read.
 #[test]
 fn get_job_run_on_an_unknown_id_is_a_tool_error_naming_the_id() {
-    let dir = data_dir("unknown-run");
+    let dir = project_dir("unknown-run");
 
     let mut client = McpClient::start(&dir);
     client.handshake();
@@ -358,7 +358,7 @@ fn get_job_run_on_an_unknown_id_is_a_tool_error_naming_the_id() {
 /// yet to reach it any other way.
 #[test]
 fn get_job_run_logs_returns_what_a_tasks_command_echoed() {
-    let dir = data_dir("task-output");
+    let dir = project_dir("task-output");
     install_job(&dir, "echoer.yaml", "id: echoer\nname: Echoer\ntasks:\n  - id: say\n    command: echo mcp-task-output\n");
 
     let mut server = ServerGuard::new(serve(&dir, 18230), libc::SIGTERM);
@@ -390,7 +390,7 @@ fn get_job_run_logs_returns_what_a_tasks_command_echoed() {
 /// exercises the two independent budgets end to end, not stdout alone.
 #[test]
 fn a_long_stream_comes_back_truncated_carrying_the_marker() {
-    let dir = data_dir("truncated");
+    let dir = project_dir("truncated");
     install_job(
         &dir,
         "verbose.yaml",
@@ -440,7 +440,7 @@ const SLEEPER: &str = "id: sleeper\nname: Sleeper\ntasks:\n  - id: say\n    comm
 /// result is the submitted run `job submit --json` would have printed for it.
 #[test]
 fn submitting_an_installed_job_returns_its_submitted_run() {
-    let dir = data_dir("submit-installed");
+    let dir = project_dir("submit-installed");
     install_job(&dir, "hello.yaml", HELLO);
 
     let mut client = McpClient::start(&dir);
@@ -458,7 +458,7 @@ fn submitting_an_installed_job_returns_its_submitted_run() {
 /// snapshot is what keeps it inspectable once submitted.
 #[test]
 fn submitting_an_inline_yaml_definition_succeeds() {
-    let dir = data_dir("submit-inline");
+    let dir = project_dir("submit-inline");
 
     let mut client = McpClient::start(&dir);
     client.handshake();
@@ -477,7 +477,7 @@ fn submitting_an_inline_yaml_definition_succeeds() {
 /// the whole difference between "queued" and "not due".
 #[test]
 fn submitting_with_a_future_schedule_at_returns_a_scheduled_run() {
-    let dir = data_dir("submit-schedule-at");
+    let dir = project_dir("submit-schedule-at");
     install_job(&dir, "hello.yaml", HELLO);
 
     let mut client = McpClient::start(&dir);
@@ -498,7 +498,7 @@ fn submitting_with_a_future_schedule_at_returns_a_scheduled_run() {
 /// timeout and then report a run that was never unhealthy.
 #[test]
 fn submitting_refuses_to_wait_for_a_run_that_is_not_due() {
-    let dir = data_dir("submit-schedule-at-wait");
+    let dir = project_dir("submit-schedule-at-wait");
     install_job(&dir, "hello.yaml", HELLO);
 
     let mut client = McpClient::start(&dir);
@@ -513,7 +513,7 @@ fn submitting_refuses_to_wait_for_a_run_that_is_not_due() {
     assert!(tool_text(&result).contains("not due"), "{result}");
 }
 
-/// Two calls submitting the same inline id at once, into a data directory with no
+/// Two calls submitting the same inline id at once, into a project directory with no
 /// `flowlite.db` yet.
 ///
 /// Both `tools/call` requests are sent before either response is read, so they genuinely
@@ -524,7 +524,7 @@ fn submitting_refuses_to_wait_for_a_run_that_is_not_due() {
 /// into WAL.
 #[test]
 fn two_concurrent_submits_of_the_same_inline_id_do_not_collide() {
-    let dir = data_dir("submit-inline-concurrent");
+    let dir = project_dir("submit-inline-concurrent");
     let yaml = "id: probe\nname: Probe\ntasks:\n  - id: say\n    command: \"true\"\n";
 
     let mut client = McpClient::start(&dir);
@@ -551,7 +551,7 @@ fn two_concurrent_submits_of_the_same_inline_id_do_not_collide() {
 /// `job submit -f` gives, reached through the tool instead of the CLI.
 #[test]
 fn submitting_a_file_does_not_install_it() {
-    let dir = data_dir("submit-file");
+    let dir = project_dir("submit-file");
     let file = dir.join("outside.yaml");
     std::fs::write(&file, "id: outside\nname: Outside\ntasks:\n  - id: say\n    command: \"true\"\n").unwrap();
 
@@ -572,7 +572,7 @@ fn submitting_a_file_does_not_install_it() {
 /// the CLI's `-f`, which this caller never passed.
 #[test]
 fn an_inline_definition_colliding_with_an_installed_job_is_refused_by_name() {
-    let dir = data_dir("submit-collision");
+    let dir = project_dir("submit-collision");
     install_job(&dir, "hello.yaml", HELLO);
 
     let mut client = McpClient::start(&dir);
@@ -589,14 +589,14 @@ fn an_inline_definition_colliding_with_an_installed_job_is_refused_by_name() {
 /// The tool reads the directory as it stands at the call, so a file the agent breaks after
 /// the server started is caught on the next call, with the file named.
 #[test]
-fn validate_data_dir_catches_a_file_broken_after_the_server_started() {
-    let dir = data_dir("validate");
+fn validate_project_dir_catches_a_file_broken_after_the_server_started() {
+    let dir = project_dir("validate");
     install_job(&dir, "hello.yaml", HELLO);
 
     let mut client = McpClient::start(&dir);
     client.handshake();
 
-    let result = client.call_tool("validate_data_dir", json!({}));
+    let result = client.call_tool("validate_project_dir", json!({}));
     assert_ne!(result["isError"], json!(true), "{result}");
 
     let counts: Value = serde_json::from_str(tool_text(&result)).unwrap();
@@ -604,7 +604,7 @@ fn validate_data_dir_catches_a_file_broken_after_the_server_started() {
 
     install_job(&dir, "broken.yaml", "name: No Id\ntasks: []\n");
 
-    let result = client.call_tool("validate_data_dir", json!({}));
+    let result = client.call_tool("validate_project_dir", json!({}));
     assert_eq!(result["isError"], json!(true), "{result}");
     assert!(tool_text(&result).contains("broken.yaml"), "{}", tool_text(&result));
 }
@@ -613,7 +613,7 @@ fn validate_data_dir_catches_a_file_broken_after_the_server_started() {
 /// missing required field, `id`.
 #[test]
 fn invalid_inline_yaml_is_a_tool_error_naming_the_reason() {
-    let dir = data_dir("submit-invalid");
+    let dir = project_dir("submit-invalid");
 
     let mut client = McpClient::start(&dir);
     client.handshake();
@@ -630,7 +630,7 @@ fn invalid_inline_yaml_is_a_tool_error_naming_the_reason() {
 /// through the tool exactly as `--param` reaches it.
 #[test]
 fn a_param_the_job_does_not_declare_is_refused() {
-    let dir = data_dir("submit-bad-param");
+    let dir = project_dir("submit-bad-param");
     install_job(&dir, "hello.yaml", HELLO);
 
     let mut client = McpClient::start(&dir);
@@ -655,7 +655,7 @@ fn a_param_the_job_does_not_declare_is_refused() {
 /// to prevent. Content[0] is still the run, as JSON, either way.
 #[test]
 fn the_warning_block_appears_only_while_the_directory_is_unserved() {
-    let dir = data_dir("submit-unserved");
+    let dir = project_dir("submit-unserved");
     install_job(&dir, "hello.yaml", HELLO);
 
     let mut client = McpClient::start(&dir);
@@ -700,7 +700,7 @@ fn job_run_status(client: &mut McpClient, job_run_id: i64) -> String {
 /// rather than merely queued - the whole reason `submit_job` grew a wait at all.
 #[test]
 fn submitting_with_wait_seconds_against_a_served_directory_comes_back_settled() {
-    let dir = data_dir("wait-submit-succeeds");
+    let dir = project_dir("wait-submit-succeeds");
     install_job(&dir, "hello.yaml", HELLO);
 
     let mut server = ServerGuard::new(serve(&dir, 18233), libc::SIGTERM);
@@ -723,7 +723,7 @@ fn submitting_with_wait_seconds_against_a_served_directory_comes_back_settled() 
 /// have thrown away along with the id.
 #[test]
 fn a_wait_that_expires_returns_the_run_still_running() {
-    let dir = data_dir("wait-submit-expires");
+    let dir = project_dir("wait-submit-expires");
     install_job(&dir, "sleeper.yaml", SLEEPER);
 
     let mut server = ServerGuard::new(serve(&dir, 18234), libc::SIGTERM);
@@ -752,7 +752,7 @@ fn a_wait_that_expires_returns_the_run_still_running() {
 /// rather than reimplemented per tool.
 #[test]
 fn get_job_run_with_wait_seconds_returns_the_settled_run() {
-    let dir = data_dir("wait-get-job-run");
+    let dir = project_dir("wait-get-job-run");
     install_job(&dir, "hello.yaml", HELLO);
 
     let mut server = ServerGuard::new(serve(&dir, 18235), libc::SIGTERM);
@@ -778,7 +778,7 @@ fn get_job_run_with_wait_seconds_returns_the_settled_run() {
 /// stop handling.
 #[test]
 fn stop_job_run_with_wait_seconds_settles_a_running_run() {
-    let dir = data_dir("wait-stop-running");
+    let dir = project_dir("wait-stop-running");
     install_job(&dir, "sleeper.yaml", SLEEPER);
 
     let mut server = ServerGuard::new(serve(&dir, 18236), libc::SIGTERM);
@@ -813,7 +813,7 @@ fn stop_job_run_with_wait_seconds_settles_a_running_run() {
 /// way - the same rule `submit_job` already keeps with and without a wait.
 #[test]
 fn stop_job_run_without_wait_seconds_returns_the_same_job_run_shape() {
-    let dir = data_dir("wait-stop-queued");
+    let dir = project_dir("wait-stop-queued");
     install_job(&dir, "sleeper.yaml", SLEEPER);
 
     let mut server = ServerGuard::new(serve(&dir, 18237), libc::SIGTERM);
@@ -845,7 +845,7 @@ fn assert_refusal_is_addressed_to_a_tool_caller(text: &str, dir: &Path) {
     assert!(!text.contains("--wait"), "{text}");
 }
 
-/// The runs a data directory holds, newest first, read through the tool - what an agent
+/// The runs a project directory holds, newest first, read through the tool - what an agent
 /// would see, and here what "the refusal wrote nothing" is asserted against.
 fn listed_job_runs(client: &mut McpClient) -> Vec<Value> {
     let result = client.call_tool("list_job_runs", json!({}));
@@ -857,12 +857,12 @@ fn listed_job_runs(client: &mut McpClient) -> Vec<Value> {
 /// The `job_run_stop` rows one run has, read through the same CRUD the tool writes them
 /// with. No tool lists stop requests - they return runs, not the rows that ask for them -
 /// so "the refusal wrote no stop" is not a property any tool result can show, and this
-/// opens the data directory's own database instead.
+/// opens the project directory's own database instead.
 fn stop_requests(dir: &Path, job_run_id: i64) -> usize {
-    let data_dir = dir.to_string_lossy().into_owned();
+    let project_dir = dir.to_string_lossy().into_owned();
 
     tokio::runtime::Runtime::new().unwrap().block_on(async move {
-        let toolkit = Toolkit::new(AppConfig { data_dir, ..AppConfig::default() });
+        let toolkit = Toolkit::new(AppConfig { project_dir, ..AppConfig::default() });
         let mut conn = toolkit.get_conn().await.unwrap();
 
         let crud = CRUD::new(std::sync::Arc::new(toolkit));
@@ -882,7 +882,7 @@ fn stop_requests(dir: &Path, job_run_id: i64) -> usize {
 /// check moved after the submit would genuinely queue a run for a server that is not there.
 #[test]
 fn submit_job_with_wait_seconds_on_an_unserved_directory_queues_no_run() {
-    let dir = data_dir("wait-submit-unserved");
+    let dir = project_dir("wait-submit-unserved");
     install_job(&dir, "hello.yaml", HELLO);
 
     let mut client = McpClient::start(&dir);
@@ -901,7 +901,7 @@ fn submit_job_with_wait_seconds_on_an_unserved_directory_queues_no_run() {
 /// completion, so the run table staying empty is the whole of what it can promise.
 #[test]
 fn get_job_run_with_wait_seconds_on_an_unserved_directory_writes_nothing() {
-    let dir = data_dir("wait-get-unserved");
+    let dir = project_dir("wait-get-unserved");
 
     let mut client = McpClient::start(&dir);
     client.handshake();
@@ -921,7 +921,7 @@ fn get_job_run_with_wait_seconds_on_an_unserved_directory_writes_nothing() {
 /// moved after `request_job_run_stop` would insert one, and this is what would catch it.
 #[test]
 fn stop_job_run_with_wait_seconds_on_an_unserved_directory_writes_no_stop() {
-    let dir = data_dir("wait-stop-unserved");
+    let dir = project_dir("wait-stop-unserved");
     install_job(&dir, "sleeper.yaml", SLEEPER);
 
     let mut client = McpClient::start(&dir);
@@ -948,7 +948,7 @@ fn stop_job_run_with_wait_seconds_on_an_unserved_directory_writes_no_stop() {
 /// one.
 #[test]
 fn stop_job_run_warns_when_nothing_is_serving_the_directory() {
-    let dir = data_dir("stop-unserved-warning");
+    let dir = project_dir("stop-unserved-warning");
     install_job(&dir, "sleeper.yaml", SLEEPER);
 
     let mut client = McpClient::start(&dir);
@@ -978,7 +978,7 @@ fn stop_job_run_warns_when_nothing_is_serving_the_directory() {
 /// keys it could have meant, which is the whole point of refusing instead of ignoring.
 #[test]
 fn a_misspelled_argument_key_is_refused_naming_it() {
-    let dir = data_dir("unknown-field");
+    let dir = project_dir("unknown-field");
     install_job(&dir, "hello.yaml", HELLO);
 
     let mut client = McpClient::start(&dir);
@@ -994,18 +994,18 @@ fn a_misspelled_argument_key_is_refused_naming_it() {
     assert!(tool_text(&result).contains("params"), "{}", tool_text(&result));
 }
 
-/// The tool half of `flowlite init`: an agent handed an empty data directory can lay the
+/// The tool half of `flowlite init`: an agent handed an empty project directory can lay the
 /// example job and schedule into it without a shell, and the job it wrote is submittable on
 /// the very next call - the same per-call load that makes a late job file visible to
 /// `list_jobs`.
 #[test]
-fn init_data_dir_scaffolds_the_directory_and_then_lists_the_job_it_wrote() {
-    let dir = data_dir("init");
+fn init_project_dir_scaffolds_the_directory_and_then_lists_the_job_it_wrote() {
+    let dir = project_dir("init");
 
     let mut client = McpClient::start(&dir);
     client.handshake();
 
-    let result = client.call_tool("init_data_dir", json!({}));
+    let result = client.call_tool("init_project_dir", json!({}));
     assert_ne!(result["isError"], json!(true), "{result}");
 
     let written: Value = serde_json::from_str(tool_text(&result)).unwrap();
@@ -1018,7 +1018,7 @@ fn init_data_dir_scaffolds_the_directory_and_then_lists_the_job_it_wrote() {
 
     assert_eq!(paths, vec!["jobs/hello.yaml", "schedules/daily-hello.yaml", "flowlite.toml"]);
     assert!(written["files"].as_array().unwrap().iter().all(|file| file["created"] == json!(true)), "{written}");
-    assert_eq!(written["data_dir"], dir.display().to_string());
+    assert_eq!(written["project_dir"], dir.display().to_string());
 
     let jobs: Value = serde_json::from_str(tool_text(&client.call_tool("list_jobs", json!({})))).unwrap();
     let job_ids: Vec<&str> = jobs.as_array().unwrap().iter().map(|job| job["job_id"].as_str().unwrap()).collect();
@@ -1030,14 +1030,14 @@ fn init_data_dir_scaffolds_the_directory_and_then_lists_the_job_it_wrote() {
 /// an agent that called this twice must be able to tell that the second call changed
 /// nothing, or it has no way to know whose file it is looking at.
 #[test]
-fn a_second_init_data_dir_reports_every_file_as_kept() {
-    let dir = data_dir("init-twice");
+fn a_second_init_project_dir_reports_every_file_as_kept() {
+    let dir = project_dir("init-twice");
 
     let mut client = McpClient::start(&dir);
     client.handshake();
 
-    client.call_tool("init_data_dir", json!({}));
-    let result = client.call_tool("init_data_dir", json!({}));
+    client.call_tool("init_project_dir", json!({}));
+    let result = client.call_tool("init_project_dir", json!({}));
     assert_ne!(result["isError"], json!(true), "{result}");
 
     let written: Value = serde_json::from_str(tool_text(&result)).unwrap();
@@ -1048,17 +1048,17 @@ fn a_second_init_data_dir_reports_every_file_as_kept() {
     );
 }
 
-/// The data directory is the one `-D` named at launch, as it is for every other tool, so
+/// The project directory is the one `-p` named at launch, as it is for every other tool, so
 /// the arguments object is empty and a key naming another path is a refusal rather than a
 /// directory scaffolded somewhere nobody asked for.
 #[test]
-fn init_data_dir_refuses_an_argument_naming_another_directory() {
-    let dir = data_dir("init-elsewhere");
+fn init_project_dir_refuses_an_argument_naming_another_directory() {
+    let dir = project_dir("init-elsewhere");
 
     let mut client = McpClient::start(&dir);
     client.handshake();
 
-    let result = client.call_tool("init_data_dir", json!({ "data_dir": "/tmp/somewhere-else" }));
+    let result = client.call_tool("init_project_dir", json!({ "project_dir": "/tmp/somewhere-else" }));
 
     assert_eq!(result["isError"], json!(true), "{result}");
 }
@@ -1068,7 +1068,7 @@ fn init_data_dir_refuses_an_argument_naming_another_directory() {
 /// of writing; this is how the agent checks for itself afterwards.
 #[test]
 fn get_serve_status_reads_down_for_a_directory_nothing_is_serving() {
-    let dir = data_dir("status-down");
+    let dir = project_dir("status-down");
 
     let mut client = McpClient::start(&dir);
     client.handshake();
@@ -1086,7 +1086,7 @@ fn get_serve_status_reads_down_for_a_directory_nothing_is_serving() {
 /// carrying the port the dashboard is actually on.
 #[test]
 fn get_serve_status_reads_up_and_names_the_port_for_a_served_directory() {
-    let dir = data_dir("status-up");
+    let dir = project_dir("status-up");
 
     let mut server = ServerGuard::new(serve(&dir, 18238), libc::SIGTERM);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");
@@ -1112,7 +1112,7 @@ fn get_serve_status_reads_up_and_names_the_port_for_a_served_directory() {
 /// named limit, so one answer covers both.
 #[test]
 fn list_limits_returns_the_global_cap_as_a_row_of_its_own() {
-    let dir = data_dir("limits");
+    let dir = project_dir("limits");
     std::fs::write(
         dir.join("flowlite.toml"),
         "[orchestrator]\nmax_running_attempts = 4\n\n[concurrency_limits]\nwarehouse = 2\n",

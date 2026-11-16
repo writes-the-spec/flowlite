@@ -45,7 +45,7 @@ pub const BINARY: &str = env!("CARGO_BIN_EXE_flowlite");
 /// result in a `ServerGuard` so it is signalled and reaped even if the test panics.
 pub fn serve(dir: &Path, port: u16) -> Child {
     Command::new(BINARY)
-        .args(["--data-dir", &dir.to_string_lossy(), "serve", "--port", &port.to_string()])
+        .args(["--project-dir", &dir.to_string_lossy(), "serve", "--port", &port.to_string()])
         .spawn()
         .unwrap()
 }
@@ -54,13 +54,13 @@ pub fn serve(dir: &Path, port: u16) -> Child {
 /// would, and returns what it printed and how it exited.
 pub fn flowlite(dir: &Path, args: &[&str]) -> Output {
     Command::new(BINARY)
-        .args(["--data-dir", &dir.to_string_lossy()])
+        .args(["--project-dir", &dir.to_string_lossy()])
         .args(args)
         .output()
         .unwrap()
 }
 
-/// Writes a job file into `dir/jobs/`, installing it the way a person editing the data
+/// Writes a job file into `dir/jobs/`, installing it the way a person editing the project
 /// directory by hand would - as opposed to a file written elsewhere and submitted with
 /// `-f`, which is never installed.
 pub fn install_job(dir: &Path, name: &str, yaml: &str) {

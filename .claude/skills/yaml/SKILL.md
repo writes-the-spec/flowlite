@@ -1,16 +1,16 @@
 ---
 name: yaml
-description: The YAML config layer (src/yaml_models/ and src/declared/) - how files under the data dir are discovered, parsed into JobYaml/ScheduleYaml and loaded into the Declared struct every reader borrows, plus the serde conventions every model follows. Use when adding or changing a YAML model or field, when working with Declared, Job, Task, Schedule or ScheduleJob, or when a config file parses into something other than what you expected.
+description: The YAML config layer (src/yaml_models/ and src/declared/) - how files under the project dir are discovered, parsed into JobYaml/ScheduleYaml and loaded into the Declared struct every reader borrows, plus the serde conventions every model follows. Use when adding or changing a YAML model or field, when working with Declared, Job, Task, Schedule or ScheduleJob, or when a config file parses into something other than what you expected.
 ---
 
 # YAML models
 
-`src/yaml_models/` holds plain deserialization targets (no behaviour, no queries) for files under the **data dir** (`-D` / `--data-dir` / `FLOWLITE_DATA_DIR`, default the current directory):
+`src/yaml_models/` holds plain deserialization targets (no behaviour, no queries) for files under the **project dir** (`-p` / `--project-dir` / `FLOWLITE_PROJECT_DIR`, default the current directory):
 
 | Model | Files | Becomes |
 |---|---|---|
-| [`JobYaml`](references/job_yaml.md) | `<data_dir>/jobs/*.yml` | `Job`, `Task`s |
-| [`ScheduleYaml`](references/schedule_yaml.md) | `<data_dir>/schedules/*.yml` | `Schedule`, `ScheduleJob`s |
+| [`JobYaml`](references/job_yaml.md) | `<project_dir>/jobs/*.yml` | `Job`, `Task`s |
+| [`ScheduleYaml`](references/schedule_yaml.md) | `<project_dir>/schedules/*.yml` | `Schedule`, `ScheduleJob`s |
 
 `flowlite.toml` is app config, not this layer ([src/app_config/](../../../src/app_config/)).
 
@@ -18,7 +18,7 @@ description: The YAML config layer (src/yaml_models/ and src/declared/) - how fi
 
 [`Declared`](../../../src/declared/declared.rs) is what the YAML declares, parsed, defaulted and validated: four plain `Vec`s (`jobs`, `tasks`, `schedules`, `schedule_jobs`) and lookups (`job`, `tasks_of`, `task`, `schedule`, `jobs_of_schedule`). No database holds config.
 
-- **`Declared::load(&app_config)`** walks the data dir in every process that needs config: `serve` once at startup, `job list` / `job submit` per command, the MCP `list_jobs` / `submit_job` tools per call (so a file written later is seen). `job-run` commands skip it on purpose, so they work when the YAML no longer parses.
+- **`Declared::load(&app_config)`** walks the project dir in every process that needs config: `serve` once at startup, `job list` / `job submit` per command, the MCP `list_jobs` / `submit_job` tools per call (so a file written later is seen). `job-run` commands skip it on purpose, so they work when the YAML no longer parses.
 - **Who holds it.** `serve` wraps it in an `Arc` and hands it to `Scheduler`, `Orchestrator` (for `JobRunDispatcher`'s `max_parallel_runs`), `RetentionService` (`keep_runs`) and `AppState` (the dashboard). CRUD never holds it: the two methods that read config, `submit_job` and `is_job_at_max_parallel_runs`, take `&Declared`. The dashboard shows what `serve` loaded, not the YAML as it is now.
 - **Ad-hoc jobs** (`job submit -f`, MCP `submit_job`) parse one file or inline string and call `add_ad_hoc_job` on their own copy, which goes through the same `add_job` `load` uses, so the two can't drift. It refuses an installed id with `JobIdAlreadyInstalled` and checks only this job's `secret_env`.
 - **`check_secret_env_is_satisfied`** runs in `serve` alone, never in `load` - `job list` must work without production secrets ([tests/serve_secret_check.rs](../../../tests/serve_secret_check.rs)).

@@ -16,7 +16,7 @@ One per task under a job YAML's `tasks:`, a struct in `Declared` ([src/declared/
 | `retry_delay` | Seconds before each retry. Defaults to 60. |
 | `env` | Empty if none. Layered over what flowlite inherited. |
 | `secret_env` | Empty if none. Variable name → secret name, never a value; layered over the job's like `env`. |
-| `working_dir` | `''` means the run's own `.flowlite/runs/<job run id>` under the data dir, created at start and deleted with the run; name a path for a fixed place. |
+| `working_dir` | `''` means the run's own `.flowlite/runs/<job run id>` under the project dir, created at start and deleted with the run; name a path for a fixed place. |
 
 ## Written by
 

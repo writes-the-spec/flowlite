@@ -1,6 +1,6 @@
 # ScheduleYaml
 
-[src/yaml_models/schedule_yaml.rs](../../../../src/yaml_models/schedule_yaml.rs) — one file per schedule under `<data_dir>/schedules/*.yml`, loaded as a `Schedule` and its `ScheduleJob`s.
+[src/yaml_models/schedule_yaml.rs](../../../../src/yaml_models/schedule_yaml.rs) — one file per schedule under `<project_dir>/schedules/*.yml`, loaded as a `Schedule` and its `ScheduleJob`s.
 
 ```yaml
 id: nightly

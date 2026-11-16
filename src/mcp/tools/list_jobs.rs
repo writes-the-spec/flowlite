@@ -1,4 +1,4 @@
-//! `list_jobs`: the jobs declared in the data directory, as `job list --json` prints them.
+//! `list_jobs`: the jobs declared in the project directory, as `job list --json` prints them.
 
 use rmcp::model::CallToolResult;
 use rmcp::{tool, tool_router};
@@ -11,7 +11,7 @@ use super::result::{error_result, success_json};
 #[tool_router(router = list_jobs_router, vis = "pub(super)")]
 impl McpServer {
 
-    /// List the jobs declared in the data directory.
+    /// List the jobs declared in the project directory.
     #[tool]
     async fn list_jobs(&self) -> CallToolResult {
         // Loaded per call, as `job list` loads it, so a job file written after this

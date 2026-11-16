@@ -1,4 +1,4 @@
-//! `get_serve_status`: whether this data directory is being served, and by what.
+//! `get_serve_status`: whether this project directory is being served, and by what.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -12,7 +12,7 @@ use crate::shared::serve_status::status_json;
 
 use super::result::{error_result, success_json};
 
-/// No fields: the directory is the one `-D` named when this server was started, as it is
+/// No fields: the directory is the one `-p` named when this server was started, as it is
 /// for every other tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -25,12 +25,12 @@ impl McpServer {
     // The description names `scheduled` because that is the symptom a caller arrives with:
     // `submit_job` warns once, at the moment it writes, and this is how the agent checks
     // for itself any time after.
-    /// Whether a flowlite server is running against this data directory, and on what
+    /// Whether a flowlite server is running against this project directory, and on what
     /// address, port and pid. Nothing moves a run along without one, so a run stuck at
     /// scheduled is what this answers for.
     #[tool]
     async fn get_serve_status(&self, Parameters(_args): Parameters<GetServeStatus>) -> CallToolResult {
-        match status(std::path::Path::new(&self.toolkit.app_config.data_dir)) {
+        match status(std::path::Path::new(&self.toolkit.app_config.project_dir)) {
             Ok(state) => success_json(status_json(&state)),
             Err(err) => error_result(&err),
         }

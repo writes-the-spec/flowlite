@@ -1,5 +1,5 @@
 //! `add_ad_hoc_job`: what `job submit -f` and the MCP `submit_job` tool both do with a
-//! definition that is not installed in the data directory.
+//! definition that is not installed in the project directory.
 
 use std::path::{Path, PathBuf};
 
@@ -9,7 +9,7 @@ use super::declared::Declared;
 
 impl Declared {
 
-    /// Adds a job definition that is not installed in the data directory, kept in one place
+    /// Adds a job definition that is not installed in the project directory, kept in one place
     /// so `job submit -f` and the MCP tool's `file` and `yaml` arguments cannot drift apart:
     /// refuse a collision with an installed job, add the parsed definition, then check its
     /// own `secret_env` is satisfied - scoped to just this job, not every installed one.
@@ -30,7 +30,7 @@ impl Declared {
         if self.job(&job_id).is_some() {
             return Err(JobIdAlreadyInstalled {
                 job_id,
-                jobs_dir: Path::new(&app_config.data_dir).join("jobs"),
+                jobs_dir: Path::new(&app_config.project_dir).join("jobs"),
             }.into());
         }
 

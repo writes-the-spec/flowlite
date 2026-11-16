@@ -18,7 +18,7 @@ use crate::app_config::ui::AppConfigUi;
 /// section, each declared in a file of its own beside this one.
 #[derive(Deserialize, Serialize, Clone)]
 pub struct AppConfig {
-    pub data_dir: String,
+    pub project_dir: String,
     #[serde(default)]
     pub orchestrator: AppConfigOrchestrator,
     #[serde(default)]
@@ -73,7 +73,7 @@ pub struct AppConfig {
 impl std::fmt::Debug for AppConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppConfig")
-            .field("data_dir", &self.data_dir)
+            .field("project_dir", &self.project_dir)
             .field("orchestrator", &self.orchestrator)
             .field("ui", &self.ui)
             .field("job_defaults", &self.job_defaults)
@@ -102,7 +102,7 @@ impl std::fmt::Debug for RedactedSecrets<'_> {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            data_dir: ".".to_string(),
+            project_dir: ".".to_string(),
             orchestrator: AppConfigOrchestrator::default(),
             ui: AppConfigUi::default(),
             job_defaults: AppConfigJobDefaults::default(),
@@ -119,20 +119,20 @@ impl Default for AppConfig {
 
 impl AppConfig {
 
-    /// Every value has a default, so a data directory with no `flowlite.toml` — or one
+    /// Every value has a default, so a project directory with no `flowlite.toml` — or one
     /// naming a single key — loads exactly as well as a complete file.
-    pub fn load(data_dir: Option<PathBuf>) -> Result<AppConfig> {
+    pub fn load(project_dir: Option<PathBuf>) -> Result<AppConfig> {
 
         // The current directory, so `flowlite serve` in a directory holding jobs/ and
         // schedules/ works with no flags and writes its database beside them.
-        let data_dir_fin = data_dir.unwrap_or_else(|| PathBuf::from("."));
+        let project_dir_fin = project_dir.unwrap_or_else(|| PathBuf::from("."));
 
         let app_config: AppConfig = Figment::from(Serialized::defaults(AppConfig::default()))
-            .merge(Toml::file(data_dir_fin.join("flowlite.toml")))
+            .merge(Toml::file(project_dir_fin.join("flowlite.toml")))
             .merge(Env::prefixed("FLOWLITE_").split("__"))
             // Last, because the directory flowlite was pointed at is not up for debate by
             // a file inside it.
-            .merge(Serialized::default("data_dir", data_dir_fin.to_string_lossy()))
+            .merge(Serialized::default("project_dir", project_dir_fin.to_string_lossy()))
             .extract()?;
 
         // Checked here rather than by serde, so the key is caught whether it came from the
@@ -176,7 +176,7 @@ mod tests {
 
         let config = AppConfig::load(Some(dir.clone())).unwrap();
 
-        assert_eq!(config.data_dir, dir.to_string_lossy());
+        assert_eq!(config.project_dir, dir.to_string_lossy());
         assert_eq!(config.orchestrator.poll_interval_seconds, 1);
         assert_eq!(config.orchestrator.max_stream_bytes, 1024 * 1024);
         assert_eq!(config.orchestrator.max_task_output_bytes, 1024 * 1024);
@@ -442,11 +442,11 @@ mod tests {
         let _environment = reading_the_environment();
 
         let dir = temp_dir();
-        std::fs::write(dir.join("flowlite.toml"), "data_dir = \"/somewhere/else\"\n").unwrap();
+        std::fs::write(dir.join("flowlite.toml"), "project_dir = \"/somewhere/else\"\n").unwrap();
 
         let config = AppConfig::load(Some(dir.clone())).unwrap();
 
-        assert_eq!(config.data_dir, dir.to_string_lossy());
+        assert_eq!(config.project_dir, dir.to_string_lossy());
     }
 
     #[test]

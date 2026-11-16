@@ -1,6 +1,6 @@
 ---
 name: toolkit
-description: Toolkit (src/toolkit.rs) - the one thing that opens flowlite.db, runs its migrations and hands out connections. Use when a command or service needs a connection or a pool, when "database is locked" appears while two connections open a fresh data directory, when changing connection pragmas or OPEN_LOCK, or when reaching for the current time.
+description: Toolkit (src/toolkit.rs) - the one thing that opens flowlite.db, runs its migrations and hands out connections. Use when a command or service needs a connection or a pool, when "database is locked" appears while two connections open a fresh project directory, when changing connection pragmas or OPEN_LOCK, or when reaching for the current time.
 ---
 
 # Toolkit (src/toolkit.rs)
@@ -20,10 +20,10 @@ Every connection opens with WAL, `synchronous=NORMAL` and a 5 s busy timeout (`d
 
 Both calls hold `OPEN_LOCK` across connect **and** migrate. A fresh database needs it twice over:
 
-- **WAL switch.** Turning a new file into WAL takes an exclusive lock that `busy_timeout` cannot wait on; a second connection opening mid-switch fails at once with **"database is locked"**. Two concurrent MCP calls on a new data directory hit this.
+- **WAL switch.** Turning a new file into WAL takes an exclusive lock that `busy_timeout` cannot wait on; a second connection opening mid-switch fails at once with **"database is locked"**. Two concurrent MCP calls on a new project directory hit this.
 - **Migrations.** sqlx-sqlite's `Migrate::lock` is a no-op, so two connections migrating one fresh database both run the same `CREATE TABLE`s.
 
-In-process only: two processes first-opening one fresh data dir can still collide; only `serve` holds `ServeLock` ([serve_state skill](../serve_state/SKILL.md)).
+In-process only: two processes first-opening one fresh project dir can still collide; only `serve` holds `ServeLock` ([serve_state skill](../serve_state/SKILL.md)).
 
 `update_disk_schema` calls `Migrator::run_direct`, not `.run()`: `.run()`'s `E: Acquire<'e>` bound can't be proven `Send` in an rmcp `#[tool]` future (*"implementation of `sqlx::Acquire` is not general enough"*; see the [crud skill](../crud/SKILL.md)). Migrations themselves: [db-schema skill](../db-schema/SKILL.md).
 

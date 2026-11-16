@@ -136,7 +136,7 @@ impl Drop for ServerStdin {
 /// It starts declaring nothing. A test that needs a job or a schedule adds it with
 /// `insert_job` or `seed_schedule`, and every service built after that sees it.
 pub struct TestDb {
-    data_dir: PathBuf,
+    project_dir: PathBuf,
     declared: Mutex<Declared>,
     pub crud: Arc<CRUD>,
     pub conn_pool: Arc<sqlx::SqlitePool>,
@@ -151,10 +151,10 @@ impl TestDb {
 
     pub async fn new() -> Self {
 
-        let data_dir = std::env::temp_dir().join(format!("flowlite-test-{}", uuid::Uuid::new_v4()));
+        let project_dir = std::env::temp_dir().join(format!("flowlite-test-{}", uuid::Uuid::new_v4()));
 
         let app_config = AppConfig {
-            data_dir: data_dir.to_string_lossy().into_owned(),
+            project_dir: project_dir.to_string_lossy().into_owned(),
             ..AppConfig::default()
         };
 
@@ -164,7 +164,7 @@ impl TestDb {
             .expect("failed to open the test database");
 
         Self {
-            data_dir,
+            project_dir,
             declared: Mutex::new(Declared::default()),
             crud: Arc::new(CRUD::new(toolkit)),
             conn_pool: Arc::new(conn_pool),
@@ -282,8 +282,8 @@ impl TestDb {
     }
 
     /// The temp directory this test owns, for a command that needs somewhere to write.
-    pub fn data_dir(&self) -> &std::path::Path {
-        &self.data_dir
+    pub fn project_dir(&self) -> &std::path::Path {
+        &self.project_dir
     }
 
     /// What `JobRunDispatcher::set_to_running` does for a real run, done here because most
@@ -291,7 +291,7 @@ impl TestDb {
     /// letting that dispatcher pass over it. A task spawns into this directory, so without
     /// it every spawning test fails on a missing working directory.
     fn create_job_run_dir(&self, job_run_id: i64) {
-        crate::run_dir::create_job_run_dir(&self.app_config().data_dir, job_run_id).unwrap();
+        crate::run_dir::create_job_run_dir(&self.app_config().project_dir, job_run_id).unwrap();
     }
 
     pub fn scheduler(&self) -> Scheduler {
@@ -479,7 +479,7 @@ impl TestDb {
     }
 
     /// The config the CRUD under test is actually using, rather than a fresh default: a
-    /// service built here has to agree with `data_dir()` about which directory it is
+    /// service built here has to agree with `project_dir()` about which directory it is
     /// serving, since that directory is what a task command is told to work on.
     pub fn app_config(&self) -> AppConfig {
         self.crud.toolkit.app_config.clone()
@@ -1395,6 +1395,6 @@ pub async fn has_exited(pid: i32) -> bool {
 
 impl Drop for TestDb {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.data_dir);
+        let _ = std::fs::remove_dir_all(&self.project_dir);
     }
 }

@@ -7,7 +7,7 @@ use rmcp::ServiceExt;
 use crate::mcp::McpServer;
 use crate::toolkit::Toolkit;
 
-/// No flags of its own: the global `-D/--data-dir` already says which directory, the same
+/// No flags of its own: the global `-p/--project-dir` already says which directory, the same
 /// way every other command learns it.
 #[derive(Args)]
 pub struct McpCmd {

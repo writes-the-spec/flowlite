@@ -4,7 +4,7 @@
     "should_trigger": true
   },
   {
-    "query": "can src/mcp import ensure_data_dir_is_served straight from the cli command file?",
+    "query": "can src/mcp import ensure_project_dir_is_served straight from the cli command file?",
     "should_trigger": true
   },
   {

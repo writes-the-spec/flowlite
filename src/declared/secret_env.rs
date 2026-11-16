@@ -68,7 +68,7 @@ impl Declared {
     /// the merge, and two places disagreeing about which references are live fails as a
     /// job that starts and bails at 03:00. Refusing costs one YAML edit, at startup.
     ///
-    /// `job_id` scopes the check. `serve` passes `None` and asks about the whole data
+    /// `job_id` scopes the check. `serve` passes `None` and asks about the whole project
     /// directory, which is what it is about to run. `job submit -f` passes its own id and
     /// must not ask about anything else: an installed job's unsatisfied secret is no reason
     /// to refuse a submit that has nothing to do with it.
@@ -259,7 +259,7 @@ tasks:
     }
 
     #[test]
-    fn the_whole_data_directory_is_checked_when_no_job_is_named() {
+    fn the_whole_project_directory_is_checked_when_no_job_is_named() {
         let declared = declared_with_secret_env("nightly-sync", "load", "warehouse_pw");
 
         let error = format!("{:?}", declared.check_secret_env_is_satisfied(&map(&[]), None).unwrap_err());

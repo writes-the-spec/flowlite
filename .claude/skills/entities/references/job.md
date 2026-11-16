@@ -1,6 +1,6 @@
 # `Job` (Declared)
 
-One per job YAML file under `<data_dir>/jobs/*.yml` — the *definition*; an execution is a [`job_run`](job_run.md). A struct in `Declared` ([src/declared/declared.rs](../../../../src/declared/declared.rs)), not a table: loaded from the YAML by every process that needs it.
+One per job YAML file under `<project_dir>/jobs/*.yml` — the *definition*; an execution is a [`job_run`](job_run.md). A struct in `Declared` ([src/declared/declared.rs](../../../../src/declared/declared.rs)), not a table: loaded from the YAML by every process that needs it.
 
 | Field | Meaning |
 |---|---|

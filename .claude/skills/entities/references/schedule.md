@@ -1,6 +1,6 @@
 # `Schedule` (Declared)
 
-One per schedule YAML file under `<data_dir>/schedules/*.yml`, a struct in `Declared` ([src/declared/declared.rs](../../../../src/declared/declared.rs)). The [Scheduler](../../scheduler/SKILL.md) reconciles every one each pass, submitting a [`job_run`](job_run.md) for any of its next `submit_ahead` occurrences that has none. It decides which runs ought to exist, not when one is due, and never takes one back.
+One per schedule YAML file under `<project_dir>/schedules/*.yml`, a struct in `Declared` ([src/declared/declared.rs](../../../../src/declared/declared.rs)). The [Scheduler](../../scheduler/SKILL.md) reconciles every one each pass, submitting a [`job_run`](job_run.md) for any of its next `submit_ahead` occurrences that has none. It decides which runs ought to exist, not when one is due, and never takes one back.
 
 | Field | Meaning |
 |---|---|

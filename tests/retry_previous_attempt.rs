@@ -7,7 +7,7 @@ use std::time::Duration;
 mod common;
 use common::{flowlite, install_job, is_up, serve, until, ServerGuard};
 
-fn data_dir() -> PathBuf {
+fn project_dir() -> PathBuf {
     let dir = std::env::temp_dir()
         .join(format!("flowlite-retry-{}", uuid::Uuid::new_v4()));
 
@@ -29,7 +29,7 @@ tasks:
 #[test]
 fn a_retry_reads_the_stderr_of_the_attempt_that_failed() {
 
-    let dir = data_dir();
+    let dir = project_dir();
 
     install_job(&dir, "flaky.yaml", FLAKY);
 

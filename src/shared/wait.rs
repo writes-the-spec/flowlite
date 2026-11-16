@@ -13,7 +13,7 @@ use super::job_run::select_job_run;
 
 /// Refuses a wait that nothing would ever end.
 ///
-/// The waits below poll a row that only the serve process writes, so waiting on a data
+/// The waits below poll a row that only the serve process writes, so waiting on a project
 /// directory nothing is serving blocks for ever on a row that cannot change - silently,
 /// which is worse than failing. Read once, before the wait rather than on every pass: a
 /// wait is allowed to span a deliberate restart of serve, which is a reasonable thing to
@@ -21,19 +21,19 @@ use super::job_run::select_job_run;
 ///
 /// `Starting` counts as served. That server has the lock and will reach the row.
 ///
-/// The refusal comes back as a typed `DataDirNotServed`, not a finished sentence - see the
-/// type. Each frontend words its own remedy: the CLI's is `describe_unserved_data_dir`
+/// The refusal comes back as a typed `ProjectDirNotServed`, not a finished sentence - see the
+/// type. Each frontend words its own remedy: the CLI's is `describe_unserved_project_dir`
 /// (`src/cli/commands/job.rs`), the MCP server's is in `src/mcp/tools/result.rs`.
-pub(crate) fn ensure_data_dir_is_served(data_dir: &str) -> anyhow::Result<()> {
+pub(crate) fn ensure_project_dir_is_served(project_dir: &str) -> anyhow::Result<()> {
 
-    if matches!(status(Path::new(data_dir))?, ServeStatus::Down) {
-        return Err(DataDirNotServed { data_dir: data_dir.to_string() }.into());
+    if matches!(status(Path::new(project_dir))?, ServeStatus::Down) {
+        return Err(ProjectDirNotServed { project_dir: project_dir.to_string() }.into());
     }
 
     Ok(())
 }
 
-/// The one fact `ensure_data_dir_is_served` refuses on: nothing is serving this directory,
+/// The one fact `ensure_project_dir_is_served` refuses on: nothing is serving this directory,
 /// so the row a wait polls has no writer.
 ///
 /// A typed value rather than a finished sentence, for the same reason `JobIdAlreadyInstalled`
@@ -41,17 +41,17 @@ pub(crate) fn ensure_data_dir_is_served(data_dir: &str) -> anyhow::Result<()> {
 /// on what that is. `--wait` is a CLI flag; the MCP tools take a `wait_seconds` argument and
 /// have no flags at all, so telling an agent to "drop --wait" names something it never sent.
 #[derive(Debug)]
-pub struct DataDirNotServed {
-    pub data_dir: String,
+pub struct ProjectDirNotServed {
+    pub project_dir: String,
 }
 
-impl std::fmt::Display for DataDirNotServed {
+impl std::fmt::Display for ProjectDirNotServed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Data directory {} is not being served", self.data_dir)
+        write!(f, "Project directory {} is not being served", self.project_dir)
     }
 }
 
-impl std::error::Error for DataDirNotServed {}
+impl std::error::Error for ProjectDirNotServed {}
 
 /// Blocks until the run has settled, and reports it as it settled.
 ///
@@ -119,28 +119,28 @@ mod tests {
     /// wait polls has no writer and the command would sit there for ever. The check itself
     /// raises the typed fact and nothing more - the remedy sentence belongs to the caller.
     #[test]
-    fn waiting_on_an_unserved_data_dir_is_refused_naming_it() {
+    fn waiting_on_an_unserved_project_dir_is_refused_naming_it() {
 
-        let data_dir = std::env::temp_dir().join(format!("flowlite-unserved-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&data_dir).unwrap();
+        let project_dir = std::env::temp_dir().join(format!("flowlite-unserved-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&project_dir).unwrap();
 
-        let error = ensure_data_dir_is_served(&data_dir.to_string_lossy()).unwrap_err();
+        let error = ensure_project_dir_is_served(&project_dir.to_string_lossy()).unwrap_err();
 
-        assert!(error.downcast_ref::<DataDirNotServed>().is_some(), "{error:#}");
-        assert!(error.to_string().contains(&data_dir.to_string_lossy().to_string()), "{error}");
+        assert!(error.downcast_ref::<ProjectDirNotServed>().is_some(), "{error:#}");
+        assert!(error.to_string().contains(&project_dir.to_string_lossy().to_string()), "{error}");
     }
 
     /// The lock is what `serve` holds for as long as it runs, so holding it here is the
     /// directory looking served to anything that asks.
     #[test]
-    fn waiting_on_a_served_data_dir_is_allowed() {
+    fn waiting_on_a_served_project_dir_is_allowed() {
 
-        let data_dir = std::env::temp_dir().join(format!("flowlite-served-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&data_dir).unwrap();
+        let project_dir = std::env::temp_dir().join(format!("flowlite-served-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&project_dir).unwrap();
 
-        let _lock = ServeLock::acquire(&data_dir).unwrap();
+        let _lock = ServeLock::acquire(&project_dir).unwrap();
 
-        assert!(ensure_data_dir_is_served(&data_dir.to_string_lossy()).is_ok());
+        assert!(ensure_project_dir_is_served(&project_dir.to_string_lossy()).is_ok());
     }
 
     #[tokio::test]

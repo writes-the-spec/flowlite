@@ -1,4 +1,4 @@
-//! `job submit -f <file>` — a run whose definition was never installed in the data
+//! `job submit -f <file>` — a run whose definition was never installed in the project
 //! directory. Driven through the built binary, since the feature is a CLI flag and what it
 //! must not do is leave anything behind for the next process.
 
@@ -8,8 +8,8 @@ use std::time::Duration;
 mod common;
 use common::{flowlite, install_job, is_up, serve, until, ServerGuard};
 
-/// An empty data directory: no jobs installed, so anything a test runs came from a file.
-fn data_dir(label: &str) -> PathBuf {
+/// An empty project directory: no jobs installed, so anything a test runs came from a file.
+fn project_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir()
         .join(format!("flowlite-adhoc-{label}-{}", uuid::Uuid::new_v4()));
 
@@ -39,7 +39,7 @@ const HELLO: &str = "id: hello\nname: Hello\ntasks:\n  - id: say\n    \
 /// is the whole point, since it is the handle everything afterwards needs.
 #[test]
 fn a_file_is_submitted_and_reports_its_run_id() {
-    let dir = data_dir("submits");
+    let dir = project_dir("submits");
     let file = job_file(&dir, "hello.yaml", HELLO);
 
     let out = flowlite(&dir, &["job", "submit", "-f", &file.to_string_lossy()]);
@@ -50,10 +50,10 @@ fn a_file_is_submitted_and_reports_its_run_id() {
 }
 
 /// The definition is read where it lies and never installed: the job must not appear in
-/// the data directory's own listing afterwards, or this is just a slow `cp`.
+/// the project directory's own listing afterwards, or this is just a slow `cp`.
 #[test]
 fn a_submitted_file_does_not_become_an_installed_job() {
-    let dir = data_dir("uninstalled");
+    let dir = project_dir("uninstalled");
     let file = job_file(&dir, "hello.yaml", HELLO);
 
     let out = flowlite(&dir, &["job", "submit", "-f", &file.to_string_lossy()]);
@@ -69,7 +69,7 @@ fn a_submitted_file_does_not_become_an_installed_job() {
 /// meant.
 #[test]
 fn a_file_whose_id_is_already_installed_is_refused() {
-    let dir = data_dir("collision");
+    let dir = project_dir("collision");
     install_job(&dir, "hello.yaml", HELLO);
     let file = job_file(&dir, "other.yaml", HELLO);
 
@@ -82,10 +82,10 @@ fn a_file_whose_id_is_already_installed_is_refused() {
 }
 
 /// The same validators an installed job is held to, reaching a file that was never
-/// installed — and naming the file, not a job in the data directory.
+/// installed — and naming the file, not a job in the project directory.
 #[test]
 fn a_file_whose_tasks_cycle_is_refused_naming_the_file() {
-    let dir = data_dir("cycle");
+    let dir = project_dir("cycle");
     let file = job_file(
         &dir,
         "cycle.yaml",
@@ -105,7 +105,7 @@ fn a_file_whose_tasks_cycle_is_refused_naming_the_file() {
 /// unconfigured secret would degrade from a refusal into a spawn-time failure.
 #[test]
 fn a_file_naming_an_undefined_secret_is_refused() {
-    let dir = data_dir("secret");
+    let dir = project_dir("secret");
     let file = job_file(
         &dir,
         "needs-secret.yaml",
@@ -126,7 +126,7 @@ fn a_file_naming_an_undefined_secret_is_refused() {
 /// to do with.
 #[test]
 fn an_installed_job_with_an_undefined_secret_does_not_refuse_a_file_submit() {
-    let dir = data_dir("secret-scope");
+    let dir = project_dir("secret-scope");
     install_job(
         &dir,
         "nightly.yaml",
@@ -149,7 +149,7 @@ fn an_installed_job_with_an_undefined_secret_does_not_refuse_a_file_submit() {
 /// `--wait` reports how it ended.
 #[test]
 fn a_served_directory_runs_a_file_submit_to_success() {
-    let dir = data_dir("runs");
+    let dir = project_dir("runs");
     let file = job_file(&dir, "hello.yaml", HELLO);
 
     let mut server = ServerGuard::new(serve(&dir, 18220), libc::SIGTERM);
@@ -168,7 +168,7 @@ fn a_served_directory_runs_a_file_submit_to_success() {
 /// came from. Nothing else in the system can answer this once the file is gone.
 #[test]
 fn a_file_submit_is_still_rerunnable_after_the_file_is_deleted() {
-    let dir = data_dir("rerun");
+    let dir = project_dir("rerun");
     let file = job_file(&dir, "hello.yaml", HELLO);
 
     let submitted = flowlite(&dir, &["job", "submit", "-f", &file.to_string_lossy(), "--json"]);
@@ -196,7 +196,7 @@ fn a_file_submit_is_still_rerunnable_after_the_file_is_deleted() {
 async fn the_run_page_shows_an_absent_job_as_text_rather_than_a_link() {
     install_crypto_provider();
 
-    let dir = data_dir("run-page");
+    let dir = project_dir("run-page");
     let file = job_file(&dir, "hello.yaml", HELLO);
 
     let mut server = ServerGuard::new(serve(&dir, 18221), libc::SIGTERM);
@@ -231,7 +231,7 @@ async fn the_run_page_shows_an_absent_job_as_text_rather_than_a_link() {
 async fn the_page_for_an_absent_job_is_a_real_page() {
     install_crypto_provider();
 
-    let dir = data_dir("job-page");
+    let dir = project_dir("job-page");
 
     let mut server = ServerGuard::new(serve(&dir, 18222), libc::SIGTERM);
     assert!(until(Duration::from_secs(30), || is_up(&dir)), "the server never came up");

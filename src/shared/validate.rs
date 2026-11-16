@@ -1,5 +1,5 @@
-//! Whether `serve` would start on this data directory's configuration: what `flowlite
-//! validate` and the `validate_data_dir` tool answer, and what `serve` itself loads.
+//! Whether `serve` would start on this project directory's configuration: what `flowlite
+//! validate` and the `validate_project_dir` tool answer, and what `serve` itself loads.
 
 use serde::Serialize;
 
@@ -8,7 +8,7 @@ use crate::declared::Declared;
 
 
 /// What a configuration that passed holds, for `flowlite validate --json` and the
-/// `validate_data_dir` tool.
+/// `validate_project_dir` tool.
 #[derive(Debug, Serialize)]
 pub struct ValidateResult {
     pub jobs: usize,

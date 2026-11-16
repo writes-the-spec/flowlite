@@ -17,9 +17,9 @@ use common::ServerGuard;
 
 const BINARY: &str = env!("CARGO_BIN_EXE_flowlite");
 
-/// A data directory with one job whose only task names a secret nothing defines - no
+/// A project directory with one job whose only task names a secret nothing defines - no
 /// flowlite.toml at all, so `app_config.secrets` is empty.
-fn data_dir_with_unresolvable_secret() -> PathBuf {
+fn project_dir_with_unresolvable_secret() -> PathBuf {
     let dir = std::env::temp_dir()
         .join(format!("flowlite-secret-check-{}", uuid::Uuid::new_v4()));
 
@@ -45,11 +45,11 @@ fn data_dir_with_unresolvable_secret() -> PathBuf {
 /// obvious from the message alone.
 #[test]
 fn a_served_job_naming_an_undefined_secret_refuses_naming_job_task_and_secret() {
-    let dir = data_dir_with_unresolvable_secret();
+    let dir = project_dir_with_unresolvable_secret();
 
     let mut guard = ServerGuard::new(
         Command::new(BINARY)
-            .args(["--data-dir", &dir.to_string_lossy(), "serve", "--port", "18210"])
+            .args(["--project-dir", &dir.to_string_lossy(), "serve", "--port", "18210"])
             .stderr(Stdio::piped())
             .spawn()
             .unwrap(),
@@ -79,10 +79,10 @@ fn a_served_job_naming_an_undefined_secret_refuses_naming_job_task_and_secret() 
 /// `Declared::load` itself, this is the assertion that fails.
 #[test]
 fn job_list_still_works_in_a_directory_serve_refuses() {
-    let dir = data_dir_with_unresolvable_secret();
+    let dir = project_dir_with_unresolvable_secret();
 
     let output = Command::new(BINARY)
-        .args(["--data-dir", &dir.to_string_lossy(), "job", "list"])
+        .args(["--project-dir", &dir.to_string_lossy(), "job", "list"])
         .output()
         .unwrap();
 
@@ -102,10 +102,10 @@ fn job_list_still_works_in_a_directory_serve_refuses() {
 /// `job list` test above exists to catch.
 #[test]
 fn job_run_list_still_works_in_a_directory_serve_refuses() {
-    let dir = data_dir_with_unresolvable_secret();
+    let dir = project_dir_with_unresolvable_secret();
 
     let output = Command::new(BINARY)
-        .args(["--data-dir", &dir.to_string_lossy(), "job-run", "list"])
+        .args(["--project-dir", &dir.to_string_lossy(), "job-run", "list"])
         .output()
         .unwrap();
 

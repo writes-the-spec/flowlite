@@ -1,6 +1,6 @@
-//! What `flowlite init` lays into a data directory, and the files themselves.
+//! What `flowlite init` lays into a project directory, and the files themselves.
 //!
-//! Here rather than in `src/cli/` because the MCP `init_data_dir` tool scaffolds the same
+//! Here rather than in `src/cli/` because the MCP `init_project_dir` tool scaffolds the same
 //! directory the command does, and a frontend may not import another's. What stays
 //! frontend-side is the wording: the command's report is prose for a terminal, the tool's
 //! result is JSON for a model, and neither is the fact the other needs.
@@ -26,12 +26,12 @@ pub struct ScaffoldedFile {
 /// the tool takes no argument saying which one it acted on.
 #[derive(Serialize)]
 pub struct InitResult {
-    pub data_dir: String,
+    pub project_dir: String,
     pub files: Vec<ScaffoldedFile>,
 }
 
 
-/// What a fresh data directory gets, in the order the report prints it. The job and the
+/// What a fresh project directory gets, in the order the report prints it. The job and the
 /// schedule are one example between them - the schedule fires the job id the job file
 /// declares - so renaming either without the other is a startup error, which
 /// `the_example_schedule_parses_and_fires_the_job_beside_it` is there to catch.
@@ -83,8 +83,8 @@ const FLOWLITE_TOML: &str = r#"# flowlite configuration. Everything here has a d
 # every other default alone. Each key can also be set as an environment variable:
 # FLOWLITE_UI__PAGE_SIZE=10, FLOWLITE_ORCHESTRATOR__POLL_INTERVAL_SECONDS=5.
 #
-# The data directory itself is the one thing not worth setting here - naming it in a file
-# inside it is circular. Pass -D / --data-dir / FLOWLITE_DATA_DIR.
+# The project directory itself is the one thing not worth setting here - naming it in a file
+# inside it is circular. Pass -p / --project-dir / FLOWLITE_PROJECT_DIR.
 
 # [orchestrator]
 # poll_interval_seconds = 1       # how often a service looks for work itself
@@ -136,7 +136,7 @@ const FLOWLITE_TOML: &str = r#"# flowlite configuration. Everything here has a d
 # What a job's secret_env: resolves its values against, by name. A name is [a-z0-9_]+ with
 # no __ in it, so either spelling reaches the same name. The file suits a development box;
 # FLOWLITE_SECRETS__WAREHOUSE_PW=hunter2 suits a real one, since a value written here sits
-# in the data directory beside the jobs/ you were told to commit.
+# in the project directory beside the jobs/ you were told to commit.
 # [secrets]
 # warehouse_pw = "hunter2"
 
@@ -151,10 +151,10 @@ const FLOWLITE_TOML: &str = r#"# flowlite configuration. Everything here has a d
 
 /// Lays the example files down, leaving any that are already there untouched: re-running
 /// `init` in a directory someone has been working in must not be how they lose that work.
-pub fn scaffold(data_dir: &Path) -> anyhow::Result<Vec<ScaffoldedFile>> {
+pub fn scaffold(project_dir: &Path) -> anyhow::Result<Vec<ScaffoldedFile>> {
 
     for directory in ["jobs", "schedules"] {
-        let path = data_dir.join(directory);
+        let path = project_dir.join(directory);
         std::fs::create_dir_all(&path)
             .with_context(|| format!("Failed to create {}", path.display()))?;
     }
@@ -163,7 +163,7 @@ pub fn scaffold(data_dir: &Path) -> anyhow::Result<Vec<ScaffoldedFile>> {
 
     for (relative_path, contents) in SCAFFOLD {
 
-        let path = data_dir.join(relative_path);
+        let path = project_dir.join(relative_path);
         let created = !path.exists();
 
         if created {
@@ -189,28 +189,28 @@ mod tests {
         std::env::temp_dir().join(format!("flowlite-init-test-{}", uuid::Uuid::new_v4()))
     }
 
-    /// The directory named by `-D` need not exist yet, which is the whole point of the
-    /// command: `flowlite -D new-project init` is the first thing anyone runs.
+    /// The directory named by `-p` need not exist yet, which is the whole point of the
+    /// command: `flowlite -p new-project init` is the first thing anyone runs.
     #[test]
     fn a_directory_that_does_not_exist_yet_is_created_with_its_three_files() {
-        let data_dir = a_temp_dir();
+        let project_dir = a_temp_dir();
 
-        scaffold(&data_dir).unwrap();
+        scaffold(&project_dir).unwrap();
 
-        assert!(data_dir.join("jobs/hello.yaml").exists());
-        assert!(data_dir.join("schedules/daily-hello.yaml").exists());
-        assert!(data_dir.join("flowlite.toml").exists());
+        assert!(project_dir.join("jobs/hello.yaml").exists());
+        assert!(project_dir.join("schedules/daily-hello.yaml").exists());
+        assert!(project_dir.join("flowlite.toml").exists());
     }
 
     /// A scaffold that does not parse would fail at the first `flowlite serve`, which is
     /// the one moment a new user has no way to tell their mistake from ours.
     #[test]
     fn the_example_job_parses_as_a_job() {
-        let data_dir = a_temp_dir();
+        let project_dir = a_temp_dir();
 
-        scaffold(&data_dir).unwrap();
+        scaffold(&project_dir).unwrap();
 
-        let job = JobYaml::from_yaml(&data_dir.join("jobs/hello.yaml")).unwrap();
+        let job = JobYaml::from_yaml(&project_dir.join("jobs/hello.yaml")).unwrap();
 
         assert_eq!(job.id, "hello-world");
         assert_eq!(job.tasks.len(), 2);
@@ -221,12 +221,12 @@ mod tests {
     /// would happen.
     #[test]
     fn the_example_schedule_parses_and_fires_the_job_beside_it() {
-        let data_dir = a_temp_dir();
+        let project_dir = a_temp_dir();
 
-        scaffold(&data_dir).unwrap();
+        scaffold(&project_dir).unwrap();
 
-        let job = JobYaml::from_yaml(&data_dir.join("jobs/hello.yaml")).unwrap();
-        let schedule = ScheduleYaml::from_yaml(&data_dir.join("schedules/daily-hello.yaml")).unwrap();
+        let job = JobYaml::from_yaml(&project_dir.join("jobs/hello.yaml")).unwrap();
+        let schedule = ScheduleYaml::from_yaml(&project_dir.join("schedules/daily-hello.yaml")).unwrap();
 
         assert_eq!(schedule.jobs.len(), 1);
         assert_eq!(schedule.jobs[0].id, job.id);
@@ -236,17 +236,17 @@ mod tests {
     /// they lose that work.
     #[test]
     fn a_second_init_keeps_an_edited_file_as_it_is() {
-        let data_dir = a_temp_dir();
+        let project_dir = a_temp_dir();
 
-        scaffold(&data_dir).unwrap();
-        std::fs::write(data_dir.join("jobs/hello.yaml"), "id: mine\nname: Mine\n").unwrap();
+        scaffold(&project_dir).unwrap();
+        std::fs::write(project_dir.join("jobs/hello.yaml"), "id: mine\nname: Mine\n").unwrap();
 
-        let files = scaffold(&data_dir).unwrap();
+        let files = scaffold(&project_dir).unwrap();
 
         let job = files.iter().find(|file| file.relative_path == "jobs/hello.yaml").unwrap();
         assert!(!job.created);
         assert_eq!(
-            std::fs::read_to_string(data_dir.join("jobs/hello.yaml")).unwrap(),
+            std::fs::read_to_string(project_dir.join("jobs/hello.yaml")).unwrap(),
             "id: mine\nname: Mine\n",
         );
     }
@@ -256,11 +256,11 @@ mod tests {
     /// goes stale.
     #[test]
     fn the_example_config_is_comments_only() {
-        let data_dir = a_temp_dir();
+        let project_dir = a_temp_dir();
 
-        scaffold(&data_dir).unwrap();
+        scaffold(&project_dir).unwrap();
 
-        let config = std::fs::read_to_string(data_dir.join("flowlite.toml")).unwrap();
+        let config = std::fs::read_to_string(project_dir.join("flowlite.toml")).unwrap();
 
         for line in config.lines() {
             let line = line.trim();
@@ -272,16 +272,16 @@ mod tests {
     /// the path it was written at rather than by this struct's field name.
     #[test]
     fn the_result_an_agent_reads_names_the_directory_and_each_file_by_path() {
-        let data_dir = a_temp_dir();
+        let project_dir = a_temp_dir();
 
         let result = InitResult {
-            data_dir: data_dir.display().to_string(),
-            files: scaffold(&data_dir).unwrap(),
+            project_dir: project_dir.display().to_string(),
+            files: scaffold(&project_dir).unwrap(),
         };
 
         let json = serde_json::to_value(&result).unwrap();
 
-        assert_eq!(json["data_dir"], data_dir.display().to_string());
+        assert_eq!(json["project_dir"], project_dir.display().to_string());
         assert_eq!(json["files"][0]["path"], "jobs/hello.yaml");
         assert_eq!(json["files"][0]["created"], true);
         assert!(json["files"][0].get("relative_path").is_none(), "{json}");

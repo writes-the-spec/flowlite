@@ -1,6 +1,6 @@
 # JobYaml
 
-[src/yaml_models/job_yaml.rs](../../../../src/yaml_models/job_yaml.rs) — one file per job under `<data_dir>/jobs/*.yml`, loaded as a `Job` and its `Task`s.
+[src/yaml_models/job_yaml.rs](../../../../src/yaml_models/job_yaml.rs) — one file per job under `<project_dir>/jobs/*.yml`, loaded as a `Job` and its `Task`s.
 
 ```yaml
 id: my-job

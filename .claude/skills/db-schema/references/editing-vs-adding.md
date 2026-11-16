@@ -15,11 +15,11 @@ Only restoring the file byte-for-byte or resetting the database recovers.
 ## Check, don't assume
 
 ```bash
-sqlite3 "<data_dir>/.flowlite/flowlite.db" \
+sqlite3 "<project_dir>/.flowlite/flowlite.db" \
   "SELECT version, description FROM _sqlx_migrations ORDER BY version;"
 ```
 
-Without `-D` the data directory is the current one, so a dev instance's database is `./.flowlite/flowlite.db` wherever it was started.
+Without `-p` the project directory is the current one, so a dev instance's database is `./.flowlite/flowlite.db` wherever it was started.
 
 ## The call
 

@@ -8,7 +8,7 @@
     "should_trigger": true
   },
   {
-    "query": "why is a second serve on the same data directory refused",
+    "query": "why is a second serve on the same project directory refused",
     "should_trigger": true
   },
   {

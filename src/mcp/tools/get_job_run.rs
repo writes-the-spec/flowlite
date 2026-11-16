@@ -14,10 +14,10 @@ use crate::crud::CRUD;
 use crate::mcp::wait::{clamp_wait_seconds, wait_for_settled_job_run};
 use crate::mcp::McpServer;
 use crate::shared::job_run::{build_job_run_detail, JobRunDetail};
-use crate::shared::wait::ensure_data_dir_is_served;
+use crate::shared::wait::ensure_project_dir_is_served;
 use crate::toolkit::Toolkit;
 
-use super::result::{describe_unserved_data_dir, error_result, success_json};
+use super::result::{describe_unserved_project_dir, error_result, success_json};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -59,8 +59,8 @@ async fn get_job_run_detail(
     // the serve process settles this row, so waiting on a directory nothing serves is a
     // silent hang.
     if wait_seconds > 0 {
-        ensure_data_dir_is_served(&toolkit.app_config.data_dir)
-            .map_err(describe_unserved_data_dir)?;
+        ensure_project_dir_is_served(&toolkit.app_config.project_dir)
+            .map_err(describe_unserved_project_dir)?;
     }
 
     let mut conn = toolkit.get_conn().await?;

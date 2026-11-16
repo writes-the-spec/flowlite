@@ -77,7 +77,7 @@ pub struct ScheduleJob {
 }
 
 
-/// Every job, task and schedule the data directory declares, with `[job_defaults]` and
+/// Every job, task and schedule the project directory declares, with `[job_defaults]` and
 /// `[schedule_defaults]` already applied. Each list is in reading order: files sorted by
 /// path, and the entries of one file as written - so a job's tasks come back in the order
 /// its YAML lists them.
@@ -98,11 +98,11 @@ impl Declared {
 
     pub fn load(app_config: &AppConfig) -> anyhow::Result<Declared> {
 
-        let data_dir = PathBuf::from(&app_config.data_dir);
+        let project_dir = PathBuf::from(&app_config.project_dir);
 
         let mut declared = Declared::default();
 
-        let jobs_dir = data_dir.join("jobs");
+        let jobs_dir = project_dir.join("jobs");
         if jobs_dir.exists() {
             for job_path in read_dir_sorted(&jobs_dir)? {
                 if is_yaml_file(&job_path) {
@@ -114,7 +114,7 @@ impl Declared {
         }
 
         // After every job, since a schedule may only name a job some file declared.
-        let schedules_dir = data_dir.join("schedules");
+        let schedules_dir = project_dir.join("schedules");
         if schedules_dir.exists() {
             for schedule_path in read_dir_sorted(&schedules_dir)? {
                 if is_yaml_file(&schedule_path) {
@@ -129,7 +129,7 @@ impl Declared {
     }
 
     /// The only place a JobYaml becomes a `Job` and its `Task`s. `load` calls it once per
-    /// file in the data directory; `add_ad_hoc_job` calls it for a file that is never
+    /// file in the project directory; `add_ad_hoc_job` calls it for a file that is never
     /// installed there. A run's definition is built from what this produces either way, so
     /// the two must not drift.
     pub(super) fn add_job(
@@ -344,18 +344,18 @@ fn read_dir_sorted(path: &Path) -> anyhow::Result<Vec<PathBuf>> {
 mod tests {
     use super::*;
 
-    fn data_dir() -> PathBuf {
+    fn project_dir() -> PathBuf {
         std::env::temp_dir().join(format!("flowlite-declared-{}", uuid::Uuid::new_v4()))
     }
 
-    fn write_yaml(data_dir: &Path, directory: &str, file_name: &str, content: &str) {
-        std::fs::create_dir_all(data_dir.join(directory)).unwrap();
-        std::fs::write(data_dir.join(directory).join(file_name), content).unwrap();
+    fn write_yaml(project_dir: &Path, directory: &str, file_name: &str, content: &str) {
+        std::fs::create_dir_all(project_dir.join(directory)).unwrap();
+        std::fs::write(project_dir.join(directory).join(file_name), content).unwrap();
     }
 
-    fn load(data_dir: &Path, concurrency_limits: BTreeMap<String, u32>) -> anyhow::Result<Declared> {
+    fn load(project_dir: &Path, concurrency_limits: BTreeMap<String, u32>) -> anyhow::Result<Declared> {
         Declared::load(&AppConfig {
-            data_dir: data_dir.to_string_lossy().into_owned(),
+            project_dir: project_dir.to_string_lossy().into_owned(),
             concurrency_limits,
             ..AppConfig::default()
         })
@@ -374,8 +374,8 @@ tasks:
     #[test]
     fn a_job_naming_limits_at_both_levels_keeps_them_on_the_job_and_the_task() {
 
-        let data_dir = data_dir();
-        write_yaml(&data_dir, "jobs", "nightly.yaml", "
+        let project_dir = project_dir();
+        write_yaml(&project_dir, "jobs", "nightly.yaml", "
 id: nightly-sync
 name: Nightly Sync
 limits: [warehouse]
@@ -385,7 +385,7 @@ tasks:
     limits: [warehouse, api]
 ");
 
-        let declared = load(&data_dir, BTreeMap::from([
+        let declared = load(&project_dir, BTreeMap::from([
             ("warehouse".to_string(), 3),
             ("api".to_string(), 1),
         ])).unwrap();
@@ -393,31 +393,31 @@ tasks:
         assert_eq!(declared.job("nightly-sync").unwrap().limits, vec!["warehouse"]);
         assert_eq!(declared.task("nightly-sync", "ingest").unwrap().limits, vec!["warehouse", "api"]);
 
-        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project_dir);
     }
 
     /// A job that never declares `keep_runs:` gets `[job_defaults]`'s value, not 0.
     #[test]
     fn a_job_omitting_keep_runs_gets_the_job_defaults_value() {
 
-        let data_dir = data_dir();
-        write_yaml(&data_dir, "jobs", "nightly.yaml", NIGHTLY_SYNC);
+        let project_dir = project_dir();
+        write_yaml(&project_dir, "jobs", "nightly.yaml", NIGHTLY_SYNC);
 
-        let declared = load(&data_dir, BTreeMap::new()).unwrap();
+        let declared = load(&project_dir, BTreeMap::new()).unwrap();
 
         assert_eq!(
             declared.job("nightly-sync").unwrap().keep_runs,
             AppConfig::default().job_defaults.keep_runs,
         );
 
-        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project_dir);
     }
 
     #[test]
     fn a_job_declaring_keep_runs_keeps_its_own_value() {
 
-        let data_dir = data_dir();
-        write_yaml(&data_dir, "jobs", "nightly.yaml", "
+        let project_dir = project_dir();
+        write_yaml(&project_dir, "jobs", "nightly.yaml", "
 id: nightly-sync
 name: Nightly Sync
 keep_runs: 400
@@ -426,19 +426,19 @@ tasks:
     command: ./run.sh
 ");
 
-        let declared = load(&data_dir, BTreeMap::new()).unwrap();
+        let declared = load(&project_dir, BTreeMap::new()).unwrap();
 
         assert_eq!(declared.job("nightly-sync").unwrap().keep_runs, 400);
 
-        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project_dir);
     }
 
     /// The order `submit_job` creates a run's task runs in.
     #[test]
     fn a_jobs_tasks_come_back_in_the_order_its_yaml_lists_them() {
 
-        let data_dir = data_dir();
-        write_yaml(&data_dir, "jobs", "nightly.yaml", "
+        let project_dir = project_dir();
+        write_yaml(&project_dir, "jobs", "nightly.yaml", "
 id: nightly-sync
 name: Nightly Sync
 tasks:
@@ -448,7 +448,7 @@ tasks:
     command: ./extract.sh
 ");
 
-        let declared = load(&data_dir, BTreeMap::new()).unwrap();
+        let declared = load(&project_dir, BTreeMap::new()).unwrap();
 
         let task_ids: Vec<&str> = declared.tasks_of("nightly-sync")
             .iter()
@@ -457,30 +457,30 @@ tasks:
 
         assert_eq!(task_ids, vec!["load", "extract"]);
 
-        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project_dir);
     }
 
     #[test]
     fn two_files_declaring_one_job_id_are_refused() {
 
-        let data_dir = data_dir();
-        write_yaml(&data_dir, "jobs", "a.yaml", NIGHTLY_SYNC);
-        write_yaml(&data_dir, "jobs", "b.yaml", NIGHTLY_SYNC);
+        let project_dir = project_dir();
+        write_yaml(&project_dir, "jobs", "a.yaml", NIGHTLY_SYNC);
+        write_yaml(&project_dir, "jobs", "b.yaml", NIGHTLY_SYNC);
 
-        let error = load(&data_dir, BTreeMap::new()).unwrap_err().to_string();
+        let error = load(&project_dir, BTreeMap::new()).unwrap_err().to_string();
 
         assert!(error.contains("nightly-sync"), "{error}");
         assert!(error.contains("b.yaml"), "{error}");
 
-        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project_dir);
     }
 
     #[test]
     fn a_schedule_naming_a_job_nothing_declares_is_refused() {
 
-        let data_dir = data_dir();
-        write_yaml(&data_dir, "jobs", "nightly.yaml", NIGHTLY_SYNC);
-        write_yaml(&data_dir, "schedules", "nightly.yaml", "
+        let project_dir = project_dir();
+        write_yaml(&project_dir, "jobs", "nightly.yaml", NIGHTLY_SYNC);
+        write_yaml(&project_dir, "schedules", "nightly.yaml", "
 id: nightly
 name: Nightly
 cron: '0 0 3 * * *'
@@ -488,20 +488,20 @@ jobs:
   - id: nightly-snyc
 ");
 
-        let error = load(&data_dir, BTreeMap::new()).unwrap_err().to_string();
+        let error = load(&project_dir, BTreeMap::new()).unwrap_err().to_string();
 
         assert!(error.contains("'nightly'"), "{error}");
         assert!(error.contains("nightly-snyc"), "{error}");
 
-        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project_dir);
     }
 
     #[test]
     fn a_schedule_gets_the_schedule_defaults_timezone_and_lists_its_jobs() {
 
-        let data_dir = data_dir();
-        write_yaml(&data_dir, "jobs", "nightly.yaml", NIGHTLY_SYNC);
-        write_yaml(&data_dir, "schedules", "nightly.yaml", "
+        let project_dir = project_dir();
+        write_yaml(&project_dir, "jobs", "nightly.yaml", NIGHTLY_SYNC);
+        write_yaml(&project_dir, "schedules", "nightly.yaml", "
 id: nightly
 name: Nightly
 cron: '0 0 3 * * *'
@@ -511,7 +511,7 @@ jobs:
       region: eu
 ");
 
-        let declared = load(&data_dir, BTreeMap::new()).unwrap();
+        let declared = load(&project_dir, BTreeMap::new()).unwrap();
 
         let schedule = declared.schedule("nightly").unwrap();
 
@@ -526,13 +526,13 @@ jobs:
         assert_eq!(schedule_jobs[0].job_id, "nightly-sync");
         assert_eq!(schedule_jobs[0].parameters["region"], "eu");
 
-        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project_dir);
     }
 
     #[test]
-    fn a_data_dir_with_no_yaml_declares_nothing() {
+    fn a_project_dir_with_no_yaml_declares_nothing() {
 
-        let declared = load(&data_dir(), BTreeMap::new()).unwrap();
+        let declared = load(&project_dir(), BTreeMap::new()).unwrap();
 
         assert!(declared.jobs.is_empty());
         assert!(declared.schedules.is_empty());

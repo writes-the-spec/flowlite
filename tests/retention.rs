@@ -19,7 +19,7 @@ use common::{flowlite, install_job, is_up, serve, until, ServerGuard};
 const HELLO_KEEPING_TWO: &str = "id: hello\nname: Hello\nkeep_runs: 2\ntasks:\n  - id: say\n    \
                                  description: Says hello\n    command: echo hello\n";
 
-fn data_dir(label: &str) -> PathBuf {
+fn project_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir()
         .join(format!("flowlite-retention-{label}-{}", uuid::Uuid::new_v4()));
 
@@ -45,7 +45,7 @@ fn listed_run_ids(dir: &Path) -> Vec<i64> {
 /// the wrong end would also level off.
 #[test]
 fn a_served_directory_trims_a_jobs_history_to_its_keep_runs() {
-    let dir = data_dir("keep-runs");
+    let dir = project_dir("keep-runs");
     install_job(&dir, "hello.yaml", HELLO_KEEPING_TWO);
 
     let mut server = ServerGuard::new(serve(&dir, 18240), libc::SIGTERM);

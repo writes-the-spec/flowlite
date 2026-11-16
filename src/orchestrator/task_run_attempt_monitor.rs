@@ -234,7 +234,7 @@ impl TaskRunAttemptMonitor {
     /// will parse, and half a document parses as a whole one often enough to matter.
     fn read_task_output(&self, task_run_attempt: &TaskRunAttempt) -> Result<String, String> {
 
-        let job_run_dir = job_run_dir(&self.app_config.data_dir, task_run_attempt.job_run_id)
+        let job_run_dir = job_run_dir(&self.app_config.project_dir, task_run_attempt.job_run_id)
             .map_err(|error| format!("flowlite: {:#}\n", error))?;
 
         let path = task_output_path(
@@ -720,7 +720,7 @@ mod tests {
     fn write_result(db: &TestDb, task_run_attempt: &TaskRunAttempt, content: &[u8]) {
 
         let path = task_output_path(
-            &job_run_dir(&db.app_config().data_dir, task_run_attempt.job_run_id).unwrap(),
+            &job_run_dir(&db.app_config().project_dir, task_run_attempt.job_run_id).unwrap(),
             &task_run_attempt.task_id,
             task_run_attempt.attempt,
         );
@@ -1008,8 +1008,8 @@ mod tests {
         let _environment = reading_the_environment();
         let db = TestDb::new().await;
         let task_run_attempt = running_attempt(&db).await;
-        let cleaned = db.data_dir().join("cleaned");
-        let ready = db.data_dir().join("ready");
+        let cleaned = db.project_dir().join("cleaned");
+        let ready = db.project_dir().join("ready");
 
         db.insert_job_run_stop(task_run_attempt.job_run_id).await;
         db.spawn_running_child(
@@ -1039,7 +1039,7 @@ mod tests {
         let _environment = reading_the_environment();
         let db = TestDb::new().await;
         let task_run_attempt = running_attempt(&db).await;
-        let ready = db.data_dir().join("ready");
+        let ready = db.project_dir().join("ready");
 
         db.insert_job_run_stop(task_run_attempt.job_run_id).await;
         db.spawn_running_child(
@@ -1068,8 +1068,8 @@ mod tests {
         let _environment = reading_the_environment();
         let db = TestDb::new().await;
         let task_run_attempt = running_attempt(&db).await;
-        let cleaned = db.data_dir().join("cleaned");
-        let ready = db.data_dir().join("ready");
+        let cleaned = db.project_dir().join("cleaned");
+        let ready = db.project_dir().join("ready");
 
         db.spawn_running_child(
             &task_run_attempt,
@@ -1207,7 +1207,7 @@ mod tests {
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
-        let pid_file = db.data_dir().join("timeout.pid");
+        let pid_file = db.project_dir().join("timeout.pid");
 
         let task_run = db.insert_task_run_for_command(
             job_run.id,
@@ -1248,7 +1248,7 @@ mod tests {
         let db = TestDb::new().await;
 
         let job_run = db.insert_job_run(JobRunStatus::Running).await;
-        let pid_file = db.data_dir().join("stop.pid");
+        let pid_file = db.project_dir().join("stop.pid");
 
         let task_run = db.insert_task_run_for_command(
             job_run.id,
@@ -1457,7 +1457,7 @@ mod tests {
     async fn a_timeout_whose_note_cannot_be_written_still_ends_the_command() {
         let db = TestDb::new().await;
         let task_run_attempt = running_attempt(&db).await;
-        let pid_file = db.data_dir().join("pid");
+        let pid_file = db.project_dir().join("pid");
 
         db.spawn_running_child(
             &task_run_attempt,
@@ -1606,7 +1606,7 @@ mod tests {
         let db = TestDb::new().await;
         let task_run_attempt = running_attempt(&db).await;
 
-        let wrote = db.data_dir().join("wrote.pid");
+        let wrote = db.project_dir().join("wrote.pid");
 
         db.spawn_running_child(
             &task_run_attempt,
@@ -1691,7 +1691,7 @@ mod tests {
         let db = TestDb::new().await;
         let task_run_attempt = running_attempt(&db).await;
 
-        let pid_file = db.data_dir().join("pid");
+        let pid_file = db.project_dir().join("pid");
 
         db.spawn_running_child(
             &task_run_attempt,

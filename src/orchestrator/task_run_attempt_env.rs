@@ -44,7 +44,7 @@ pub fn build_task_run_attempt_env(
     task_run: &TaskRun,
     job_run: &JobRun,
     task_run_attempt: &TaskRunAttempt,
-    data_dir: &str,
+    project_dir: &str,
     job_run_dir: &Path,
     inputs: &BTreeMap<String, PathBuf>,
     previous_attempt: Option<&PreviousAttemptFiles>,
@@ -102,7 +102,7 @@ pub fn build_task_run_attempt_env(
     // Injected rather than inherited. The dispatcher strips every FLOWLITE_ variable the
     // child would have inherited, so a task command that calls flowlite itself gets the
     // directory this server is serving, for a stated reason instead of by accident.
-    env.insert("FLOWLITE_DATA_DIR".to_string(), data_dir.to_string());
+    env.insert("FLOWLITE_PROJECT_DIR".to_string(), project_dir.to_string());
 
     env.insert("FLOWLITE_JOB_ID".to_string(), job_run.job_id.clone());
     env.insert("FLOWLITE_JOB_RUN_ID".to_string(), job_run.id.to_string());
@@ -279,11 +279,11 @@ mod tests {
         assert_eq!(env.get("PYTHONUNBUFFERED").unwrap(), "1");
     }
 
-    /// The data directory is injected rather than inherited: the dispatcher strips every
+    /// The project directory is injected rather than inherited: the dispatcher strips every
     /// FLOWLITE_ variable it inherited, so a task command that calls flowlite itself would
     /// otherwise lose the directory it has to work on.
     #[test]
-    fn the_data_dir_is_injected() {
+    fn the_project_dir_is_injected() {
         let env = build_task_run_attempt_env(
             &task_run(map(&[])),
             &job_run(map(&[]), fixed_scheduled_at()),
@@ -295,7 +295,7 @@ mod tests {
             &BTreeMap::new(),
         ).unwrap();
 
-        assert_eq!(env.get("FLOWLITE_DATA_DIR").unwrap(), "/srv/flowlite");
+        assert_eq!(env.get("FLOWLITE_PROJECT_DIR").unwrap(), "/srv/flowlite");
     }
 
     #[test]

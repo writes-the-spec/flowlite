@@ -8,7 +8,7 @@
     "should_trigger": true
   },
   {
-    "query": "the `job submit` arg is called job_name but it actually filters on job_id which confuses everyone on the team. want to rename the arg without breaking -C/-D",
+    "query": "the `job submit` arg is called job_name but it actually filters on job_id which confuses everyone on the team. want to rename the arg without breaking -p",
     "should_trigger": true
   },
   {
@@ -24,7 +24,7 @@
     "should_trigger": true
   },
   {
-    "query": "ops wants `flowlite validate` that just parses the data dir's YAML and exits nonzero if anything is broken. where does a command like that go",
+    "query": "ops wants `flowlite validate` that just parses the project dir's YAML and exits nonzero if anything is broken. where does a command like that go",
     "should_trigger": true
   },
   {
@@ -36,7 +36,7 @@
     "should_trigger": true
   },
   {
-    "query": "id like -C and -D to be settable as env vars too so our systemd unit doesnt need flags. is that already there or do i add env = ...",
+    "query": "id like -p to be settable as an env var too so our systemd unit doesnt need flags. is that already there or do i add env = ...",
     "should_trigger": true
   },
   {

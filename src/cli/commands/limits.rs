@@ -15,7 +15,7 @@ pub struct LimitsCmd {
 impl LimitsCmd {
 
     /// Reads `flowlite.toml` for the maxima and the disk tables for the counts, so it
-    /// answers for a data directory whose server is down as readily as one whose server
+    /// answers for a project directory whose server is down as readily as one whose server
     /// is up - the same reason `status` reads the lock file rather than the database.
     pub async fn run(&self, toolkit: Toolkit) -> anyhow::Result<()> {
 

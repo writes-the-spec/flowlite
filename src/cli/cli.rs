@@ -15,8 +15,8 @@ use crate::toolkit::Toolkit;
 #[derive(Parser)]
 #[command(name = "FlowLite")]
 pub struct Cli {
-    #[arg(short = 'D', long, env = "FLOWLITE_DATA_DIR")]
-    pub data_dir: Option<PathBuf>,
+    #[arg(short = 'p', long, env = "FLOWLITE_PROJECT_DIR")]
+    pub project_dir: Option<PathBuf>,
 
     #[command(subcommand)]
     pub command: Command,
@@ -25,7 +25,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Lay an example job, an example schedule and a commented flowlite.toml into this data
+    /// Lay an example job, an example schedule and a commented flowlite.toml into this project
     /// directory, leaving any of the three that are already there untouched.
     Init(InitCmd),
     /// Check flowlite.toml, the job and schedule YAML and every secret_env reference the
@@ -34,13 +34,13 @@ pub enum Command {
     Serve(ServeCmd),
     Job(JobCmd),
     JobRun(JobRunCmd),
-    /// Whether this data directory is being served, and by what.
+    /// Whether this project directory is being served, and by what.
     Status(StatusCmd),
     /// Why nothing is running: the global cap and every named limit, each with its
     /// current use and its maximum.
     Limits(LimitsCmd),
     /// Speak the Model Context Protocol on stdin and stdout, so an agent can submit and
-    /// inspect runs in this data directory as tool calls.
+    /// inspect runs in this project directory as tool calls.
     Mcp(McpCmd),
 }
 
@@ -49,7 +49,7 @@ impl Cli {
 
     pub async fn run(&self) -> anyhow::Result<()> {
 
-        let app_config = AppConfig::load(self.data_dir.clone())?;
+        let app_config = AppConfig::load(self.project_dir.clone())?;
         let toolkit = Toolkit::new(app_config);
 
         match &self.command {

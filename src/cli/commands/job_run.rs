@@ -9,8 +9,8 @@ use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStreams;
 use crate::shared::format;
 use crate::shared::job_run::{build_job_run_detail, JobRunDetail, parse_job_run_status, stop_job_run, TaskRunAttemptLog};
 use crate::shared::task_run_attempt::own_task_run_attempt_id;
-use crate::shared::wait::{ensure_data_dir_is_served, wait_for_job_run};
-use super::job::describe_unserved_data_dir;
+use crate::shared::wait::{ensure_project_dir_is_served, wait_for_job_run};
+use super::job::describe_unserved_project_dir;
 
 #[derive(Args)]
 pub struct JobRunCmd {
@@ -228,8 +228,8 @@ impl JobRunStopCmd {
         // Before the row is written, for the reason `job submit --wait` checks before
         // submitting: a wait nothing can service should change nothing.
         if self.wait {
-            ensure_data_dir_is_served(&toolkit.app_config.data_dir)
-                .map_err(describe_unserved_data_dir)?;
+            ensure_project_dir_is_served(&toolkit.app_config.project_dir)
+                .map_err(describe_unserved_project_dir)?;
         }
 
         let mut conn = toolkit.get_conn().await?;

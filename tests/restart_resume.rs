@@ -10,7 +10,7 @@ use serde_json::Value;
 mod common;
 use common::{flowlite, install_job, is_up, serve, until, ServerGuard};
 
-fn data_dir() -> PathBuf {
+fn project_dir() -> PathBuf {
     let dir = std::env::temp_dir()
         .join(format!("flowlite-resume-{}", uuid::Uuid::new_v4()));
 
@@ -39,7 +39,7 @@ fn job_run_status(dir: &Path, job_run_id: &str) -> String {
 #[test]
 fn a_run_interrupted_by_a_shutdown_resumes_when_serve_starts_again() {
 
-    let dir = data_dir();
+    let dir = project_dir();
     let started = dir.join("started");
 
     install_job(&dir, "resumable.yaml", &resumable_yaml(&started));

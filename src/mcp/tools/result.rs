@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::crud::job_run::JobRun;
 use crate::serve_state::{status, ServeStatus};
-use crate::shared::wait::DataDirNotServed;
+use crate::shared::wait::ProjectDirNotServed;
 
 /// The tool result for a value whose JSON is already the fact in question: the same
 /// pretty-printed text `--json` prints, as the text content every client can read, and the
@@ -66,7 +66,7 @@ pub(super) fn job_run_result(job_run: JobRun, warning: Option<String>) -> CallTo
 }
 
 /// `Some` naming the directory only when nothing at all is serving it - `Starting` counts
-/// as served, the same way `ensure_data_dir_is_served` treats it, since that server has the
+/// as served, the same way `ensure_project_dir_is_served` treats it, since that server has the
 /// lock and will reach the row. Writing to a directory whose server is not up yet is
 /// legitimate; an agent that got back `scheduled` with no warning would poll a status that
 /// cannot change until something else does.
@@ -82,22 +82,22 @@ pub(super) fn job_run_result(job_run: JobRun, warning: Option<String>) -> CallTo
 /// as "the write failed" to an agent whose obvious next move is to retry - which for a
 /// submit would only queue a duplicate of a run that already exists. A lookup failure
 /// becomes a warning that says so instead, so the run still reaches the caller either way.
-pub(super) fn unserved_directory_warning(data_dir: &str) -> Option<String> {
-    match status(Path::new(data_dir)) {
+pub(super) fn unserved_directory_warning(project_dir: &str) -> Option<String> {
+    match status(Path::new(project_dir)) {
         Ok(ServeStatus::Down) => Some(format!(
             "Nothing is serving {}, so this run's status will not change until flowlite \
              serve runs against it.",
-            data_dir,
+            project_dir,
         )),
         Ok(ServeStatus::Starting | ServeStatus::Up(_)) => None,
         Err(err) => Some(format!(
             "Could not tell whether {} is being served: {:#}",
-            data_dir, err,
+            project_dir, err,
         )),
     }
 }
 
-/// Turns `ensure_data_dir_is_served`'s typed refusal into these tools' own words: nothing
+/// Turns `ensure_project_dir_is_served`'s typed refusal into these tools' own words: nothing
 /// here was a flag to drop, so the remedy names `wait_seconds`, the argument the caller
 /// actually sent. The CLI's wording of the same fact - "drop --wait" - would send an agent
 /// looking for a flag no tool takes, whose only repairs are to retry unchanged or to invent
@@ -105,8 +105,8 @@ pub(super) fn unserved_directory_warning(data_dir: &str) -> Option<String> {
 ///
 /// Here rather than in one of the three tools that wait, because all three reword it and
 /// the wording is what the agent's next move is read off.
-pub(super) fn describe_unserved_data_dir(err: anyhow::Error) -> anyhow::Error {
-    match err.downcast::<DataDirNotServed>() {
+pub(super) fn describe_unserved_project_dir(err: anyhow::Error) -> anyhow::Error {
+    match err.downcast::<ProjectDirNotServed>() {
         Ok(unserved) => anyhow::anyhow!(
             "{}, so waiting would only run the wait_seconds out - nothing is there to move \
              the run along. Start flowlite serve against it, or call again without \
@@ -127,9 +127,9 @@ mod tests {
     /// The remedy an agent reads names the argument it actually sent. The CLI's own wording
     /// of this same typed fact says "drop --wait", which is a flag no tool here takes.
     #[test]
-    fn the_tool_wording_of_an_unserved_data_dir_names_wait_seconds_not_a_flag() {
-        let unserved = DataDirNotServed { data_dir: "./d1".to_string() };
-        let error = describe_unserved_data_dir(unserved.into()).to_string();
+    fn the_tool_wording_of_an_unserved_project_dir_names_wait_seconds_not_a_flag() {
+        let unserved = ProjectDirNotServed { project_dir: "./d1".to_string() };
+        let error = describe_unserved_project_dir(unserved.into()).to_string();
 
         assert!(error.contains("./d1"), "{error}");
         assert!(error.contains("wait_seconds"), "{error}");
@@ -140,7 +140,7 @@ mod tests {
     /// must not be relabelled as an unserved directory.
     #[test]
     fn the_tool_wording_leaves_any_other_error_alone() {
-        let error = describe_unserved_data_dir(anyhow::anyhow!("Job run 7 not found"));
+        let error = describe_unserved_project_dir(anyhow::anyhow!("Job run 7 not found"));
 
         assert_eq!(error.to_string(), "Job run 7 not found");
     }
@@ -192,7 +192,7 @@ mod tests {
 
     /// A queued `JobRun` with everything but its status filled with filler - what
     /// `job_run_result`'s tests build against, standing in for a row `submit_job` would
-    /// otherwise have to seed a whole data directory to produce.
+    /// otherwise have to seed a whole project directory to produce.
     fn job_run_fixture() -> JobRun {
         JobRun {
             id: 1,

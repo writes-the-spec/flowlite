@@ -20,20 +20,20 @@ Starting is allowed; borrowing is not. If the item would still make sense with t
 | File | Holds |
 |---|---|
 | [format.rs](../../../src/shared/format.rs) | `timestamp`, `short_timestamp`, `duration`, the `*_word` status spellers |
-| [init.rs](../../../src/shared/init.rs) | `scaffold`, `ScaffoldedFile`, `InitResult` - what `init` and `init_data_dir` lay down |
+| [init.rs](../../../src/shared/init.rs) | `scaffold`, `ScaffoldedFile`, `InitResult` - what `init` and `init_project_dir` lay down |
 | [job.rs](../../../src/shared/job.rs) | `installed_job_id` |
 | [job_run.rs](../../../src/shared/job_run.rs) | `select_job_run`, `stop_job_run`, `parse_job_run_status`, the `JobRunDetail` / `TaskRunAttemptLog` shapes |
 | [limits.rs](../../../src/shared/limits.rs) | `LimitRow`, `limit_rows`, `is_full` |
 | [schedule_at.rs](../../../src/shared/schedule_at.rs) | `parse_schedule_at`, `refuse_waiting_for_a_future_run` |
 | [serve_status.rs](../../../src/shared/serve_status.rs) | `status_json`, `uptime_seconds` |
 | [task_run_attempt.rs](../../../src/shared/task_run_attempt.rs) | `own_task_run_attempt_id` - the attempt a command running inside a task belongs to, from its environment |
-| [wait.rs](../../../src/shared/wait.rs) | `wait_for_job_run`, `ensure_data_dir_is_served`, `DataDirNotServed` |
+| [wait.rs](../../../src/shared/wait.rs) | `wait_for_job_run`, `ensure_project_dir_is_served`, `ProjectDirNotServed` |
 
 File names mirror `src/crud/` and the `entities` skill. It is not a layer every call passes through: frontends still call `CRUD` directly.
 
 ## What does NOT go in src/shared/
 
-- **Wording.** Shared raises a typed value, never a finished sentence, because the frontends disagree on the remedy. `ensure_data_dir_is_served` raises `DataDirNotServed`; the CLI's `describe_unserved_data_dir` ([src/cli/commands/job.rs](../../../src/cli/commands/job.rs)) says "drop `--wait`", the MCP one in [src/mcp/tools/result.rs](../../../src/mcp/tools/result.rs) names no flag. Same pattern one layer down: `JobIdAlreadyInstalled` in [src/declared/ad_hoc_job.rs](../../../src/declared/ad_hoc_job.rs).
+- **Wording.** Shared raises a typed value, never a finished sentence, because the frontends disagree on the remedy. `ensure_project_dir_is_served` raises `ProjectDirNotServed`; the CLI's `describe_unserved_project_dir` ([src/cli/commands/job.rs](../../../src/cli/commands/job.rs)) says "drop `--wait`", the MCP one in [src/mcp/tools/result.rs](../../../src/mcp/tools/result.rs) names no flag. Same pattern one layer down: `JobIdAlreadyInstalled` in [src/declared/ad_hoc_job.rs](../../../src/declared/ad_hoc_job.rs).
 - **One frontend's policy.** `clamp_wait_seconds`'s 300-second ceiling stays in [src/mcp/wait.rs](../../../src/mcp/wait.rs): it is about MCP client timeouts, and `--wait` has none.
 - **Anything one frontend uses.** The bar is callers in two frontends.
 

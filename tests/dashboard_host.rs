@@ -15,7 +15,7 @@ mod common;
 use common::fake_idp::{FakeIdp, CLIENT_ID, CLIENT_SECRET};
 use common::{is_up, serve, until, ServerGuard, BINARY};
 
-fn data_dir(label: &str) -> PathBuf {
+fn project_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir()
         .join(format!("flowlite-host-{label}-{}", uuid::Uuid::new_v4()));
 
@@ -61,7 +61,7 @@ async fn home_status(port: u16, host: &str) -> StatusCode {
 
 #[tokio::test]
 async fn on_loopback_without_auth_a_request_naming_another_host_is_refused() {
-    let dir = data_dir("rebind");
+    let dir = project_dir("rebind");
     let _server = started(&dir, 18401);
 
     assert_eq!(home_status(18401, "evil.example:18401").await, StatusCode::FORBIDDEN);
@@ -69,7 +69,7 @@ async fn on_loopback_without_auth_a_request_naming_another_host_is_refused() {
 
 #[tokio::test]
 async fn on_loopback_without_auth_the_names_of_this_machine_are_served() {
-    let dir = data_dir("local");
+    let dir = project_dir("local");
     let _server = started(&dir, 18402);
 
     assert_eq!(home_status(18402, "127.0.0.1:18402").await, StatusCode::OK);
@@ -81,7 +81,7 @@ async fn on_loopback_without_auth_the_names_of_this_machine_are_served() {
 #[tokio::test]
 async fn with_auth_another_host_reaches_the_login() {
     let fake = FakeIdp::start();
-    let dir = data_dir("auth");
+    let dir = project_dir("auth");
     with_auth(&dir, &fake);
     let _server = started(&dir, 18403);
 
@@ -90,11 +90,11 @@ async fn with_auth_another_host_reaches_the_login() {
 
 #[test]
 fn a_wider_bind_without_auth_warns_as_it_starts() {
-    let dir = data_dir("wide");
+    let dir = project_dir("wide");
 
     let mut server = ServerGuard::new(
         Command::new(BINARY)
-            .args(["--data-dir", &dir.to_string_lossy(), "serve", "--address", "0.0.0.0", "--port", "18404"])
+            .args(["--project-dir", &dir.to_string_lossy(), "serve", "--address", "0.0.0.0", "--port", "18404"])
             .stderr(Stdio::piped())
             .spawn()
             .unwrap(),
