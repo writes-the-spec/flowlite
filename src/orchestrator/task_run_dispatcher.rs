@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use crate::crud::CRUD;
-use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter, SelectTaskRunsDataSort, TaskRun, TaskRunStatus, UpdateTaskRunsData, UpdateTaskRunsDataFilter, UpdateTaskRunsDataInput};
 use crate::poller::Service;
 use crate::signals::Signals;
@@ -82,7 +81,7 @@ impl TaskRunDispatcher {
     /// unreadable subtree.
     async fn should_skip(&self, task_run: &TaskRun, dependent_task_runs: &[TaskRun]) -> anyhow::Result<bool> {
 
-        let must_skip = self.is_job_run_stopped(task_run).await?
+        let must_skip = self.crud.is_job_run_stopped(&*self.conn_pool, task_run.job_run_id).await?
             || dependent_task_runs
                 .iter()
                 .any(|tr| matches!(
@@ -205,25 +204,6 @@ impl TaskRunDispatcher {
                 sort: Some(SelectTaskRunsDataSort::Id),
             }
         ).await
-
-    }
-
-    async fn is_job_run_stopped(&self, task_run: &TaskRun) -> anyhow::Result<bool> {
-
-        let job_run_stop = self.crud.select_job_run_stop(
-            &*self.conn_pool,
-            &SelectJobRunStopsData {
-                filter: SelectJobRunStopsDataFilter {
-                    id: None,
-                    job_run_id: Some(task_run.job_run_id),
-                },
-                sort: None,
-                limit: Some(1),
-                offset: None,
-            }
-        ).await?;
-
-        Ok(job_run_stop.is_some())
 
     }
 

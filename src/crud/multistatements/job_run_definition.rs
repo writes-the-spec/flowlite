@@ -13,7 +13,6 @@ use sqlx::{Connection, SqliteConnection};
 use crate::crud::CRUD;
 use crate::crud::job::Job;
 use crate::crud::job_run::{InsertJobRunData, InsertJobRunDataInput, JobRunStatus};
-use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::job_run_notification::{InsertJobRunNotificationData, InsertJobRunNotificationDataInput, JobRunNotificationStatus, NotificationChannel, NotifyOn};
 use crate::crud::task::Task;
 use crate::crud::task_run::{InsertTaskRunData, InsertTaskRunDataInput, TaskRunStatus};
@@ -221,17 +220,7 @@ impl CRUD {
             );
         }
 
-        let stop = self.select_job_run_stop(&mut *conn, &SelectJobRunStopsData {
-            filter: SelectJobRunStopsDataFilter {
-                id: None,
-                job_run_id: Some(attempt.job_run_id),
-            },
-            sort: None,
-            limit: Some(1),
-            offset: None,
-        }).await?;
-
-        if stop.is_some() {
+        if self.is_job_run_stopped(&mut *conn, attempt.job_run_id).await? {
             anyhow::bail!(
                 "Job run {} is being stopped, so its tasks cannot submit new runs",
                 attempt.job_run_id,

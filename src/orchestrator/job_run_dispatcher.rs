@@ -2,7 +2,6 @@ use std::sync::Arc;
 use crate::app_config::AppConfig;
 use crate::crud::CRUD;
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort, UpdateJobRunsData, UpdateJobRunsDataFilter, UpdateJobRunsDataInput};
-use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run::{TaskRunStatus, UpdateTaskRunsData, UpdateTaskRunsDataFilter, UpdateTaskRunsDataInput};
 use crate::poller::Service;
 use crate::run_dir::create_job_run_dir;
@@ -59,7 +58,7 @@ impl JobRunDispatcher {
     /// slot it will not take.
     async fn derive_next_status(&self, job_run: &JobRun) -> anyhow::Result<JobRunStatus> {
 
-        if self.is_job_run_stopped(job_run).await? {
+        if self.crud.is_job_run_stopped(&*self.conn_pool, job_run.id).await? {
             return Ok(JobRunStatus::Skipped);
         }
 
@@ -182,25 +181,6 @@ impl JobRunDispatcher {
         let mut conn = self.conn_pool.acquire().await?;
 
         self.crud.is_job_at_max_parallel_runs(&mut conn, &job_run.job_id).await
-
-    }
-
-    async fn is_job_run_stopped(&self, job_run: &JobRun) -> anyhow::Result<bool> {
-
-        let job_run_stop = self.crud.select_job_run_stop(
-            &*self.conn_pool,
-            &SelectJobRunStopsData {
-                filter: SelectJobRunStopsDataFilter {
-                    id: None,
-                    job_run_id: Some(job_run.id),
-                },
-                sort: None,
-                limit: Some(1),
-                offset: None,
-            }
-        ).await?;
-
-        Ok(job_run_stop.is_some())
 
     }
 

@@ -81,7 +81,7 @@ The only shared memory is `TaskRunAttemptChildren` ([src/orchestrator/task_run_a
 
 ## Stopping a run
 
-A stop is an insert-only `job_run_stop` row, never a status update. `JobRunReleaser`, `JobRunDispatcher`, `TaskRunDispatcher`, `TaskRunAttemptDispatcher` and `TaskRunAttemptMonitor` check for it each pass and finish only what they own: unstarted rows go `Skipped`, an in-flight process is killed and its attempt goes `Aborted`. The job run's status is then derived from its task runs like any other.
+A stop is an insert-only `job_run_stop` row, never a status update. `JobRunReleaser`, `JobRunDispatcher`, `TaskRunDispatcher`, `TaskRunAttemptDispatcher` and `TaskRunAttemptMonitor` check for it each pass through `CRUD::is_job_run_stopped`, the one definition of a stop, and finish only what they own: unstarted rows go `Skipped`, an in-flight process is killed and its attempt goes `Aborted`. The job run's status is then derived from its task runs like any other.
 
 The releaser skips a stopped `Scheduled` run itself (with its task runs, via [`CRUD::skip_job_run`](../../../src/crud/multistatements/skip_job_run.rs)) so the stop needn't wait for `scheduled_at`, and so a run that will never run never passes through `Queued`, which means "due".
 

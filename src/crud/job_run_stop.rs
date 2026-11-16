@@ -73,6 +73,26 @@ impl CRUD {
         Ok(aborts.into_iter().next())
     }
 
+    /// Whether anyone has asked for the job run to stop. Every service that settles part of
+    /// a run asks this, and so does a task submitting a child; one definition keeps them
+    /// agreeing on what a stop is.
+    pub async fn is_job_run_stopped<'e, E>(&self, executor: E, job_run_id: i64) -> anyhow::Result<bool>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    {
+        let stop = self.select_job_run_stop(executor, &SelectJobRunStopsData {
+            filter: SelectJobRunStopsDataFilter {
+                id: None,
+                job_run_id: Some(job_run_id),
+            },
+            sort: None,
+            limit: Some(1),
+            offset: None,
+        }).await?;
+
+        Ok(stop.is_some())
+    }
+
     pub async fn select_job_run_stops<'e, E>(&self, executor: E, data: &SelectJobRunStopsData) -> anyhow::Result<Vec<JobRunStop>>
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,

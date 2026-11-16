@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::crud::CRUD;
 use crate::crud::job_run::{JobRun, JobRunStatus, SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort, UpdateJobRunsData, UpdateJobRunsDataFilter, UpdateJobRunsDataInput};
-use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::poller::Service;
 use crate::signals::Signals;
 
@@ -55,7 +54,7 @@ impl JobRunReleaser {
     /// queued if due, else left scheduled.
     async fn derive_next_status(&self, job_run: &JobRun) -> anyhow::Result<JobRunStatus> {
 
-        let is_stopped = self.is_job_run_stopped(job_run).await?;
+        let is_stopped = self.crud.is_job_run_stopped(&*self.conn_pool, job_run.id).await?;
         let is_due = job_run.scheduled_at <= self.crud.toolkit.get_current_ts();
 
         Ok(match (is_stopped, is_due) {
@@ -145,24 +144,6 @@ impl JobRunReleaser {
                 offset: None,
             }
         ).await
-    }
-
-    async fn is_job_run_stopped(&self, job_run: &JobRun) -> anyhow::Result<bool> {
-
-        let job_run_stop = self.crud.select_job_run_stop(
-            &*self.conn_pool,
-            &SelectJobRunStopsData {
-                filter: SelectJobRunStopsDataFilter {
-                    id: None,
-                    job_run_id: Some(job_run.id),
-                },
-                sort: None,
-                limit: Some(1),
-                offset: None,
-            }
-        ).await?;
-
-        Ok(job_run_stop.is_some())
     }
 
 }

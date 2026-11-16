@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use crate::app_config::AppConfig;
 use crate::crud::CRUD;
-use crate::crud::job_run_stop::{SelectJobRunStopsData, SelectJobRunStopsDataFilter};
 use crate::crud::task_run_attempt::{SelectTaskRunAttemptsData, SelectTaskRunAttemptsDataFilter, SelectTaskRunAttemptsDataSort, TaskRunAttempt, TaskRunAttemptStatus, UpdateTaskRunAttemptsData, UpdateTaskRunAttemptsDataFilter, UpdateTaskRunAttemptsDataInput};
 use crate::crud::task_run_attempt_output::{InsertTaskRunAttemptOutputData, InsertTaskRunAttemptOutputDataInput, TaskRunAttemptOutputStream};
 use crate::orchestrator::task_run_attempt_children::{EndedChild, TaskRunAttemptChild, TaskRunAttemptChildren, Termination};
@@ -115,7 +114,7 @@ impl TaskRunAttemptMonitor {
             return Ok(TaskRunAttemptStatus::TimedOut);
         }
 
-        if self.is_job_run_stopped(task_run_attempt).await? {
+        if self.crud.is_job_run_stopped(&*self.conn_pool, task_run_attempt.job_run_id).await? {
             return Ok(TaskRunAttemptStatus::Aborted);
         }
 
@@ -532,25 +531,6 @@ impl TaskRunAttemptMonitor {
                 sort: Some(SelectTaskRunAttemptsDataSort::Id),
             }
         ).await
-
-    }
-
-    async fn is_job_run_stopped(&self, task_run_attempt: &TaskRunAttempt) -> anyhow::Result<bool> {
-
-        let job_run_stop = self.crud.select_job_run_stop(
-            &*self.conn_pool,
-            &SelectJobRunStopsData {
-                filter: SelectJobRunStopsDataFilter {
-                    id: None,
-                    job_run_id: Some(task_run_attempt.job_run_id),
-                },
-                sort: None,
-                limit: Some(1),
-                offset: None,
-            }
-        ).await?;
-
-        Ok(job_run_stop.is_some())
 
     }
 

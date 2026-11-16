@@ -5,7 +5,7 @@ use sqlx::SqliteConnection;
 
 use crate::crud::CRUD;
 use crate::crud::job_run::{SelectJobRunsData, SelectJobRunsDataFilter, SelectJobRunsDataSort};
-use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput, SelectJobRunStopsData, SelectJobRunStopsDataFilter};
+use crate::crud::job_run_stop::{InsertJobRunStopData, InsertJobRunStopDataInput};
 use crate::crud::task_run_attempt::TaskRunAttempt;
 
 impl CRUD {
@@ -44,17 +44,7 @@ impl CRUD {
 
         for child in unfinished_children {
 
-            let stop = self.select_job_run_stop(&mut *conn, &SelectJobRunStopsData {
-                filter: SelectJobRunStopsDataFilter {
-                    id: None,
-                    job_run_id: Some(child.id),
-                },
-                sort: None,
-                limit: Some(1),
-                offset: None,
-            }).await?;
-
-            if stop.is_some() {
+            if self.is_job_run_stopped(&mut *conn, child.id).await? {
                 continue;
             }
 
