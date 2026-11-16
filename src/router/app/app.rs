@@ -43,5 +43,8 @@ pub fn create_router(app_state: AppState) -> Router {
         // Outside crud_middleware: a refused request should not reach a handler or open a
         // connection, and this decides on headers alone.
         .route_layer(middleware::from_fn(app::middlewares::same_origin::same_origin_middleware))
+        // Outermost, and on every route including the reads: a rebinding page reads
+        // responses, so a GET is as much its target as a POST.
+        .route_layer(middleware::from_fn_with_state(app_state.clone(), app::middlewares::loopback_host::loopback_host_middleware))
         .with_state(app_state)
 }

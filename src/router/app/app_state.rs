@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 use sqlx::{SqlitePool, SqliteConnection};
 use crate::signals::Signals;
@@ -14,6 +15,9 @@ pub struct AppState {
     pub signals: Arc<Signals>,
     /// None when flowlite.toml has no `[auth]`, and the dashboard has no login.
     pub auth: Option<Arc<DashboardAuth>>,
+    /// Bound to loopback with no `[auth]`, where `loopback_host_middleware` refuses a
+    /// request naming any other host.
+    pub host_must_be_loopback: bool,
     /// Never read, and held for exactly that reason: a `mode=memory` SQLite database
     /// exists only while something has it open, so dropping this would take `mem`'s schema
     /// and every seeded job with it while the pool went on attaching an empty one.
@@ -24,28 +28,32 @@ pub struct AppState {
 
 impl AppState {
 
-    /// `port` is the one actually bound, which names the session cookie.
+    /// `bound` is the address actually bound: its port names the session cookie, and its
+    /// address decides whether the `Host` check applies.
     pub fn new(
         toolkit: Arc<Toolkit>,
         conn_pool: Arc<SqlitePool>,
         memory_conn: Arc<Mutex<SqliteConnection>>,
         signals: Arc<Signals>,
-        port: u16,
+        bound: SocketAddr,
     ) -> Self {
 
         let auth = toolkit.app_config.auth.clone().map(|auth| {
             Arc::new(DashboardAuth {
-                cookie: SessionCookie::new(port, auth.cookie_secure),
+                cookie: SessionCookie::new(bound.port(), auth.cookie_secure),
                 idp: IdpClient::new(auth),
                 sessions: SessionStore::new(),
             })
         });
+
+        let host_must_be_loopback = bound.ip().is_loopback() && auth.is_none();
 
         Self {
             toolkit,
             conn_pool,
             signals,
             auth,
+            host_must_be_loopback,
             memory_conn,
         }
     }

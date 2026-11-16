@@ -157,8 +157,22 @@ impl ServeCmd {
             conn_pool.clone(),
             memory_conn.clone(),
             signals.clone(),
-            bound.port(),
+            bound,
         );
+
+        // A warning rather than a refusal: a proxy in front that does its own login is a
+        // sound way to serve this, and flowlite cannot see it. What it can see is that
+        // nothing here asks who is there, and that whoever reaches the port can start
+        // commands as this user.
+        if !bound.ip().is_loopback() && app_state.auth.is_none() {
+            eprintln!(
+                "Warning: the dashboard is listening on {} with no [auth] section, so anyone \
+                 who can reach that address can read every run and start commands as this \
+                 user. Add [auth] to flowlite.toml, or bind to 127.0.0.1 behind a proxy that \
+                 asks who is there.",
+                bound,
+            );
+        }
 
         let router = create_router(app_state);
 

@@ -95,11 +95,16 @@ fn outcome(check: SessionCheck, method: &Method, path_and_query: &str, htmx_curr
 /// `next` if it is a path on this server, and the home page otherwise - so the login page
 /// cannot send someone who just typed their password to a site of somebody else's choosing.
 /// `//host` and `/\host` are paths only to this function; a browser reads both as a host.
+///
+/// So is `/<tab>/host`: a browser strips tabs and newlines from a URL before reading it,
+/// leaving `//host`. No path on this server has a control character in it, so any one of
+/// them is refused rather than only the three a browser is known to strip today.
 pub fn safe_next(next: &str) -> &str {
 
     let is_local = next.starts_with('/')
         && !next.starts_with("//")
-        && !next.starts_with("/\\");
+        && !next.starts_with("/\\")
+        && !next.chars().any(char::is_control);
 
     if is_local { next } else { "/" }
 }
@@ -163,6 +168,16 @@ mod tests {
         assert_eq!(safe_next("/\\evil.example"), "/");
         assert_eq!(safe_next("evil.example"), "/");
         assert_eq!(safe_next(""), "/");
+    }
+
+    /// A browser drops tabs and newlines before it reads a URL, so each of these arrives
+    /// as `//evil.example`.
+    #[test]
+    fn a_control_character_that_would_make_a_host_falls_back_to_the_home_page() {
+        assert_eq!(safe_next("/\t/evil.example"), "/");
+        assert_eq!(safe_next("/\n/evil.example"), "/");
+        assert_eq!(safe_next("/\r/evil.example"), "/");
+        assert_eq!(safe_next("/jobs\u{0}"), "/");
     }
 
     #[test]

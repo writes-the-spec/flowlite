@@ -1005,6 +1005,13 @@ your machine. A request with no browser headers at all, such as `curl` or a scri
 allowed: this guards a browser against being used as a deputy, not the port against someone
 who can already reach it.
 
+On loopback with no `[auth]`, the dashboard also answers only to a request that names this
+machine — `localhost`, a `127.x` address or `[::1]`, on any port, so an SSH tunnel still
+works. That stops DNS rebinding: a page whose own name has been re-pointed at `127.0.0.1`
+sends that name, and is refused with a 403. A proxy in front of a loopback dashboard with no
+`[auth]` has to send one of those names as `Host`; with `[auth]`, or bound to any other
+address, the name is not checked.
+
 The submit dialog lists the job's declared parameters with their defaults filled in, and each
 value is editable for that run. The names are not: they come from the job's `parameters:`
 block, so the browser can change what a run is submitted with but not what the job accepts.
@@ -1038,7 +1045,8 @@ person in or signing them out.
 
 The session cookie is sent over HTTPS only unless `cookie_secure = false`, so put the
 dashboard behind a TLS-terminating proxy, and bind it to that proxy rather than to
-`0.0.0.0`. The CLI and `flowlite mcp` open the data directory directly and are not affected
+`0.0.0.0`. `serve` bound to anything but loopback with no `[auth]` still starts, since a
+proxy in front may do the asking, but prints a warning that nothing does. The CLI and `flowlite mcp` open the data directory directly and are not affected
 by `[auth]`.
 
 ## Driving flowlite from an agent

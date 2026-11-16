@@ -190,8 +190,9 @@ of its reach: `flowlite.toml`, `[secrets]` included, is a file the task can read
 read it and write it into its log or result.
 
 Treat a job file like a shell script you are about to run, and run `serve` as a user whose
-reach you would hand to a model. The dashboard binds to `127.0.0.1` and has no
-authentication, and MCP is stdio with one process per client.
+reach you would hand to a model. By default the dashboard binds to `127.0.0.1` with no
+login; `serve --address` and an `[auth]` section change both — see
+[Logging in](REFERENCE.md#logging-in). MCP is stdio with one process per client.
 
 ## Documentation
 
