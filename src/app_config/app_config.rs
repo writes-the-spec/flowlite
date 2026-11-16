@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use crate::app_config::auth::AppConfigAuth;
 use crate::app_config::job_defaults::AppConfigJobDefaults;
 use crate::app_config::orchestrator::AppConfigOrchestrator;
-use crate::app_config::retention::AppConfigRetention;
 use crate::app_config::schedule_defaults::AppConfigScheduleDefaults;
 use crate::app_config::slack::AppConfigSlack;
 use crate::app_config::smtp::AppConfigSmtp;
@@ -28,8 +27,6 @@ pub struct AppConfig {
     pub job_defaults: AppConfigJobDefaults,
     #[serde(default)]
     pub schedule_defaults: AppConfigScheduleDefaults,
-    #[serde(default)]
-    pub retention: AppConfigRetention,
     /// None is "no `[smtp]` section", so it is skipped when the defaults are serialized
     /// into figment: a null default provider would otherwise be the thing a real `[smtp]`
     /// table has to merge over.
@@ -81,7 +78,6 @@ impl std::fmt::Debug for AppConfig {
             .field("ui", &self.ui)
             .field("job_defaults", &self.job_defaults)
             .field("schedule_defaults", &self.schedule_defaults)
-            .field("retention", &self.retention)
             .field("smtp", &self.smtp)
             .field("slack", &self.slack)
             .field("auth", &self.auth)
@@ -111,7 +107,6 @@ impl Default for AppConfig {
             ui: AppConfigUi::default(),
             job_defaults: AppConfigJobDefaults::default(),
             schedule_defaults: AppConfigScheduleDefaults::default(),
-            retention: AppConfigRetention::default(),
             smtp: None,
             slack: None,
             auth: None,
@@ -671,53 +666,25 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_with_no_config_file_has_the_retention_defaults() {
-        let _environment = reading_the_environment();
-
-        let dir = temp_dir();
-
-        let config = AppConfig::load(Some(dir)).unwrap();
-
-        assert_eq!(config.retention.keep_runs_total, 10000);
-        assert_eq!(config.retention.max_deletes_per_pass, 100);
-    }
-
-    #[test]
-    fn a_retention_section_in_the_config_file_overrides_the_defaults() {
-        let _environment = reading_the_environment();
-
-        let dir = temp_dir();
-        std::fs::write(
-            dir.join("flowlite.toml"),
-            "[retention]\nkeep_runs_total = 500\nmax_deletes_per_pass = 20\n",
-        ).unwrap();
-
-        let config = AppConfig::load(Some(dir)).unwrap();
-
-        assert_eq!(config.retention.keep_runs_total, 500);
-        assert_eq!(config.retention.max_deletes_per_pass, 20);
-    }
-
-    #[test]
-    fn keep_runs_total_set_only_in_the_environment_overrides_the_default() {
+    fn keep_runs_set_only_in_the_environment_overrides_the_default() {
         let _environment = writing_the_environment();
 
         let dir = temp_dir();
 
         // SAFETY: the environment is process-wide, and the write guard above is what makes
         // this the only thread reading it until the variable is gone again.
-        unsafe { std::env::set_var("FLOWLITE_RETENTION__KEEP_RUNS_TOTAL", "250") };
+        unsafe { std::env::set_var("FLOWLITE_JOB_DEFAULTS__KEEP_RUNS", "250") };
 
         let config = AppConfig::load(Some(dir));
 
-        unsafe { std::env::remove_var("FLOWLITE_RETENTION__KEEP_RUNS_TOTAL") };
+        unsafe { std::env::remove_var("FLOWLITE_JOB_DEFAULTS__KEEP_RUNS") };
 
         // Asserted after the removal, so a load that fails cannot leave the variable set
         // for whatever runs next.
         let config = config.unwrap();
-        assert_eq!(config.retention.keep_runs_total, 250);
-        // The rest of [retention] stays at its default.
-        assert_eq!(config.retention.max_deletes_per_pass, 100);
+        assert_eq!(config.job_defaults.keep_runs, 250);
+        // The rest of [job_defaults] stays at its default.
+        assert_eq!(config.job_defaults.timeout_seconds, 3600);
     }
 
     #[test]

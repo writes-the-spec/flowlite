@@ -8,7 +8,7 @@ One per job YAML file under `<data_dir>/jobs/*.yml` — the *definition*; an exe
 | `name` | Display label. Deliberately **not** unique and **not** a key. |
 | `description` | serde defaults it to `""`. |
 | `max_parallel_runs` | How many of this job's runs may be `Running` at once. Defaults to 1; **`0` means no limit** and skips the count. |
-| `keep_runs` | How many of this job's newest finished runs retention keeps. Defaults to `[job_defaults] keep_runs`; **`0` keeps every run**, leaving only `[retention] keep_runs_total` to bound it. |
+| `keep_runs` | How many of this job's newest finished runs retention keeps. Defaults to `[job_defaults] keep_runs`; **`0` keeps every run**. |
 | `parameters` | Declared name → default, empty if none. Only the declaration; `submit_job` resolves overrides. |
 | `env` | Empty if none. Merged under each task's `env:` by `submit_job` (task wins); only the merge is stored, on `task_run.env`. |
 | `secret_env` | Empty if none. Variable name → secret name, never a value. Merged like `env`, stored on `task_run.secret_env`. |

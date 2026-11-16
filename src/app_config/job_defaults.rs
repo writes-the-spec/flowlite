@@ -14,8 +14,7 @@ pub struct AppConfigJobDefaults {
     pub retry_delay_seconds: u32,
     /// How many runs of one job may run at once, 0 for no limit.
     pub max_parallel_runs: u32,
-    /// The newest finished runs of one job to keep. 0 keeps every run of that job, and
-    /// `[retention] keep_runs_total` is then the only thing bounding it.
+    /// The newest finished runs of one job to keep. 0 keeps every run of that job.
     pub keep_runs: u32,
 }
 

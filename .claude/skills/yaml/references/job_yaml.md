@@ -30,7 +30,7 @@ on_success:
 | `name` | required | Display label, not unique. |
 | `description` | `""` | |
 | `max_parallel_runs` | `[job_defaults]`, `1` | **`0` = no limit.** Enforced only by `JobRunDispatcher::is_job_at_max_parallel_runs` holding the run `Queued`; submit never rejects. |
-| `keep_runs` | `[job_defaults]`, `100` | Newest finished runs retention keeps; **`0` keeps all** (only `[retention] keep_runs_total` bounds it). Read by `RetentionService` — [entities](../../entities/references/job.md). |
+| `keep_runs` | `[job_defaults]`, `100` | Newest finished runs retention keeps; **`0` keeps all**. Read by `RetentionService` — [entities](../../entities/references/job.md). |
 | `parameters` | `{}` | Name → default. A schedule or `job submit --param` may override a declared name; an undeclared one is a submit error. [entities](../../entities/references/job.md). |
 | `env` | `{}` | For **every** task; see [which env wins](#which-env-wins). |
 | `secret_env` | `{}` | Variable name → `[secrets]` name. Only the name travels (row, dashboard, `--json`); the value is resolved at spawn. |

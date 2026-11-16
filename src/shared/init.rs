@@ -111,12 +111,6 @@ const FLOWLITE_TOML: &str = r#"# flowlite configuration. Everything here has a d
 # [schedule_defaults]
 # timezone = "UTC"                # what a schedule with no timezone: reads its cron in
 
-# How many finished job runs the retention service keeps, and how much of one pass it
-# may spend deleting them.
-# [retention]
-# keep_runs_total = 10000         # the most finished runs kept across every job, 0 for no ceiling
-# max_deletes_per_pass = 100      # the most runs one pass deletes, 0 for no cap
-
 # Where mail notifications are sent from. No defaults: leave the section out and the email
 # channel is off entirely. The password belongs in the environment on a real box -
 # FLOWLITE_SMTP__PASSWORD - rather than in this file.

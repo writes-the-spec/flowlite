@@ -851,19 +851,9 @@ The default of 100 suits a five-minute cron, and is wrong for a job whose every 
 real money: the run's snapshot, its output and its result go with it. Raise `keep_runs` on
 an expensive job, or set it to `0` to keep every run.
 
-`[retention]` adds a ceiling across every job, and a limit on how much of one pass may go to
-deleting:
-
-```toml
-[retention]
-keep_runs_total = 10000        # the most finished runs kept across every job, 0 for no ceiling
-max_deletes_per_pass = 100     # the most runs one pass deletes, 0 for no cap
-```
-
-`keep_runs_total` is enforced oldest-first across every job, *after* each job's own
-`keep_runs` — the two rules stack rather than compete. `max_deletes_per_pass` exists so the
-first pass against an already-large backlog cannot hold the single SQLite writer for
-minutes.
+One pass deletes at most 100 runs, oldest first, so the first pass against an
+already-large backlog cannot hold the single SQLite writer for minutes; the passes after it
+take the rest.
 
 A run is deleted together with the runs its tasks submitted (see [Runs a task
 submits](#runs-a-task-submits)), and waits until every one of those has finished too. A
@@ -1171,10 +1161,6 @@ keep_runs = 100                 # the newest finished runs of one job to keep, 0
 
 [schedule_defaults]
 timezone = "UTC"                # what a schedule with no timezone: reads its cron in
-
-[retention]
-keep_runs_total = 10000         # the most finished runs kept across every job, 0 for no ceiling
-max_deletes_per_pass = 100      # the most runs one pass deletes, 0 for no cap
 ```
 
 `[job_defaults]` and `[schedule_defaults]` fill in what a job's or schedule's YAML leaves

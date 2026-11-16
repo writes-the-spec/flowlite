@@ -44,7 +44,7 @@ Both are in `[orchestrator]` ([app_config skill](../app_config/SKILL.md)), not c
 | `JobRunReleaser`, `JobRunDispatcher`, `JobRunMonitor`, `TaskRunDispatcher`, `TaskRunMonitor`, `TaskRunAttemptDispatcher`, `TaskRunAttemptMonitor` | [orchestrator skill](../orchestrator/SKILL.md), started by `Orchestrator::start` |
 | `Scheduler` | [scheduler skill](../scheduler/SKILL.md) |
 | `NotificationService` | [notifications skill](../notifications/SKILL.md) |
-| `RetentionService` | [src/retention/service.rs](../../../src/retention/service.rs). Deletes finished job runs past `[job_defaults] keep_runs` and `[retention] keep_runs_total`, along with the [entities skill](../entities/SKILL.md)'s six disk tables |
+| `RetentionService` | [src/retention/service.rs](../../../src/retention/service.rs). Deletes finished job runs past `[job_defaults] keep_runs` (at most 100 a pass), along with the [entities skill](../entities/SKILL.md)'s six disk tables |
 
 The last three are started directly by [serve.rs](../../../src/cli/commands/serve.rs).
 

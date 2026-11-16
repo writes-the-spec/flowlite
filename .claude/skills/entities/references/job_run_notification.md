@@ -39,4 +39,4 @@ Writing at submit means the row exists before the run can fail; inserted at fini
 ## Read by
 
 - `NotificationService` — `pending` rows, deciding each from its run's status.
-- `RetentionService`, in `select_deletable_job_runs` ([src/crud/multistatements/retention_candidates.rs](../../../../src/crud/multistatements/retention_candidates.rs)): a run with a `pending` row is never deleted, whatever `keep_runs`/`keep_runs_total` say; closed rows don't hold it.
+- `RetentionService`, in `select_deletable_job_runs` ([src/crud/multistatements/retention_candidates.rs](../../../../src/crud/multistatements/retention_candidates.rs)): a run with a `pending` row is never deleted, whatever `keep_runs` says; closed rows don't hold it.

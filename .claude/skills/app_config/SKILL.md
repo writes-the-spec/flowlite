@@ -62,7 +62,6 @@ impl AppConfigMetrics {
 | `[orchestrator]` | [src/poller.rs](../../../src/poller.rs) and the services ([orchestrator skill](../orchestrator/SKILL.md)) |
 | `[ui]` | dashboard paging, refresh, palette ([router skill](../router/SKILL.md)) |
 | `[job_defaults]`, `[schedule_defaults]` | `Declared::load`, for what a YAML omits; `keep_runs` also by `RetentionService` ([src/retention/service.rs](../../../src/retention/service.rs)) for a job id nothing declares |
-| `[retention]` | `RetentionService`: `keep_runs_total` (cross-job ceiling, oldest first, after per-job `keep_runs`), `max_deletes_per_pass` |
 | `[smtp]`, `[slack]` | the channels ([notifications skill](../notifications/SKILL.md)) |
 | `[auth]` | the dashboard's login: `AppState::new` builds the `IdpClient`, the `SessionStore` (`session_seconds`) and the session cookie from it ([router skill](../router/SKILL.md)). `client_secret` is redacted by `AppConfigAuth`'s own hand-written `Debug` |
 | `[secrets]` | `secret_env:`, checked at startup by `Declared::check_secret_env_is_satisfied` ([src/declared/secret_env.rs](../../../src/declared/secret_env.rs)) |
