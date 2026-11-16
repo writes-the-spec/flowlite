@@ -3,41 +3,11 @@
   <img src="assets/brand/logo-light.png" alt="flowlite" width="260">
 </picture>
 
-**A job scheduler and orchestrator in a single binary, for scripts, pipelines and AI agents
-alike.** Put any command in a YAML file and flowlite runs it on a schedule, in order, with
-retries, timeouts and alerts. Agentic jobs get more: each step's result is handed to the
-next, a retry is told why the last attempt failed, and an agent that hangs is ended. An
-agent can also drive flowlite itself over MCP.
-
-## Why flowlite
-
-**For any job:**
-
-- **Nothing to install.** There is no database server, broker, worker pool or Python to run.
-  It is one binary and a SQLite file beside your YAML.
-- **Jobs are files.** A pipeline is plain YAML in git, reviewed and reverted like any other
-  change. Cron with time zones, a DAG per job, retries, timeouts, concurrency limits,
-  email and Slack alerts, a localhost dashboard and retention all come built in.
-- **Runs remember themselves.** Every run snapshots the definition it executed, so a rerun
-  months later replays that run rather than today's file.
-- **Nothing is left behind.** A timeout or a stop ends the whole process tree, asked first
-  and killed after a grace period, and a crash leaves nothing running past the next start.
-
-**For agentic jobs**, the kind that produce a result something downstream has to read, exit
-0 while being wrong, stall on a provider and cost money the whole time:
-
-- **Results, not just exit codes.** A task writes its result to `$FLOWLITE_TASK_OUTPUT`, and
-  every task that depends on it reads it from `$FLOWLITE_INPUT_<TASK>`. Logs stay logs.
-- **Retries that know what went wrong.** A retried attempt is handed the failed attempt's
-  stdout, stderr and result, so the second try need not repeat the first.
-- **Hangs end.** `idle_timeout` ends an agent that has gone quiet long before `timeout`
-  would.
-- **Prompts without shell quoting.** `stdin:` hands a prompt to the command as written, so
-  no backtick runs and no `$` expands.
-- **Fan-out decided at run time.** A task can submit further runs, from the CLI or over MCP.
-  Those runs are linked to the task, stopped if it fails or is stopped, and deleted with it.
-- **Provider quotas.** A named limit (`llm_api = 4`) caps how many tasks reach one provider
-  at once.
+flowlite is a job scheduler and orchestrator in a single binary. Jobs and schedules are YAML
+files in a project directory; flowlite runs their commands on a cron schedule or on demand,
+in dependency order, and records each run in a SQLite file in the same directory. It
+includes a web dashboard, a CLI, and an MCP server through which an AI agent can submit and
+inspect runs.
 
 ## Install
 
@@ -45,177 +15,123 @@ agent can also drive flowlite itself over MCP.
 cargo install --git https://github.com/writes-the-spec/flowlite
 ```
 
-Or clone and `cargo build --release`, which leaves the binary at `target/release/flowlite`.
+This needs a Rust toolchain. There is no other service to run: no database server, broker or
+worker pool.
 
 ## Quick start
 
 ```bash
-flowlite init                           # an example job, schedule and commented flowlite.toml
-flowlite validate                       # the checks serve makes at startup, without starting it
-flowlite serve                          # scheduler, orchestrator and dashboard on :8000
-flowlite job submit hello-world --wait  # in a second shell; exits non-zero unless it succeeded
+flowlite init                           # writes an example job, schedule and flowlite.toml
+flowlite validate                       # runs the checks serve makes at startup
+flowlite serve                          # scheduler, orchestrator and dashboard on 127.0.0.1:8000
+flowlite job submit hello-world --wait  # in a second shell; exits non-zero unless the run succeeded
 ```
 
-Everything lives in the project directory: the current one, or whichever `-p` names. Jobs are
-under `jobs/`, schedules under `schedules/`, and everything flowlite writes itself — run
-history in `flowlite.db`, run directories, the serve lock — under `.flowlite/`.
+The project directory is the current one, or the one `-p` names. Jobs are read from `jobs/`,
+schedules from `schedules/` and settings from an optional `flowlite.toml`. Everything
+flowlite writes goes under `.flowlite/`.
 
-## A scheduled pipeline
+## Example
 
-A nightly ETL in three steps, each starting only once the one before it has succeeded:
+A job is a list of tasks. Each task is a shell command, and `depends_on` orders them:
 
 ```yaml
-# jobs/nightly-etl.yaml
-id: nightly-etl
-name: Nightly ETL
-parameters:
-  region: eu-west-1                # reaches every command as $FLOWLITE_PARAM_REGION
+# jobs/ci-report.yaml
+id: ci-report
+name: CI report
 tasks:
-  - id: extract
-    command: /srv/etl/extract.sh
-    max_retries: 2                 # three attempts in all, a minute apart
+  - id: collect
+    command: /srv/ci/failures.sh > "$FLOWLITE_TASK_OUTPUT"   # the task's result
+    max_retries: 2                 # three attempts in all
 
-  - id: transform
-    depends_on: [extract]
-    command: /srv/etl/transform.sh
-    timeout: 1800
-
-  - id: load
-    depends_on: [transform]
-    command: psql -h warehouse.internal -U etl -f /srv/etl/load.sql
-    secret_env:
-      PGPASSWORD: warehouse_pw     # a secret's name; its value never enters the YAML
+  - id: summarise
+    depends_on: [collect]          # starts only if collect succeeded
+    command: my-agent > "$FLOWLITE_TASK_OUTPUT"
+    stdin: |
+      Summarise the test failures listed in the file $FLOWLITE_INPUT_COLLECT.
+    timeout: 1800                  # seconds per attempt
+    idle_timeout: 300              # ends an attempt with no output for five minutes
 ```
+
+A schedule submits one or more jobs on a cron expression:
 
 ```yaml
 # schedules/nightly.yaml
 id: nightly
 name: Nightly
-cron: "0 30 1 * * *"               # 01:30:00 every day; six fields, seconds first
+cron: "0 30 1 * * *"               # six fields, seconds first: 01:30:00 every day
 timezone: Europe/Vienna
 jobs:
-  - id: nightly-etl
+  - id: ci-report
 ```
 
-```toml
-# flowlite.toml
-[secrets]
-warehouse_pw = "..."
-```
+`my-agent` stands for any command. `stdin:` is passed to it as written, with no shell
+expansion, so here the agent receives the variable's name and reads it from its environment.
 
-`serve` refuses to start on a job that names a secret nothing defines, rather than letting
-the run fail at 01:30. Add `on_failure:` with an address or a Slack channel to be told when
-a run breaks, with the failing output quoted in the message. Run it now rather than tonight
-with `flowlite job submit nightly-etl --wait`.
+## Features
 
-## An agentic pipeline
+- **Scheduling**: six-field cron with time zones; runs can also be submitted from the CLI,
+  the dashboard or MCP.
+- **Tasks**: a dependency graph per job, parameters, a timeout, an idle timeout, retries
+  with a delay, and named concurrency limits shared across jobs.
+- **Results**: a task writes a result to `$FLOWLITE_TASK_OUTPUT`, and each task that depends
+  on it reads it from `$FLOWLITE_INPUT_<TASK>`. A retry receives the failed attempt's output
+  in `$FLOWLITE_PREVIOUS_ATTEMPT_LOG`.
+- **Process handling**: a timeout or a stop ends the task's whole process group, with
+  `SIGTERM` first and `SIGKILL` after a grace period.
+- **Run directories**: a task without a `working_dir` runs in a directory created for its
+  run, so concurrent runs do not share files.
+- **Child runs**: a task can submit further runs. They are linked to the task and stopped
+  if it fails or is stopped.
+- **Secrets**: `secret_env:` maps an environment variable to a named secret in
+  `flowlite.toml`. `serve` does not start if a job names a secret that is not defined.
+- **Notifications**: email and Slack messages on a run's outcome.
+- **History**: each run stores the job definition it executed, so a rerun uses that
+  definition. `keep_runs` sets how many runs a job keeps.
 
-One agent reads the CI logs and picks the flaky tests worth fixing, and a second agent
-fixes them. `my-agent` stands for whichever agent CLI you run:
+## MCP
 
-```yaml
-# jobs/flaky-tests.yaml
-id: flaky-tests
-name: Fix flaky tests
-limits: [llm_api]                  # claims one of [concurrency_limits] llm_api
-secret_env:
-  LLM_API_KEY: llm_api_key
-tasks:
-  - id: triage
-    command: my-agent > "$FLOWLITE_TASK_OUTPUT"
-    stdin: |
-      Read last week's CI logs under /srv/ci/logs and list the flaky
-      tests worth fixing, one per line, most expensive first.
-    idle_timeout: 300              # five quiet minutes and the attempt is ended
-
-  - id: fix
-    depends_on: [triage]
-    working_dir: /srv/checkouts/api
-    command: |
-      my-agent "Fix these and open one PR per test: $(cat "$FLOWLITE_INPUT_TRIAGE")"
-    timeout: 3600
-    max_retries: 1                 # the retry gets $FLOWLITE_PREVIOUS_ATTEMPT_LOG
-```
-
-```toml
-# flowlite.toml
-[concurrency_limits]
-llm_api = 4
-
-[secrets]
-llm_api_key = "..."
-```
-
-`triage` writes its answer to a file rather than to its log, and `fix` reads it from there.
-A task with no `working_dir` works in a directory created for its run, so two runs never
-edit the same files. Schedule it by adding `- id: flaky-tests` under a schedule's `jobs:`.
-
-## Driving flowlite from an agent
-
-`flowlite mcp` serves the Model Context Protocol on stdin and stdout. There is no port to
-open and nothing to start first. Register it with any MCP client as a stdio server:
+`flowlite mcp` serves the Model Context Protocol on stdin and stdout. Register it with an
+MCP client as a stdio server:
 
 ```json
 {
   "mcpServers": {
-    "flowlite": { "command": "flowlite", "args": ["-p", "./data", "mcp"] }
+    "flowlite": { "command": "flowlite", "args": ["-p", "/path/to/project", "mcp"] }
   }
 }
 ```
 
-| Tool | Answers |
-|---|---|
-| `init_project_dir` | Set this empty directory up with an example job and schedule. |
-| `list_jobs` | What jobs does this project directory declare? |
-| `submit_job` | Run this installed job, file or inline YAML, and optionally wait for the outcome. |
-| `list_job_runs` | What has run lately, by job and by status? |
-| `get_job_run` | What happened to run 42, task by task, and what did each task produce? |
-| `get_job_run_logs` | What did each attempt write to stdout and stderr? |
-| `stop_job_run` | Stop run 42, and tell me what it settled to. |
-| `get_serve_status` | Is anything actually serving this directory? |
-| `list_limits` | What is a queued run waiting behind? |
-| `validate_project_dir` | Would `serve` start on the YAML and flowlite.toml I just edited? |
+Its ten tools list, submit, inspect and stop runs, read their logs, and validate the project
+directory. They return the same fields the CLI prints with `--json`. `submit_job` also
+accepts inline YAML, which runs once without being installed. An agent running inside a task
+can call the same tools; the runs it submits become that task's children. See
+[the tool list](REFERENCE.md#driving-flowlite-from-an-agent).
 
-Each tool returns the same fields its CLI twin prints with `--json`. `submit_job` accepts a
-pipeline an agent wrote itself as inline YAML, and runs it once without installing it.
-`wait_seconds` (up to 300) returns the outcome in the same call instead of a polling loop.
-An agent running *inside* a task can call the same tools, and the runs it submits become
-that task's children.
+## Security
 
-## What a task can reach
+flowlite does not sandbox tasks. A task runs as the user that runs `flowlite serve`, with
+that user's filesystem and network access. It can read `flowlite.toml`, including
+`[secrets]`, and a `secret_env:` value is in its environment, so a command or an agent can
+write it to a log or a result.
 
-flowlite does not sandbox. A task runs as the user `flowlite serve` runs as, with that user's
-filesystem and network. It inherits the server's environment, less every `FLOWLITE_*`
-variable. That strip keeps flowlite's own settings out of a task's environment, but not out
-of its reach: `flowlite.toml`, `[secrets]` included, is a file the task can read. A
-`secret_env:` value is in the process's environment, which means an agent handed a key can
-read it and write it into its log or result.
-
-Treat a job file like a shell script you are about to run, and run `serve` as a user whose
-reach you would hand to a model. By default the dashboard binds to `127.0.0.1` with no
-login; `serve --address` and an `[auth]` section change both — see
-[Logging in](REFERENCE.md#logging-in). MCP is stdio with one process per client.
+The dashboard binds to `127.0.0.1` with no login by default. `serve --address` and an
+`[auth]` section change both; see [Logging in](REFERENCE.md#logging-in).
 
 ## Documentation
 
-[REFERENCE.md](REFERENCE.md) covers every key and command:
-[command inputs](REFERENCE.md#command-inputs) and [secrets](REFERENCE.md#secrets),
-[task results](REFERENCE.md#task-results), [retries](REFERENCE.md#timeouts-and-retries),
-[runs a task submits](REFERENCE.md#runs-a-task-submits),
-[notifications](REFERENCE.md#run-notifications),
-[concurrency limits](REFERENCE.md#concurrency-limits), [reruns](REFERENCE.md#reruns),
-[retention](REFERENCE.md#retention), [the MCP tools](REFERENCE.md#driving-flowlite-from-an-agent),
-[configuration](REFERENCE.md#configuration) and [upgrading](REFERENCE.md#upgrading).
+[REFERENCE.md](REFERENCE.md) describes every YAML key, command, MCP tool and configuration
+setting, and how to [upgrade](REFERENCE.md#upgrading).
 
 ## Status
 
-0.2.0 is the current release. Since 0.1.0, run history upgrades in place. The YAML format,
-the CLI and the MCP tools may still change before 1.0.
+The current release is 0.2.0. Run history upgrades in place from 0.1.0. The YAML format, the
+CLI and the MCP tools may change before 1.0.
 
-Not there yet: an approval gate before a run starts, recording what a run cost, a
-`success_when:` check for a task that exits 0 while being wrong, and a sandbox.
+Not implemented: an approval step before a run starts, cost tracking, a success check for a
+task that exits 0 with a wrong result, and a sandbox.
 
 ## License
 
-Zero-Clause BSD — see [LICENSE](LICENSE). The frontend assets embedded in the binary keep
+Zero-Clause BSD; see [LICENSE](LICENSE). The frontend assets embedded in the binary keep
 their own licenses, listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
