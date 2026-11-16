@@ -24,7 +24,7 @@
     "should_trigger": true
   },
   {
-    "query": "should the message html and the slack blocks be separate renderers",
+    "query": "should the email text and the slack blocks be separate renderers",
     "should_trigger": true
   },
   {

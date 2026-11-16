@@ -1,5 +1,3 @@
-use askama::Template;
-
 use crate::crud::job_run::{JobRun, JobRunStatus};
 use crate::crud::task_run::{TaskRun, TaskRunStatus};
 use crate::crud::task_run_attempt::TaskRunAttempt;
@@ -7,18 +5,12 @@ use crate::crud::task_run_attempt_output::TaskRunAttemptOutputStreams;
 use crate::notifications::slack;
 use crate::shared::format;
 
-/// What one notification says: the two parts every channel has some form of - a line
-/// naming it and the text itself - and the same thing rendered again for the channels
-/// whose transport can show more than text. Email reads `html` and ignores `blocks`,
-/// Slack reads `blocks` and ignores `html`.
-///
-/// Both are optional because a channel that cannot use one simply ignores it, and because
-/// a message kind need not have that rendering at all. Email then sends the text part
-/// alone rather than an empty alternative, and Slack posts it fenced.
+/// What one notification says: a line naming it and the text itself, which email sends as
+/// it is, and the same thing as Slack blocks. `blocks` is optional because a message kind
+/// need not have that rendering; Slack then posts the text fenced.
 pub struct NotificationMessage {
     pub subject: String,
     pub body: String,
-    pub html: Option<String>,
     pub blocks: Option<serde_json::Value>,
 }
 
@@ -30,42 +22,6 @@ pub struct JobRunFailureTask {
     pub attempt: Option<TaskRunAttempt>,
     pub streams: TaskRunAttemptOutputStreams,
 }
-
-#[derive(Template)]
-#[template(path = "notifications/job_run.html")]
-struct JobRunTemplate {
-    lead: String,
-    status_word: &'static str,
-    accent: &'static str,
-    summary: Vec<SummaryRow>,
-    tasks: Vec<TaskRow>,
-    failures: Vec<FailureSection>,
-    logs_command: String,
-}
-
-struct SummaryRow {
-    label: &'static str,
-    value: String,
-}
-
-struct TaskRow {
-    task_id: String,
-    status_word: &'static str,
-    accent: &'static str,
-}
-
-/// `streams` is `None` for a task run that never got an attempt: it belongs in the
-/// message because it is why the tasks under it were skipped, but it printed nothing.
-struct FailureSection {
-    title: String,
-    streams: Option<FailureStreams>,
-}
-
-struct FailureStreams {
-    stdout: String,
-    stderr: String,
-}
-
 
 /// What a finished job run says, however it ended. One message shape rather than one per
 /// ending: a success and a failure both answer "what did this run do, and what did each of
@@ -82,7 +38,6 @@ pub fn job_run_message(
     NotificationMessage {
         subject: message_subject(job_run),
         body: message_body(job_run, task_runs, failures, max_output_bytes),
-        html: message_html(job_run, task_runs, failures, max_output_bytes),
         blocks: Some(message_blocks(job_run, task_runs, failures, max_output_bytes)),
     }
 }
@@ -149,63 +104,6 @@ fn message_body(
     body
 }
 
-/// The same message as HTML, for a channel whose transport can show one.
-///
-/// Askama escapes every value it writes, which is what makes it safe to quote a command's
-/// own output here: a task free to print `<script>` prints it as text.
-fn message_html(
-    job_run: &JobRun,
-    task_runs: &[TaskRun],
-    failures: &[JobRunFailureTask],
-    max_output_bytes: usize,
-) -> Option<String> {
-
-    let summary = summary_rows(job_run)
-        .into_iter()
-        .map(|(label, value)| SummaryRow { label, value })
-        .collect();
-
-    let tasks = task_runs
-        .iter()
-        .map(|task_run| TaskRow {
-            task_id: task_run.task_id.clone(),
-            status_word: format::task_run_word(task_run.status),
-            accent: task_run_accent(task_run.status),
-        })
-        .collect();
-
-    let failures = failures
-        .iter()
-        .map(|failure| FailureSection {
-            title: failure_title(failure),
-            streams: failure.attempt.as_ref().map(|_| FailureStreams {
-                stdout: stream_tail(&failure.streams.stdout, max_output_bytes),
-                stderr: stream_tail(&failure.streams.stderr, max_output_bytes),
-            }),
-        })
-        .collect();
-
-    let template = JobRunTemplate {
-        lead: message_lead(job_run),
-        status_word: format::job_run_word(job_run.status),
-        accent: job_run_accent(job_run.status),
-        summary,
-        tasks,
-        failures,
-        logs_command: logs_command(job_run),
-    };
-
-    match template.render() {
-        Ok(html) => Some(html),
-        // The text part is already on the message, so a template that will not render
-        // costs the formatting rather than the notification.
-        Err(e) => {
-            eprintln!("Template rendering error: {}", e);
-            None
-        }
-    }
-}
-
 /// Slack's own limits on one message. It refuses a message that exceeds any of them
 /// rather than trimming it, so the trimming happens here.
 const MAX_BLOCKS: usize = 50;
@@ -217,8 +115,8 @@ const MAX_FIELD_CHARS: usize = 2000;
 /// The same message as Slack Block Kit, for the one transport that lays out structure of
 /// its own rather than being handed markup.
 ///
-/// Built here beside the text and the HTML, from the same facts, for the reason those two
-/// are: a fact added to one rendering cannot then go missing from another. What is Slack's
+/// Built here beside the text, from the same facts, so a fact added to one rendering cannot
+/// then go missing from the other. What is Slack's
 /// own — how its text is escaped and fenced — stays in `slack.rs` with the transport.
 fn message_blocks(
     job_run: &JobRun,
@@ -508,36 +406,6 @@ fn failure_output(failure: &JobRunFailureTask, max_output_bytes: usize) -> Strin
     section
 }
 
-/// The colour a status is shown in, written into the message itself: a mail client
-/// fetches no stylesheet, so a class would arrive unstyled.
-fn job_run_accent(status: JobRunStatus) -> &'static str {
-    match status {
-        JobRunStatus::Scheduled => "#8c959f",
-        JobRunStatus::Queued => "#6a737d",
-        JobRunStatus::Running => "#0969da",
-        JobRunStatus::Succeeded => "#1a7f37",
-        JobRunStatus::Failed => "#b42318",
-        JobRunStatus::Skipped => "#6a737d",
-        JobRunStatus::Aborted => "#b54708",
-        JobRunStatus::TimedOut => "#b42318",
-        JobRunStatus::Invalid => "#6f42c1",
-    }
-}
-
-fn task_run_accent(status: TaskRunStatus) -> &'static str {
-    match status {
-        TaskRunStatus::Planned => "#8c959f",
-        TaskRunStatus::Waiting => "#6a737d",
-        TaskRunStatus::Running => "#0969da",
-        TaskRunStatus::Succeeded => "#1a7f37",
-        TaskRunStatus::Failed => "#b42318",
-        TaskRunStatus::Skipped => "#6a737d",
-        TaskRunStatus::Aborted => "#b54708",
-        TaskRunStatus::TimedOut => "#b42318",
-        TaskRunStatus::Invalid => "#6f42c1",
-    }
-}
-
 /// The **end** of a stream, which is where a command says why it stopped. Cutting the
 /// front is what makes a capped alert still worth reading.
 fn stream_tail(stream: &str, max_output_bytes: usize) -> String {
@@ -764,102 +632,11 @@ mod tests {
     }
 
     #[test]
-    fn the_html_names_the_run_and_every_task() {
-
-        let task_runs = vec![
-            task_run("extract", TaskRunStatus::Succeeded),
-            task_run("load", TaskRunStatus::Skipped),
-        ];
-
-        let html = message_html(&job_run(JobRunStatus::Failed), &task_runs, &[], 4096).unwrap();
-
-        assert!(html.contains("Nightly Sync"), "{}", html);
-        assert!(html.contains("extract"), "{}", html);
-        assert!(html.contains("load"), "{}", html);
-        assert!(html.contains("flowlite job-run logs 42"), "{}", html);
-    }
-
-    /// The same rule the text body follows: the section that quotes output is not written
-    /// when there is none, which is what makes one template enough for both endings.
-    #[test]
-    fn a_succeeded_run_quotes_no_output_in_its_html() {
-
-        let task_runs = vec![task_run("extract", TaskRunStatus::Succeeded)];
-
-        let html = message_html(&job_run(JobRunStatus::Succeeded), &task_runs, &[], 4096).unwrap();
-
-        assert!(html.contains("succeeded"), "{}", html);
-        assert!(!html.contains("<pre"), "{}", html);
-        assert!(!html.contains("stderr"), "{}", html);
-    }
-
-    #[test]
-    fn the_html_carries_the_failing_tasks_output() {
-
-        let failures = vec![failure(
-            "reading rows\n",
-            "psycopg2.OperationalError: connection refused\n",
-        )];
-
-        let html = message_html(&job_run(JobRunStatus::Failed), &[], &failures, 4096).unwrap();
-
-        assert!(html.contains("Output of transform, attempt 3 of 3"), "{}", html);
-        assert!(html.contains("psycopg2.OperationalError: connection refused"), "{}", html);
-    }
-
-    /// A command is free to print markup, and it has to arrive as text rather than as
-    /// part of the message.
-    #[test]
-    fn markup_printed_by_a_command_is_escaped_rather_than_rendered() {
-
-        let failures = vec![failure("", "<script>alert('x')</script> a & b\n")];
-
-        let html = message_html(&job_run(JobRunStatus::Failed), &[], &failures, 4096).unwrap();
-
-        assert!(!html.contains("<script>"), "{}", html);
-        assert!(!html.contains("</script>"), "{}", html);
-        assert!(html.contains("&#60;script&#62;"), "{}", html);
-        assert!(html.contains("a &#38; b"), "{}", html);
-    }
-
-    /// The cap is one rule for both renderings: a stream too long for the text body is
-    /// too long for the HTML one.
-    #[test]
-    fn the_html_cuts_a_long_stream_the_way_the_text_body_does() {
-
-        let failures = vec![failure("", "0123456789abcdef")];
-
-        let html = message_html(&job_run(JobRunStatus::Failed), &[], &failures, 6).unwrap();
-
-        assert!(html.contains("earlier output cut"), "{}", html);
-        assert!(!html.contains("0123456789"), "{}", html);
-    }
-
-    /// A task that never got an attempt has nothing to quote in either rendering.
-    #[test]
-    fn a_failed_task_with_no_attempt_says_so_in_the_html_too() {
-
-        let failures = vec![JobRunFailureTask {
-            task_run: task_run("transform", TaskRunStatus::Failed),
-            attempt: None,
-            streams: TaskRunAttemptOutputStreams::default(),
-        }];
-
-        let html = message_html(&job_run(JobRunStatus::Failed), &[], &failures, 4096).unwrap();
-
-        assert!(html.contains("transform failed, with no attempt"), "{}", html);
-        assert!(!html.contains("<pre"), "{}", html);
-    }
-
-    /// Every rendering on the one message, so no channel is left with a shape its
-    /// transport cannot show.
-    #[test]
-    fn a_job_run_message_carries_every_rendering() {
+    fn a_job_run_message_carries_the_text_and_the_blocks() {
 
         let message = job_run_message(&job_run(JobRunStatus::Failed), &[], &[], 4096);
 
         assert!(message.body.contains("Job run 42"), "{}", message.body);
-        assert!(message.html.unwrap().contains("Job run 42"));
 
         let blocks = message.blocks.unwrap();
 

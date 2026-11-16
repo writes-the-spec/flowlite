@@ -439,8 +439,7 @@ Run `flowlite job-run logs 42` for every task and attempt.
 A success is the same message without the quoted output. A scheduled run also carries the
 instant it fired for, and a run with parameters the values it was submitted with.
 
-Mail sends that text with an HTML rendering of the same facts alongside it. Slack gets the
-same facts as Block Kit, with the output capped shorter than in mail by default — a chat
+Mail sends that text as it is. Slack gets the same facts as Block Kit, with the output capped shorter than in mail by default — a chat
 message is read in a scroll, and the mail is where the long tail belongs.
 
 **`on_failure:` means a real failure** — `failed`, `timed out` and `invalid`, never

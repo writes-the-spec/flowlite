@@ -1,4 +1,4 @@
-use lettre::message::{Mailbox, MultiPart};
+use lettre::message::Mailbox;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
@@ -37,10 +37,8 @@ impl EmailChannel {
         Ok(())
     }
 
-    /// A message carrying its HTML rendering goes out as `multipart/alternative`, so a
-    /// client that renders HTML shows the formatted message and one that does not - or a
-    /// reader who prefers plain text - still gets everything it says. A message with no
-    /// HTML rendering is plain text alone rather than an empty alternative part.
+    /// Plain text: the body is laid out for a monospace reader and quotes command output,
+    /// which is what a mail client shows best without any markup.
     ///
     /// Separate from `send` so that what is built can be asserted on without a relay.
     fn build(&self, recipients: &[String], message: &NotificationMessage) -> anyhow::Result<Message> {
@@ -59,15 +57,7 @@ impl EmailChannel {
             builder = builder.to(mailbox);
         }
 
-        let email = match &message.html {
-            Some(html) => builder.multipart(MultiPart::alternative_plain_html(
-                message.body.clone(),
-                html.clone(),
-            ))?,
-            None => builder.body(message.body.clone())?,
-        };
-
-        Ok(email)
+        Ok(builder.body(message.body.clone())?)
     }
 
     fn transport(&self) -> anyhow::Result<AsyncSmtpTransport<Tokio1Executor>> {
@@ -112,11 +102,10 @@ mod tests {
         })
     }
 
-    fn message(html: Option<&str>) -> NotificationMessage {
+    fn message() -> NotificationMessage {
         NotificationMessage {
             subject: "[flowlite] Nightly Sync run 42 failed".to_string(),
             body: "Job run 42 of 'Nightly Sync' (nightly-sync) failed.".to_string(),
-            html: html.map(|html| html.to_string()),
             // Email ignores the Slack rendering, so what a message carries there cannot
             // change what is built here.
             blocks: None,
@@ -131,24 +120,10 @@ mod tests {
         String::from_utf8(built.formatted()).expect("a formatted message should be text")
     }
 
-    /// Both parts, so a client that renders HTML gets the formatted message and one that
-    /// does not still gets everything it says.
     #[test]
-    fn a_message_with_an_html_rendering_is_sent_as_both_parts() {
+    fn a_message_is_sent_as_plain_text_alone() {
 
-        let raw = formatted(&channel(), &message(Some("<p>it broke</p>")));
-
-        assert!(raw.contains("multipart/alternative"), "{}", raw);
-        assert!(raw.contains("text/plain"), "{}", raw);
-        assert!(raw.contains("text/html"), "{}", raw);
-    }
-
-    /// A message kind with no HTML rendering is still an email: the body alone, exactly
-    /// as it went out before there was an HTML part, rather than an empty alternative.
-    #[test]
-    fn a_message_with_no_html_rendering_is_sent_as_plain_text_alone() {
-
-        let raw = formatted(&channel(), &message(None));
+        let raw = formatted(&channel(), &message());
 
         assert!(!raw.contains("multipart"), "{}", raw);
         assert!(raw.ends_with("Job run 42 of 'Nightly Sync' (nightly-sync) failed."), "{}", raw);
@@ -161,7 +136,7 @@ mod tests {
 
         let built = email.build(
             &["ops@example.com".to_string(), "oncall@example.com".to_string()],
-            &message(None),
+            &message(),
         ).expect("the message should build");
 
         let raw = String::from_utf8(built.formatted()).expect("a formatted message should be text");
@@ -174,7 +149,7 @@ mod tests {
     fn a_recipient_that_is_not_an_address_is_named_in_the_error() {
 
         let error = channel()
-            .build(&["not an address".to_string()], &message(None))
+            .build(&["not an address".to_string()], &message())
             .expect_err("an unparseable recipient should not build");
 
         assert!(format!("{}", error).contains("not an address"), "{}", error);

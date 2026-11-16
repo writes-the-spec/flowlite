@@ -1,6 +1,6 @@
 ---
 name: notifications
-description: The notification service (src/notifications/) - the background loop that delivers a job run's outcome over email or Slack, the NotificationChannel enum that decides how, and the single NotificationMessage rendered as text, HTML and Slack blocks. Use when adding or changing a channel, changing what a notification says or how it is rendered, tracing why one was sent, skipped or left pending, or working with job_run_notification rows, FakeSlack, or the [smtp] and [slack] config sections.
+description: The notification service (src/notifications/) - the background loop that delivers a job run's outcome over email or Slack, the NotificationChannel enum that decides how, and the single NotificationMessage rendered as text and as Slack blocks. Use when adding or changing a channel, changing what a notification says or how it is rendered, tracing why one was sent, skipped or left pending, or working with job_run_notification rows, FakeSlack, or the [smtp] and [slack] config sections.
 ---
 
 # Notifications
@@ -13,8 +13,7 @@ Delivers messages something else decided to send: one service, one channel per t
 | [channel.rs](../../../src/notifications/channel.rs) | `NotificationChannels`: every channel this process can deliver over |
 | [email.rs](../../../src/notifications/email.rs) | `EmailChannel`, the only code that talks SMTP |
 | [slack.rs](../../../src/notifications/slack.rs) | `SlackChannel`, the only code that talks to Slack's API |
-| [message.rs](../../../src/notifications/message.rs) | `NotificationMessage` and a finished job run's text, HTML and Slack blocks |
-| [templates/notifications/job_run.html](../../../templates/notifications/job_run.html) | the HTML rendering |
+| [message.rs](../../../src/notifications/message.rs) | `NotificationMessage` and a finished job run's text and Slack blocks |
 
 ## The loop
 
@@ -74,16 +73,16 @@ Steps 4 and 6 are why it's an enum: a channel can't compile without saying how t
 
 ## Messages
 
-`NotificationMessage` is `{ subject, body, html, blocks }`. Each channel uses what it can: email reads `html` and ignores `blocks`, and Slack does the reverse. `job_run_message` is the only message kind, so it's a function, not a trait.
+`NotificationMessage` is `{ subject, body, blocks }`. Email sends the body as plain text and ignores `blocks`; Slack posts the blocks. `job_run_message` is the only message kind, so it's a function, not a trait.
 
 - **One shape for both endings.** The run's status drives the wording throughout. The only difference is quoted output: a success has no failures, so that section is empty and not written.
 - **The output cap belongs to the channel.** `NotificationChannels::max_output_bytes` is looked up per channel and passed to the builder: for email it's the relay's size limit, and for Slack it's how much anyone will scroll, so Slack's default is smaller. Truncation happens during building, because output embedded in formatted text can't safely be cut afterwards.
 - **`stream_tail` keeps the end** of a stream, cutting the front on a character boundary, because the end is where a command says why it stopped.
 - **Slack blocks** (`message_blocks`): a header with a status emoji, the summary as two columns of fields, the task list as one section per 3000 chars, and the failing output fenced. Slack's own text rules stay in [slack.rs](../../../src/notifications/slack.rs): `escape` for `&`, `<` and `>` (without it `a < b` gets eaten), and `fence_safe` for a fence the command printed itself.
 - **Slack rejects oversize messages, so the builder trims**: 150 chars per header, 3000 per section, 2000 per field, 50 blocks. Escaping makes `&` five chars, so the char cap bites first, and a stream is cut *inside* its fence. Cut after the fence and the close is lost, swallowing the rest into a code block. An overrun message is cut from the end, and its last block repeats the command that shows the rest.
-- **`html` and `blocks` are `Option`; channels fall back to text.** A template that won't render makes `message_html` log and return `None`, which costs the formatting, not the notification. `EmailChannel::build` sends `multipart/alternative` when there is HTML, plain text otherwise. `post_payload` sends blocks with the subject in `text` (read by previews and screen readers), or the whole body in one fence when there are no blocks.
-- **All three renderings live in [message.rs](../../../src/notifications/message.rs) and share `summary_rows`, `message_lead`, `failure_title`, `logs_command` and `stream_tail`**, so no rendering can miss a fact. `job_run_accent` and `job_run_emoji` match exhaustively side by side, so a new status must say how it reads everywhere.
-- **The template** ([job_run.html](../../../templates/notifications/job_run.html)) is one for both endings, laid out with tables and inline styles because mail clients fetch no stylesheet. Askama escapes every value, so quoting command output is safe.
+- **`blocks` is `Option`; Slack falls back to text.** `post_payload` sends blocks with the subject in `text` (read by previews and screen readers), or the whole body in one fence when there are no blocks.
+- **Both renderings live in [message.rs](../../../src/notifications/message.rs) and share `summary_rows`, `message_lead`, `failure_title`, `logs_command` and `stream_tail`**, so neither can miss a fact. `job_run_emoji` matches exhaustively, so a new status must say how it reads in Slack.
+- **Mail is plain text only.** The body is laid out for a monospace reader and quotes command output; there is no HTML part.
 
 ## What it does not do
 
