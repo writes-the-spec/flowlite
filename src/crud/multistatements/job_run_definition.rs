@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
-use sqlx::SqliteConnection;
+use sqlx::{Connection, SqliteConnection};
 
 use crate::crud::CRUD;
 use crate::crud::job::Job;
@@ -244,14 +244,24 @@ impl CRUD {
     /// Inserts a scheduled job run, one planned task run per task, and one open notification
     /// per channel each of the job's notify blocks named. This is the only place a run's
     /// config is written.
+    ///
+    /// All of it or none of it: a run missing some of its task runs would be released,
+    /// run what it has and report success. The transaction covers the inserts only, not
+    /// the callers' reads before them. A deferred transaction whose first statement is a
+    /// write waits out a busy lock; one that reads first fails on the upgrade if another
+    /// process wrote in between. `BEGIN IMMEDIATE` would avoid that but also takes a
+    /// write lock on the attached shared-cache `mem`, where a second submit fails at once
+    /// instead of waiting.
     pub(super) async fn insert_job_run_definition(
         &self,
         conn: &mut SqliteConnection,
         definition: &JobRunDefinition,
     ) -> anyhow::Result<i64> {
 
+        let mut tx = conn.begin().await?;
+
         let job_run_id = self.insert_job_run(
-            &mut *conn,
+            &mut *tx,
             &InsertJobRunData {
                 input: InsertJobRunDataInput {
                     job_id: definition.job_id.clone(),
@@ -271,7 +281,7 @@ impl CRUD {
 
         for task in definition.tasks.iter() {
             self.insert_task_run(
-                &mut *conn,
+                &mut *tx,
                 &InsertTaskRunData {
                     input: InsertTaskRunDataInput {
                         job_run_id,
@@ -299,7 +309,7 @@ impl CRUD {
 
         for notification in definition.notifications.iter() {
             self.insert_job_run_notification(
-                &mut *conn,
+                &mut *tx,
                 &InsertJobRunNotificationData {
                     input: InsertJobRunNotificationDataInput {
                         job_run_id,
@@ -314,6 +324,8 @@ impl CRUD {
             ).await?;
         }
 
+        tx.commit().await?;
+
         Ok(job_run_id)
     }
 }
@@ -321,6 +333,7 @@ impl CRUD {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crud::job_run::{SelectJobRunsData, SelectJobRunsDataFilter};
     use crate::crud::task_run::{SelectTaskRunsData, SelectTaskRunsDataFilter};
     use crate::test_support::{map, TestDb};
 
@@ -671,6 +684,67 @@ mod tests {
         assert_eq!(task_runs.len(), 1);
         assert_eq!(task_runs[0].secret_env.0.get("DB_PASSWORD").unwrap(), "job_db_password");
         assert_eq!(task_runs[0].secret_env.0.get("API_KEY").unwrap(), "task_api_key");
+    }
+
+    /// A definition whose second task run cannot be inserted leaves nothing behind: not
+    /// the job run, and not the first task run. Two tasks with one `task_id` trip the
+    /// unique index on `task_run`, standing in for any failure partway through.
+    #[tokio::test]
+    async fn a_failed_insert_leaves_no_job_run_and_no_task_runs() {
+
+        let db = TestDb::new().await;
+
+        let task = task_row(BTreeMap::new(), BTreeMap::new(), Vec::new());
+        let job = job_row(BTreeMap::new(), BTreeMap::new(), Vec::new());
+
+        let definition = JobRunDefinition {
+            job_id: "job".to_string(),
+            job_name: "Job".to_string(),
+            job_description: String::new(),
+            parameters: BTreeMap::new(),
+            scheduled_at: Utc::now(),
+            schedule_id: None,
+            parent_task_run_attempt_id: None,
+            tasks: vec![
+                job_run_task_definition(&task, &job),
+                job_run_task_definition(&task, &job),
+            ],
+            notifications: Vec::new(),
+        };
+
+        let mut conn = db.conn_pool.acquire().await.unwrap();
+        let result = db.crud.insert_job_run_definition(&mut conn, &definition).await;
+
+        assert!(result.is_err());
+
+        let job_runs = db.crud.select_job_runs(&*db.conn_pool, &SelectJobRunsData {
+            filter: SelectJobRunsDataFilter {
+                id: None,
+                job_id: Some("job".to_string()),
+                status: None,
+                statuses: None,
+                schedule_id: None,
+                scheduled_at: None,
+                parent_job_run_id: None,
+            },
+            sort: None,
+            limit: None,
+            offset: None,
+        }).await.unwrap();
+
+        let task_runs = db.crud.select_task_runs(&*db.conn_pool, &SelectTaskRunsData {
+            filter: SelectTaskRunsDataFilter {
+                id: None,
+                job_run_id: None,
+                job_id: Some("job".to_string()),
+                task_id: None,
+                status: None,
+            },
+            sort: None,
+        }).await.unwrap();
+
+        assert!(job_runs.is_empty());
+        assert!(task_runs.is_empty());
     }
 
     /// `insert_job_run_definition` writes the union `job_run_task_definition` computed, not
