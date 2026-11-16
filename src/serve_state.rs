@@ -38,7 +38,7 @@ pub enum ServeStatus {
 }
 
 
-fn state_dir(data_dir: &Path) -> PathBuf {
+pub(crate) fn state_dir(data_dir: &Path) -> PathBuf {
     data_dir.join(STATE_DIR)
 }
 

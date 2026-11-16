@@ -18,7 +18,8 @@ Everything flowlite does, section by section. The [README](README.md) is the sho
 ## The data directory
 
 flowlite reads `jobs/`, `schedules/` and an optional `flowlite.toml` from its data directory,
-and writes `flowlite.db` there. That directory is the current one unless `-D` /
+and writes everything of its own under `.flowlite/` there: the run history in
+`.flowlite/flowlite.db`, each run's directory, and the serve lock. That directory is the current one unless `-D` /
 `--data-dir` / `FLOWLITE_DATA_DIR` says otherwise — which `init` follows like every other
 command, so the directory need not exist yet:
 
@@ -858,7 +859,7 @@ database stops growing rather than gets smaller. Get the space back with the ser
 stopped:
 
 ```bash
-sqlite3 <data-dir>/flowlite.db 'VACUUM;'
+sqlite3 <data-dir>/.flowlite/flowlite.db 'VACUUM;'
 ```
 
 flowlite never runs this itself: `VACUUM` rewrites the whole file under an exclusive lock,
@@ -908,8 +909,8 @@ because two servers would run two schedulers over one set of schedules and fire 
 twice. The refusal is an `flock`, so it needs a filesystem where `flock` actually works —
 local disk always qualifies, which is what SQLite already assumes of the data directory.
 
-A running server keeps a `.flowlite/` directory beside its database, holding its lock and
-the pid, address and port it bound. Ask about it with:
+A running server keeps its lock and the pid, address and port it bound in `.flowlite/`,
+the same directory that holds the database. Ask about it with:
 
 ```bash
 flowlite -D /srv/etl status
@@ -926,7 +927,7 @@ on a first start. `status` exits 0 in all three states, so a wrapper should read
 `status` field rather than the exit code.
 
 Add `.flowlite/` to `.gitignore` if your data directory is a repository, but do not delete
-it while a server is running: because the lock lives on the inode rather than the path,
+it: it holds the run history. Least of all while a server is running, because the lock lives on the inode rather than the path,
 removing `serve.lock` out from under a running server (`git clean -xdf`, say) lets the next
 `serve` create a fresh inode and start right alongside it.
 
@@ -1224,7 +1225,7 @@ Configuration and run history upgrade differently.
 Jobs, schedules and tasks are read from your YAML on every start and kept in memory, so
 an upgrade asks nothing of them.
 
-The run history lives in `flowlite.db`, which outlives the process.
+The run history lives in `.flowlite/flowlite.db`, which outlives the process.
 From 0.1.0 on it changes only by new migration files, which a new binary applies when it
 first starts. Stop `serve`, replace the binary and start it again, and the history comes
 along.
@@ -1240,6 +1241,6 @@ migration 20260703234500 was previously applied but has been modified
 ```
 
 The schema was edited in place until the first release, so there is no path forward from
-such a database. Copy `flowlite.db` aside if its history matters to you, then delete it,
-along with `flowlite.db-wal` and `flowlite.db-shm` if they are there, and start again. Jobs and schedules come back, since they are read from the YAML on every
+such a database. Copy `.flowlite/flowlite.db` aside if its history matters to you, then delete it,
+along with `flowlite.db-wal` and `flowlite.db-shm` beside it if they are there, and start again. Jobs and schedules come back, since they are read from the YAML on every
 start. The run history does not.

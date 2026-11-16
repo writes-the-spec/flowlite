@@ -381,7 +381,7 @@ mod tests {
     }
 
     /// The id becomes a path component under the run's directory, so a separator in it
-    /// would write the task's result outside that directory - `../../flowlite.db` being
+    /// would write the task's result outside that directory - `../../../flowlite.db` being
     /// the spelling that makes the point.
     #[test]
     fn a_task_id_containing_a_path_separator_is_rejected() {

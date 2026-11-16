@@ -1,6 +1,7 @@
 use sqlx::{SqliteConnection, SqlitePool, Connection};
 use crate::app_config::AppConfig;
-use std::path::{Path};
+use crate::serve_state::state_dir;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
@@ -30,6 +31,16 @@ static OPEN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// How long a connection waits for another process's write lock on `flowlite.db` before it
 /// fails with `SQLITE_BUSY`. `serve`, CLI commands and the MCP server all write the same file.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The database, inside the data directory's state directory rather than beside the YAML:
+/// the top of the data directory is the user's own files, and everything flowlite writes -
+/// this, its `-wal` and `-shm`, the serve lock and the run directories - sits under one
+/// `.flowlite/` that a single `.gitignore` line covers.
+const DB_FILE: &str = "flowlite.db";
+
+fn db_path(data_dir: &Path) -> PathBuf {
+    state_dir(data_dir).join(DB_FILE)
+}
 
 
 impl Toolkit {
@@ -70,12 +81,10 @@ impl Toolkit {
     /// flowlite loses nothing, a power cut can lose the last commits but never corrupts.
     fn disk_connect_options(&self) -> anyhow::Result<SqliteConnectOptions> {
         let data_dir = Path::new(&self.app_config.data_dir);
-        if !data_dir.exists() {
-            std::fs::create_dir_all(data_dir)?;
-        }
+        std::fs::create_dir_all(state_dir(data_dir))?;
 
         let connect_options = SqliteConnectOptions::new()
-            .filename(data_dir.join("flowlite.db"))
+            .filename(db_path(data_dir))
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
@@ -146,6 +155,28 @@ mod tests {
             assert_eq!(synchronous, 1);
             assert_eq!(busy_timeout_ms, 5000);
         }
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    /// The database lands in `.flowlite/`, created along with a data directory that does not
+    /// exist yet, and nothing is written at the data directory's top level.
+    #[tokio::test]
+    async fn the_database_is_created_inside_the_state_directory() {
+        let data_dir = std::env::temp_dir().join(format!("flowlite-toolkit-test-{}", Uuid::new_v4()));
+
+        let toolkit = Toolkit::new(AppConfig {
+            data_dir: data_dir.to_string_lossy().into_owned(),
+            ..AppConfig::default()
+        });
+
+        let _conn = toolkit.get_conn().await.unwrap();
+
+        assert!(data_dir.join(".flowlite").join("flowlite.db").exists());
+        let top_level: Vec<_> = std::fs::read_dir(&data_dir).unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(top_level, [".flowlite"]);
 
         let _ = std::fs::remove_dir_all(&data_dir);
     }

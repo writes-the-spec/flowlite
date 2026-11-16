@@ -40,7 +40,7 @@ fn a_valid_directory_passes_with_its_counts_and_leaves_no_database() {
 
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "1 job, 0 schedules: OK\n");
-    assert!(!dir.join("flowlite.db").exists(), "validate opened the database");
+    assert!(!dir.join(".flowlite").join("flowlite.db").exists(), "validate opened the database");
 
     let output = validate(&dir, true);
     let counts: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();

@@ -57,7 +57,8 @@ flowlite job submit hello-world --wait  # in a second shell; exits non-zero unle
 ```
 
 Everything lives in the data directory: the current one, or whichever `-D` names. Jobs are
-under `jobs/`, schedules under `schedules/`, and run history in `flowlite.db`.
+under `jobs/`, schedules under `schedules/`, and everything flowlite writes itself — run
+history in `flowlite.db`, run directories, the serve lock — under `.flowlite/`.
 
 ## A scheduled pipeline
 

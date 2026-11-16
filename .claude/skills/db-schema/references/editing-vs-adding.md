@@ -15,14 +15,11 @@ Only restoring the file byte-for-byte or resetting the database recovers.
 ## Check, don't assume
 
 ```bash
-sqlite3 "<data_dir>/flowlite.db" \
+sqlite3 "<data_dir>/.flowlite/flowlite.db" \
   "SELECT version, description FROM _sqlx_migrations ORDER BY version;"
 ```
 
-Also check the default location, where a dev instance lands without `-D`:
-
-- macOS — `~/Library/Application Support/flowlite/flowlite.db`
-- Linux — `~/.local/share/flowlite/flowlite.db`
+Without `-D` the data directory is the current one, so a dev instance's database is `./.flowlite/flowlite.db` wherever it was started.
 
 ## The call
 

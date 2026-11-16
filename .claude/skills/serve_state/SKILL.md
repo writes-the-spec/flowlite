@@ -5,7 +5,7 @@ description: The serve lock and state file (src/serve_state.rs) - how flowlite a
 
 # Serve lock and state (src/serve_state.rs)
 
-The answer lives in `.flowlite/` inside the data directory, so a moved or copied directory still describes itself and there is no central record to disagree with it.
+The answer lives in `.flowlite/` inside the data directory - beside the database, which `Toolkit` keeps there too - so a moved or copied directory still describes itself and there is no central record to disagree with it.
 
 | File | What it is | What it means |
 |---|---|---|

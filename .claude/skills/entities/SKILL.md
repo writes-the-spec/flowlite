@@ -27,7 +27,7 @@ description: Map of every entity in flowlite - the tables of flowlite.db and the
 
 ## flowlite.db ([src/toolkit.rs](../../../src/toolkit.rs))
 
-- `<data_dir>/flowlite.db`, opened only through `Toolkit::get_conn` / `get_conn_pool` (created if missing, WAL, `synchronous=NORMAL`, 5 s busy timeout, migrations run), so `flowlite.db-wal` and `flowlite.db-shm` sit beside it while anything has it open. See the [toolkit skill](../toolkit/SKILL.md).
+- `<data_dir>/.flowlite/flowlite.db`, opened only through `Toolkit::get_conn` / `get_conn_pool` (created if missing, WAL, `synchronous=NORMAL`, 5 s busy timeout, migrations run), so `flowlite.db-wal` and `flowlite.db-shm` sit beside it while anything has it open. See the [toolkit skill](../toolkit/SKILL.md).
 - One migration history, `db/schemas/disk/migrations`. Editing an existing migration depends on what has applied it — see the [db-schema skill](../db-schema/SKILL.md).
 
 ## Conventions every entity obeys
