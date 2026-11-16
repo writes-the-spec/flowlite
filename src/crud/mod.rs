@@ -7,7 +7,6 @@ pub mod job_run_stop;
 pub mod job_run_notification;
 pub mod job;
 pub mod task;
-pub mod task_dependent;
 pub mod task_run_attempt;
 pub mod task_run_attempt_output;
 pub mod schedule;

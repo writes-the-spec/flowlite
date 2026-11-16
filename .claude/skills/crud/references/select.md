@@ -21,7 +21,7 @@ pub struct Select<Entity>sData {
 ```
 
 - Filter fields are additive; an empty filter returns everything.
-- `limit`/`offset` are `Option<u32>` on config tables, `Option<i64>` on disk ones (`job_run`, `job_run_stop`, `job_run_notification`) — match the neighbours; the bind casts to `i64` either way. Omit them for tables always read in full for a key (`task_run`, `task_run_attempt`, `task_dependent`) until a caller paginates.
+- `limit`/`offset` are `Option<u32>` on config tables, `Option<i64>` on disk ones (`job_run`, `job_run_stop`, `job_run_notification`) — match the neighbours; the bind casts to `i64` either way. Omit them for tables always read in full for a key (`task_run`, `task_run_attempt`) until a caller paginates.
 
 ## Query building
 
@@ -106,7 +106,7 @@ where
 }
 ```
 
-It doesn't add `LIMIT 1`; callers pass `limit: Some(1)` if they want. `task_dependent` and `task_run_attempt` (read in full) have none. `schedule_job`'s is misnamed `select_schedule_job_internal` ([src/crud/schedule_job.rs](../../../../src/crud/schedule_job.rs)) — copy the shape, not the name.
+It doesn't add `LIMIT 1`; callers pass `limit: Some(1)` if they want. `task_run_attempt` (read in full) has none. `schedule_job`'s is misnamed `select_schedule_job_internal` ([src/crud/schedule_job.rs](../../../../src/crud/schedule_job.rs)) — copy the shape, not the name.
 
 ## Row struct
 

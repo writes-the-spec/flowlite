@@ -22,7 +22,7 @@ Always add the `Insert<Entity>Data { input }` wrapper, though it only holds `inp
 
 Follows the table's primary key; the [db-schema skill](../../db-schema/SKILL.md) says which a table gets and why. Don't invent a third.
 
-- **Caller-assigned `row_id`** (config tables: `job`, `task`, `schedule`, `schedule_job`, `task_dependent`): input carries `row_id: u64`; returns `anyhow::Result<()>`. `row_id` is a counter the caller increments across every insert in `CRUD::init` ([src/crud/crud.rs](../../../../src/crud/crud.rs)), existing only to preserve YAML order for `RowId` sorts — not a primary key.
+- **Caller-assigned `row_id`** (config tables: `job`, `task`, `schedule`, `schedule_job`): input carries `row_id: u64`; returns `anyhow::Result<()>`. `row_id` is a counter the caller increments across every insert in `CRUD::init` ([src/crud/crud.rs](../../../../src/crud/crud.rs)), existing only to preserve YAML order for `RowId` sorts — not a primary key.
 - **Autoincrement id** (run tables: `job_run`, `task_run`, `task_run_attempt`, `job_run_stop`): no `row_id`; returns `anyhow::Result<i64>` via `last_insert_rowid()`:
 
 ```rust
@@ -58,4 +58,4 @@ When one input fans out into related rows (a job's tasks, a task's `depends_on` 
 
 ## Immutable entities
 
-`job`, `task`, `task_dependent` and `schedule_job` are insert-only (never mutated after `CRUD::init`): no `update_*`, no `Update*Data`. Add those only for a genuinely mutable run record — see [update.md](update.md).
+`job`, `task` and `schedule_job` are insert-only (never mutated after `CRUD::init`): no `update_*`, no `Update*Data`. Add those only for a genuinely mutable run record — see [update.md](update.md).

@@ -1,6 +1,6 @@
 # Update methods
 
-Only entities that change state after creation get an `update_*`: `job_run`, `task_run`, `task_run_attempt`, `job_run_notification`. Config-seeded entities (`job`, `task`, `task_dependent`, `schedule`, `schedule_job`) don't.
+Only entities that change state after creation get an `update_*`: `job_run`, `task_run`, `task_run_attempt`, `job_run_notification`. Config-seeded entities (`job`, `task`, `schedule`, `schedule_job`) don't.
 
 ## Struct shape
 

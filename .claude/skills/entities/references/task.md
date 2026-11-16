@@ -21,7 +21,7 @@ One row per task under a job YAML's `tasks:` — a *definition*, like [`job`](jo
 
 ## Written by
 
-`CRUD::init` only, from `JobYamlTask`, also writing each edge to [`task_dependent`](task_dependent.md). `CRUD::validate_job_tasks` rejects at startup a duplicate task id, a `depends_on` id outside the job, or a cycle — each would leave the job run running forever.
+`CRUD::init` only, from `JobYamlTask`. `depends_on` is the only record of a task's dependencies. `CRUD::validate_job_tasks` rejects at startup a duplicate task id, a `depends_on` id outside the job, or a cycle — each would leave the job run running forever.
 
 ## Read by
 

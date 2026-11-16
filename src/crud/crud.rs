@@ -9,7 +9,6 @@ use crate::crud::job_run_notification::NotificationChannel;
 use crate::crud::schedule::{InsertScheduleData, InsertScheduleDataInput};
 use crate::crud::schedule_job::{InsertScheduleJobData, InsertScheduleJobDataInput};
 use crate::crud::task::{InsertTaskData, InsertTaskDataInput};
-use crate::crud::task_dependent::{InsertTaskDependentData, InsertTaskDependentDataInput};
 use crate::toolkit::Toolkit;
 use crate::yaml_models::job_yaml::{JobYaml, JobYamlNotify};
 use crate::yaml_models::schedule_yaml::ScheduleYaml;
@@ -244,27 +243,6 @@ impl CRUD {
                     job_yaml.id,
                     job_path.display(),
                 ))?;
-
-            for dependent_task_id in task_yaml.depends_on {
-                row_id += 1;
-                self.insert_task_dependent(&mut *conn, &InsertTaskDependentData {
-                    input: InsertTaskDependentDataInput {
-                        row_id,
-                        job_id: job_yaml.id.clone(),
-                        task_id: task_yaml.id.clone(),
-                        dependent_task_id: dependent_task_id.clone(),
-                    }
-                })
-                    .await
-                    .with_context(|| format!(
-                        "Failed to insert dependency '{}' of task '{}' of job '{}' from {}",
-                        dependent_task_id,
-                        task_yaml.id,
-                        job_yaml.id,
-                        job_path.display(),
-                    ))?;
-            }
-
         }
 
         Ok(row_id)

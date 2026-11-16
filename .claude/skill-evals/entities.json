@@ -68,7 +68,7 @@
     "should_trigger": true
   },
   {
-    "query": "what is task_dependent actually for? nothing seems to select from it and i want to know before i touch it",
+    "query": "what is task.depends_on actually for once a run is submitted? i want to know who reads it before i touch it",
     "should_trigger": true
   },
   {

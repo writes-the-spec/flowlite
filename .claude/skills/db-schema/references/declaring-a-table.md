@@ -4,7 +4,7 @@ Four rules constrain this repo's DDL and shape the entity structs in `src/crud/`
 
 ## Keys split by database
 
-- **`mem`**: a caller-assigned `row_id INTEGER NOT NULL` with `UNIQUE (row_id)`, only to preserve YAML declaration order for `RowId` sorts, plus a natural primary key from the config (`job_id`, `(task_id, job_id)`, `schedule_id`) — or none, for `task_dependent` and `schedule_job`.
+- **`mem`**: a caller-assigned `row_id INTEGER NOT NULL` with `UNIQUE (row_id)`, only to preserve YAML declaration order for `RowId` sorts, plus a natural primary key from the config (`job_id`, `(task_id, job_id)`, `schedule_id`) — or none, for `schedule_job`.
 - **Disk**: `id INTEGER PRIMARY KEY AUTOINCREMENT`, returned via `last_insert_rowid()`.
 
 Why: config is re-seeded every startup, so a generated id would change run to run and nothing could reference it; the natural key is the only stable one. A disk row is created once by something that then needs to refer to it. This also sets the insert's return type (`()` vs `i64`) — see the [crud skill](../../crud/SKILL.md).

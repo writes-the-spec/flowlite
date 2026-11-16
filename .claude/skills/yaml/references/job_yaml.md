@@ -1,6 +1,6 @@
 # JobYaml
 
-[src/yaml_models/job_yaml.rs](../../../../src/yaml_models/job_yaml.rs) — one file per job under `<data_dir>/jobs/*.yml`, seeding `mem.job`, `mem.task`, `mem.task_dependent`.
+[src/yaml_models/job_yaml.rs](../../../../src/yaml_models/job_yaml.rs) — one file per job under `<data_dir>/jobs/*.yml`, seeding `mem.job` and `mem.task`.
 
 ```yaml
 id: my-job
@@ -81,7 +81,7 @@ Job and task maps merge at submit into `task_run.env` / `task_run.secret_env`, s
 
 ## What one task becomes
 
-`CRUD::init` writes `depends_on` both as JSON on `task.depends_on` and as `task_dependent` rows. `submit_job` copies `task.depends_on` onto the run, and `TaskRunDispatcher::get_dependent_task_runs` resolves `task_run.depends_on`; **`task_dependent` is read by nothing** ([task](../../entities/references/task.md), [task_dependent](../../entities/references/task_dependent.md)).
+`CRUD::init` writes `depends_on` as JSON on `task.depends_on`, its only copy in `mem`. `submit_job` copies it onto the run, and `TaskRunDispatcher::get_dependent_task_runs` resolves `task_run.depends_on` ([task](../../entities/references/task.md)).
 
 Submit creates one `Queued` `task_run` per task, snapshotting `command`, `stdin`, `depends_on`, `timeout`, `idle_timeout`, retry settings, `env`, `secret_env`, `working_dir` — later YAML edits don't affect it. Parameters resolve once per job run. Dependency order is enforced at dispatch ([orchestrator skill](../../orchestrator/references/task_run.md)).
 

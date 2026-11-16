@@ -68,7 +68,7 @@
     "should_trigger": false
   },
   {
-    "query": "explain how depends_on ends up in the task_dependent table and who reads it",
+    "query": "explain how depends_on gets from the job yaml onto a task run and who reads it",
     "should_trigger": false
   },
   {

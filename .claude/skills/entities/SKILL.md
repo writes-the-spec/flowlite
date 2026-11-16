@@ -14,7 +14,6 @@ Every table lives in one of two SQLite databases. **If the process restarts, sho
 |---|---|---|
 | [`job`](references/job.md) | `mem` | one row per job YAML file — the definition |
 | [`task`](references/task.md) | `mem` | one row per task of a job — description, command, dependencies, retry policy |
-| [`task_dependent`](references/task_dependent.md) | `mem` | the dependency edges, normalized — **read by nothing** |
 | [`schedule`](references/schedule.md) | `mem` | one row per schedule YAML file |
 | [`schedule_job`](references/schedule_job.md) | `mem` | which jobs a schedule submits |
 | [`job_run`](references/job_run.md) | disk | one execution of a job |

@@ -9,7 +9,7 @@ description: The YAML config layer (src/yaml_models/) - how files under the data
 
 | Model | Files | Seeds |
 |---|---|---|
-| [`JobYaml`](references/job_yaml.md) | `<data_dir>/jobs/*.yml` | `mem.job`, `mem.task`, `mem.task_dependent` |
+| [`JobYaml`](references/job_yaml.md) | `<data_dir>/jobs/*.yml` | `mem.job`, `mem.task` |
 | [`ScheduleYaml`](references/schedule_yaml.md) | `<data_dir>/schedules/*.yml` | `mem.schedule`, `mem.schedule_job` |
 
 `flowlite.toml` is app config, not this layer ([src/app_config/](../../../src/app_config/)).

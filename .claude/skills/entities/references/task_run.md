@@ -19,7 +19,7 @@ One [`task`](task.md) within one [`job_run`](job_run.md), and **the config it wa
 
 ## The snapshot is the point of this table
 
-The orchestrator reads config only here. **No orchestrator file imports `crate::crud::task` or `crate::crud::job`, or touches [`task_dependent`](task_dependent.md)**; `TaskRunDispatcher::get_dependent_task_runs` resolves the copied `depends_on`. Sole exception: `mem.job.max_parallel_runs`, read live. Nothing enforces this — `mem` is one query away on every pooled connection.
+The orchestrator reads config only here. **No orchestrator file imports `crate::crud::task` or `crate::crud::job`**; `TaskRunDispatcher::get_dependent_task_runs` resolves the copied `depends_on`. Sole exception: `mem.job.max_parallel_runs`, read live. Nothing enforces this — `mem` is one query away on every pooled connection.
 
 ## Written by
 
